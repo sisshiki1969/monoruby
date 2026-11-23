@@ -868,6 +868,13 @@ impl Executor {
         self.temp_stack.truncate(len);
     }
 
+    /// The values pushed from depth `base` up, copied out: a builtin that
+    /// collects its result on the temp stack, where it stays rooted while
+    /// Ruby runs, builds the result from them once no more Ruby is to run.
+    pub(crate) fn temp_values_from(&self, base: usize) -> Vec<Value> {
+        self.temp_stack[base..].to_vec()
+    }
+
     /// Push the key and the value of every pair of `hash`, in order, and
     /// answer how many pairs were pushed: a builtin that walks a copy of a
     /// Hash's pairs while Ruby runs keeps the copy here, and reads pair `i`
@@ -5741,36 +5748,6 @@ impl Executor {
         bh: BlockHandler,
         cfp: Cfp,
     ) -> Result<ProcData> {
-        self.block_data_from(globals, bh, cfp, false)
-    }
-
-    /// [`Self::get_block_data`] for a builtin that runs Ruby between
-    /// resolving its block and its last yield (an argument's `to_str` or
-    /// `to_hash`, a key's `hash`), called inside a temp scope
-    /// ([`Self::with_temp_scope`]).
-    ///
-    /// A `&obj` block argument reaches the builtin as `obj` itself, and
-    /// is turned into a Proc here by `obj.to_proc`. Nothing references
-    /// that Proc but the `ProcData`, which the collector does not see: a
-    /// collection before a yield would free it, and with it the frame its
-    /// block closes over, and the yield would run on freed memory. So it
-    /// is pushed on the temp stack. A literal block, a Proc and a Symbol
-    /// are rooted by a frame already, and push nothing.
-    pub(crate) fn get_block_data_rooted(
-        &mut self,
-        globals: &mut Globals,
-        bh: BlockHandler,
-    ) -> Result<ProcData> {
-        self.block_data_from(globals, bh, self.cfp(), true)
-    }
-
-    fn block_data_from(
-        &mut self,
-        globals: &mut Globals,
-        bh: BlockHandler,
-        cfp: Cfp,
-        root: bool,
-    ) -> Result<ProcData> {
         if let Some((outer, fid)) = self.resolve_block_target(globals, cfp, bh) {
             // outer is left un-moved: ProcData is transient and the
             // dispatch runs immediately, so the on-stack frame (for
@@ -5779,11 +5756,21 @@ impl Executor {
         }
         // General `to_proc` fallback: covers user-defined classes that
         // implement `to_proc` (e.g. Method#to_proc).
-        if let Some(val) = self.block_arg_to_proc(globals, bh.0)?
-            && let Some(proc) = val.is_proc()
+        if let Some(proc) = self.block_arg_to_proc(globals, bh.0)?
+            && let Some(proc) = proc.is_proc()
         {
-            if root {
-                self.temp_push(val);
+            // Nothing the collector scans holds the new Proc (or the frame
+            // it closes over) while the caller runs Ruby between its calls,
+            // so keep it in the block slot of the frame that holds the
+            // handler, as `block_param_proc` does, which also spares later
+            // `#to_proc` calls there (CRuby converts `&obj` once). That is
+            // `cfp`'s frame, or for a `yield` written inside a block, the
+            // method frame `get_block` reads the handler from.
+            let lfp = cfp.lfp();
+            for lfp in [lfp, lfp.yield_home()] {
+                if lfp.block().is_some_and(|b| b.get().id() == bh.get().id()) {
+                    lfp.set_block(Some(BlockHandler::new(proc.into())));
+                }
             }
             return Ok(ProcData::from_proc(&proc));
         }

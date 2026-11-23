@@ -2437,13 +2437,11 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     // yielded nor the walk itself. The copy here is the receiver's pairs,
     // taken up front and kept on the temp stack: once the block replaces or
     // deletes the receiver's entry, they are referenced from nowhere else,
-    // and a collection in a later block call would free them. So is a Proc
-    // that a `&obj` block's `to_proc` answers, since the keys' `hash` /
-    // `eql?` run between the yields. The result can stay a bare
-    // `HashmapInner` until the walk ends: `insert` stores the pairs as they
-    // are, so all it holds is on the temp stack already.
+    // and a collection in a later block call would free them. The result
+    // can stay a bare `HashmapInner` until the walk ends: `insert` stores
+    // the pairs as they are, so all it holds is on the temp stack already.
     vm.with_temp_scope(|vm| {
-        let data = vm.get_block_data_rooted(globals, bh)?;
+        let data = vm.get_block_data(globals, bh)?;
         let base = vm.temp_len();
         let n = vm.temp_push_pairs(src);
         for i in 0..n {
@@ -2628,11 +2626,10 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     if lfp.self_val().as_hash().is_compare_by_identity() {
         inner.compare_by_identity(vm, globals)?;
     }
-    // A rooted copy of the pairs is walked into a bare `HashmapInner`, and
-    // a Proc that a `&obj` block's `to_proc` answers is rooted, as in
-    // `select`.
+    // A rooted copy of the pairs is walked into a bare `HashmapInner`, as
+    // in `select`.
     vm.with_temp_scope(|vm| {
-        let p = vm.get_block_data_rooted(globals, bh)?;
+        let p = vm.get_block_data(globals, bh)?;
         let base = vm.temp_len();
         let n = vm.temp_push_pairs(lfp.self_val().as_hash());
         for i in 0..n {
@@ -2885,10 +2882,7 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     vm.with_temp_scope(|vm| {
         vm.temp_push(h.into());
         if let Some(block) = lfp.block() {
-            // A Proc that a `&obj` block's `to_proc` answers is rooted, too:
-            // the operands' `to_hash` and the keys' `hash` / `eql?` run
-            // before and between the yields.
-            let data = vm.get_block_data_rooted(globals, block)?;
+            let data = vm.get_block_data(globals, block)?;
             // Three slots, kept for the walk, hold the pair being merged
             // and the block's answer for it.
             let slot = vm.temp_len();
@@ -2945,9 +2939,7 @@ fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // key's `hash` / `eql?` frees them.
     vm.with_temp_scope(|vm| {
         if let Some(block) = lfp.block() {
-            // As in `merge`, a Proc that a `&obj` block's `to_proc`
-            // answers is rooted.
-            let data = vm.get_block_data_rooted(globals, block)?;
+            let data = vm.get_block_data(globals, block)?;
             // Three slots, kept for the walk, hold the pair being merged and
             // the block's answer for it.
             let slot = vm.temp_len();
@@ -4130,54 +4122,48 @@ fn env_merge_bang(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    // A Proc that a `&obj` block's `to_proc` answers is referenced only
-    // from `block_data`, and the operands' `to_hash`, the names' and
-    // values' `to_str` and the block itself run before and between the
-    // yields: it is rooted for the whole call.
-    vm.with_temp_scope(|vm| {
-        let block_data = match lfp.block() {
-            Some(bh) => Some(vm.get_block_data_rooted(globals, bh)?),
-            None => None,
-        };
-        for arg in lfp.arg(0).as_array().iter() {
-            let other = arg.coerce_to_hash(vm, globals)?;
-            let pairs: Vec<(Value, Value)> = other.iter().collect();
-            // The pairs wait on the temp stack until they are stored: what
-            // a non-Hash's `to_hash` answered is referenced from nowhere
-            // else, and the names' and values' `to_str` and the block run
-            // Ruby that may empty a Hash the caller holds. A collection
-            // there would free a pair this walk has yet to store or yield.
-            vm.with_temp_scope(|vm| {
-                for &(k, v) in &pairs {
-                    vm.temp_push(k);
-                    vm.temp_push(v);
-                }
-                for (k, mut v) in pairs {
-                    if let Some(ref data) = block_data {
-                        // `env_update_block_i`: the current value is looked
-                        // up as `ENV[name]` would, so the name is checked
-                        // first — whatever the new value is.
-                        let name = env_name(vm, globals, k)?;
-                        if let Some(old) = env_getenv(globals, env_bytes(&name)) {
-                            v = vm.with_temp_scope(|vm| {
-                                vm.temp_push(name);
-                                vm.temp_push(old);
-                                vm.invoke_block(globals, data, &[k, old, v])
-                            })?;
-                        }
+    let block_data = match lfp.block() {
+        Some(bh) => Some(vm.get_block_data(globals, bh)?),
+        None => None,
+    };
+    for arg in lfp.arg(0).as_array().iter() {
+        let other = arg.coerce_to_hash(vm, globals)?;
+        let pairs: Vec<(Value, Value)> = other.iter().collect();
+        // The pairs wait on the temp stack until they are stored: what
+        // a non-Hash's `to_hash` answered is referenced from nowhere
+        // else, and the names' and values' `to_str` and the block run
+        // Ruby that may empty a Hash the caller holds. A collection
+        // there would free a pair this walk has yet to store or yield.
+        vm.with_temp_scope(|vm| {
+            for &(k, v) in &pairs {
+                vm.temp_push(k);
+                vm.temp_push(v);
+            }
+            for (k, mut v) in pairs {
+                if let Some(ref data) = block_data {
+                    // `env_update_block_i`: the current value is looked
+                    // up as `ENV[name]` would, so the name is checked
+                    // first — whatever the new value is.
+                    let name = env_name(vm, globals, k)?;
+                    if let Some(old) = env_getenv(globals, env_bytes(&name)) {
+                        v = vm.with_temp_scope(|vm| {
+                            vm.temp_push(name);
+                            vm.temp_push(old);
+                            vm.invoke_block(globals, data, &[k, old, v])
+                        })?;
                     }
-                    // The block's answer is only on the Rust stack while
-                    // the name is converted.
-                    vm.with_temp_scope(|vm| {
-                        vm.temp_push(v);
-                        env_aset(vm, globals, k, v)
-                    })?;
                 }
-                Ok(())
-            })?;
-        }
-        Ok(lfp.self_val())
-    })
+                // The block's answer is only on the Rust stack while
+                // the name is converted.
+                vm.with_temp_scope(|vm| {
+                    vm.temp_push(v);
+                    env_aset(vm, globals, k, v)
+                })?;
+            }
+            Ok(())
+        })?;
+    }
+    Ok(lfp.self_val())
 }
 
 ///
