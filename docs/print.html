@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1de60ad6.js";
+            window.path_to_searchindex_js = "searchindex-630284b3.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -15952,6 +15952,16 @@ value+0 / hash+8 / key+16）ため、<code>entries_layout()</code> は本物の 
 （<code>new_hash_inline</code> → <code>emit_alloc_cell</code>）。frozen String キーは inline 表現には
 置けるが、この bump 確保の対象ではなく、<code>gen_hash</code> の実行時呼び出しを経て
 inline 表現に落ち着く。</p>
+<p><code>gen_hash</code>（<code>codegen/runtime.rs</code>、VM と JIT の両方が呼ぶ）は、Rust のスタック上の
+<code>HashmapInner</code> にペアを入れ、最後に Hash にする。Rust のスタックは GC が見ないので、
+これが成り立つのは Ruby のコードが動かない間だけである（リテラル自身のキーと値は
+フレームのスロットにあるが、unfrozen な String キーの凍結コピーはこのマップしか
+持っていない）。そこでキーごとに <code>HashmapInner::aset_native_key</code> で入れる。packed な
+値とクラスが <code>String</code> そのものの String は、<code>#hash</code> も <code>#eql?</code> も呼ばずに入る。
+それ以外のキーは何も入れずに <code>false</code> を返し、<code>gen_hash_rooted</code> がそこまでのマップを
+Hash にして temp stack に置いたうえで、残りのペアを <code>Hashmap::aset_pairs</code> で入れる
+（#2153）。前者の経路は構築中のマップ専用なので、tombstone と走査中の検査を省いた
+<code>store</code> の <code>FRESH</code> 版を使う。</p>
 <p><code>Hash#each</code> / <code>each_key</code> / <code>each_value</code> はこれらのプリミティブの上に Ruby で
 書かれている（<code>builtins/hash.rb</code>）ので、ホットな呼び出しサイトではメソッドと
 ブロックの両方がインライン展開される（§1.6）。</p>
