@@ -2584,6 +2584,24 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     Ok(built)
 }
 
+/// The local `Time` `secs` seconds and `nsec` nanoseconds after the epoch:
+/// what `Time.at(secs, nsec, :nanosecond)` answers, made here as CRuby's
+/// `rb_time_nano_new` makes it. A builtin that needs a Time (`File::Stat`,
+/// `File.mtime`, …) must not send `at` for it: that would run a Ruby-level
+/// redefinition of `Time.at` (ActiveSupport's `at_with_coercion` is one),
+/// which CRuby never calls, and any collection it triggers in the middle
+/// of the builtin's work.
+pub(crate) fn time_nano_new(secs: i64, nsec: i64) -> Result<Value> {
+    const NANOS: i64 = 1_000_000_000;
+    let out_of_range = || MonorubyErr::argumenterr("out of Time range");
+    let secs = secs
+        .checked_add(nsec.div_euclid(NANOS))
+        .ok_or_else(out_of_range)?;
+    let nsec = nsec.rem_euclid(NANOS) as u32;
+    let dt = DateTime::from_timestamp(secs, nsec).ok_or_else(out_of_range)?;
+    Ok(Value::new_time(localize(dt)))
+}
+
 /// Allocator for `Time` and its subclasses.
 pub(crate) extern "C" fn time_alloc_func(class_id: ClassId, _: &mut Globals) -> Value {
     let time_info = TimeInner::Utc(DateTime::<Utc>::default());
