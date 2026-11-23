@@ -747,7 +747,7 @@ fn try_consume_angle_named(
     vm: &mut Executor,
     globals: &mut Globals,
     arguments: &[Value],
-    cache: &mut Option<Option<Hashmap>>,
+    cache: &mut Option<Hashmap>,
     fchars: &[char],
     i: &mut usize,
     flen: usize,
@@ -766,8 +766,7 @@ fn try_consume_angle_named(
             "malformed name - unmatched parenthesis",
         ));
     }
-    let hash = get_named_hash_helper(arguments, cache)
-        .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
+    let hash = named_hash(vm, globals, arguments, cache)?;
     let key_val = Value::symbol_from_str(&key);
     let val = hash_lookup_or_keyerror(vm, globals, &hash, key_val, key.as_str(), '<')?;
     *i = j + 1;
@@ -776,15 +775,31 @@ fn try_consume_angle_named(
 
 /// Snapshot of the closure used for named-hash caching; needed when
 /// the inline closure version isn't reachable from a free function.
-fn get_named_hash_helper(
+/// CRuby's `get_hash`: the Hash the named references (`%{name}`,
+/// `%<name>`) of one format read — its only argument, converted with
+/// `to_hash` when it is not a Hash itself (`rb_check_hash_type`), which
+/// happens once per format (#2139).
+///
+/// A converted Hash is a new object nothing else refers to: it is
+/// pushed on the temp stack, which [`Executor::format_by_args`] scopes.
+fn named_hash(
+    vm: &mut Executor,
+    globals: &mut Globals,
     arguments: &[Value],
-    cache: &mut Option<Option<Hashmap>>,
-) -> Option<Hashmap> {
-    if cache.is_none() {
-        let h = arguments.last().and_then(|v| v.try_hash_ty());
-        *cache = Some(h);
+    cache: &mut Option<Hashmap>,
+) -> Result<Hashmap> {
+    if let Some(hash) = *cache {
+        return Ok(hash);
     }
-    cache.unwrap()
+    // Exactly one argument, and it has to convert.
+    let hash = match arguments {
+        [arg] => arg.check_hash_type(vm, globals)?,
+        _ => None,
+    }
+    .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
+    vm.temp_push(hash.into());
+    *cache = Some(hash);
+    Ok(hash)
 }
 
 /// Look `key` up in `hash`; honour `Hash#default` /
@@ -823,6 +838,18 @@ fn hash_lookup_or_keyerror(
 
 impl Executor {
     pub(crate) fn format_by_args(
+        &mut self,
+        globals: &mut Globals,
+        self_str: &str,
+        arguments: &[Value],
+        ctx: FormatCtx,
+    ) -> Result<String> {
+        // The scope of the Hash a named reference converted its
+        // argument to (`named_hash`).
+        self.with_temp_scope(|vm| vm.format_by_args_inner(globals, self_str, arguments, ctx))
+    }
+
+    fn format_by_args_inner(
         &mut self,
         globals: &mut Globals,
         self_str: &str,
@@ -873,15 +900,7 @@ impl Executor {
         let mut i = 0;
 
         // Lazily cached hash from last argument for named references.
-        let mut named_hash_cache: Option<Option<Hashmap>> = None;
-        let get_named_hash =
-            |arguments: &[Value], cache: &mut Option<Option<Hashmap>>| -> Option<Hashmap> {
-                if cache.is_none() {
-                    let h = arguments.last().and_then(|v| v.try_hash_ty());
-                    *cache = Some(h);
-                }
-                cache.unwrap()
-            };
+        let mut named_hash_cache: Option<Hashmap> = None;
 
         while i < flen {
             if fchars[i] != '%' {
@@ -1252,8 +1271,7 @@ impl Executor {
                     ));
                 }
                 used_named = true;
-                let hash = get_named_hash(arguments, &mut named_hash_cache)
-                    .ok_or_else(|| MonorubyErr::argumenterr("one hash required"))?;
+                let hash = named_hash(self, globals, arguments, &mut named_hash_cache)?;
                 let key_val = Value::symbol_from_str(&key);
                 let val =
                     hash_lookup_or_keyerror(self, globals, &hash, key_val, key.as_str(), '{')?;

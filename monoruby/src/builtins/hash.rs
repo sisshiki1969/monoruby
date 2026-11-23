@@ -233,45 +233,13 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "to_h", to_h, 0);
     init_recv_escape(globals);
 
-    // ENV's own methods read the process environment on every access
-    // (`crate::environ`) and never look at this Hash. It is what the
-    // methods ENV still inherits from `Hash` see: the environment as it
-    // was at startup, kept in step with ENV's own writes.
-    let mut env_map = RubyMap::default();
-    let mut vm = Executor::default();
-    for (name, value) in crate::environ::Snapshot::take().iter() {
-        env_map
-            .insert(
-                env_string_bytes(name),
-                env_string_bytes(value),
-                &mut vm,
-                globals,
-            )
-            .unwrap();
-    }
-    #[cfg(windows)]
-    if let None = env_map.get(&Value::string("HOME")) {
-        let home_drive = env_map.get(&Value::string("HOMEDRIVE"));
-        let home_path = env_map.get(&Value::string("HOMEPATH"));
-        let user_profile = env_map.get(&Value::string("USERPROFILE"));
-        let home = if home_drive.is_some() && home_drive.is_some() {
-            home_drive.unwrap().as_string().unwrap().to_string()
-                + home_path.unwrap().as_string().unwrap()
-        } else if let Some(up) = user_profile {
-            up.as_string().unwrap().to_string()
-        } else {
-            "".to_string()
-        };
-        env_map.insert(
-            Value::string("HOME"),
-            Value::string(home.replace('\\', "/")),
-        );
-    };
-
-    let env = Value::hash(env_map);
+    // ENV is a plain Object (extended with Enumerable in
+    // builtins/env.rb) that keeps no state: its methods read and write
+    // the process environment itself (`crate::environ`).
+    let env = Value::object(OBJECT_CLASS);
     globals.set_constant_by_str(OBJECT_CLASS, "ENV", env);
-    // CRuby's ENV is a plain Object with no `_dump_data`: Marshal refuses
-    // it rather than dumping a Hash (#2013).
+    // CRuby's ENV is a T_DATA with no `_dump_data`: Marshal refuses it
+    // (#2013). The hidden variable is how `marshal.rs` knows it.
     globals
         .store
         .set_ivar(env, IdentId::get_id("/__env"), Value::bool(true))
@@ -3088,17 +3056,10 @@ fn env_invalid_name(store: &Store, name: &[u8]) -> MonorubyErr {
 ///
 /// Both arguments are converted first, then the name is checked, then
 /// the value, and only then does `setenv` itself refuse an empty name
-/// or one with a `=`. ENV's backing Hash is kept in step: it is what
-/// the methods ENV still inherits from `Hash` see.
-fn env_aset(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    key: Value,
-    val: Value,
-) -> Result<Value> {
+/// or one with a `=`.
+fn env_aset(vm: &mut Executor, globals: &mut Globals, key: Value, val: Value) -> Result<Value> {
     if val.is_nil() {
-        env_delete_name(vm, globals, self_val, key)?;
+        env_delete_name(vm, globals, key)?;
         return Ok(Value::nil());
     }
     vm.with_temp_scope(|vm| {
@@ -3115,11 +3076,6 @@ fn env_aset(
         }
         crate::environ::set(name, bytes);
         env_did_change();
-        // Stored the way the environment hands strings back
-        // (`env_str_new`), not in the encoding the arguments carried.
-        self_val
-            .as_hash()
-            .insert(env_string_bytes(name), env_string_bytes(bytes), vm, globals)?;
         Ok(value)
     })
 }
@@ -3127,39 +3083,21 @@ fn env_aset(
 /// CRuby's `env_delete`: unset the variable `key` names and answer the
 /// value it had, `None` when it was not set (a name `unsetenv` rejects
 /// never is).
-fn env_delete_name(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    key: Value,
-) -> Result<Option<Value>> {
+fn env_delete_name(vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Option<Value>> {
     let name = env_name(vm, globals, key)?;
     let name = env_bytes(&name);
-    // What the environment holds, not what the backing Hash remembers.
     let removed = env_getenv(globals, name);
     if removed.is_some() {
         crate::environ::unset(name);
         env_did_change();
     }
-    self_val
-        .as_hash()
-        .remove(env_string_bytes(name), vm, globals)?;
     Ok(removed)
 }
 
 /// [`env_delete_name`] for a name read out of the environment itself.
-fn env_delete_bytes(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    self_val: Value,
-    name: &[u8],
-) -> Result<()> {
+fn env_delete_bytes(name: &[u8]) {
     crate::environ::unset(name);
     env_did_change();
-    self_val
-        .as_hash()
-        .remove(env_string_bytes(name), vm, globals)?;
-    Ok(())
 }
 
 /// An Enumerator over ENV for a method called without its block, sized
@@ -3452,7 +3390,7 @@ fn env_index_assign(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    env_aset(vm, globals, lfp.self_val(), lfp.arg(0), lfp.arg(1))
+    env_aset(vm, globals, lfp.arg(0), lfp.arg(1))
 }
 
 ///
@@ -3469,7 +3407,7 @@ fn env_index_assign(
 #[monoruby_builtin]
 fn env_delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
-    match env_delete_name(vm, globals, lfp.self_val(), key)? {
+    match env_delete_name(vm, globals, key)? {
         Some(removed) => Ok(removed),
         // The block is given the name as the caller wrote it.
         None => match lfp.block() {
@@ -3635,7 +3573,6 @@ fn env_has_value(
 fn env_remove_where(
     vm: &mut Executor,
     globals: &mut Globals,
-    self_val: Value,
     bh: BlockHandler,
     remove_when: bool,
 ) -> Result<usize> {
@@ -3648,7 +3585,7 @@ fn env_remove_where(
         };
         let k = env.name(globals, i);
         if vm.invoke_block(globals, &data, &[k, v])?.as_bool() == remove_when {
-            env_delete_bytes(vm, globals, self_val, env.name_bytes(i))?;
+            env_delete_bytes(env.name_bytes(i));
             removed += 1;
         }
     }
@@ -3673,7 +3610,7 @@ fn env_delete_if(
     let Some(bh) = lfp.block() else {
         return env_to_sized_enum(vm, globals, "delete_if", lfp, pc);
     };
-    env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
+    env_remove_where(vm, globals, bh, true)?;
     Ok(lfp.self_val())
 }
 
@@ -3687,7 +3624,7 @@ fn env_reject_bang(
     let Some(bh) = lfp.block() else {
         return env_to_sized_enum(vm, globals, "reject!", lfp, pc);
     };
-    let removed = env_remove_where(vm, globals, lfp.self_val(), bh, true)?;
+    let removed = env_remove_where(vm, globals, bh, true)?;
     // `reject!` reports "nothing changed" with nil; `delete_if` always
     // answers ENV.
     Ok(if removed == 0 {
@@ -3715,7 +3652,7 @@ fn env_keep_if(
     let Some(bh) = lfp.block() else {
         return env_to_sized_enum(vm, globals, "keep_if", lfp, pc);
     };
-    env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
+    env_remove_where(vm, globals, bh, false)?;
     Ok(lfp.self_val())
 }
 
@@ -3729,7 +3666,7 @@ fn env_select_bang(
     let Some(bh) = lfp.block() else {
         return env_to_sized_enum(vm, globals, "select!", lfp, pc);
     };
-    let removed = env_remove_where(vm, globals, lfp.self_val(), bh, false)?;
+    let removed = env_remove_where(vm, globals, bh, false)?;
     Ok(if removed == 0 {
         Value::nil()
     } else {
@@ -3974,13 +3911,11 @@ fn env_reject(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/clear.html]
 #[monoruby_builtin]
-fn env_clear(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn env_clear(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let live = crate::environ::Snapshot::take();
     for (name, _) in live.iter() {
-        env_delete_bytes(vm, globals, lfp.self_val(), name)?;
+        env_delete_bytes(name);
     }
-    // Whatever the snapshot Hash still remembers is gone as well.
-    let _ = lfp.self_val().as_hash().clear();
     Ok(lfp.self_val())
 }
 
@@ -3993,7 +3928,7 @@ fn env_clear(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/shift.html]
 #[monoruby_builtin]
-fn env_shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn env_shift(_: &mut Executor, globals: &mut Globals, _: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut first = None;
     crate::environ::walk(|name, value| {
         first = Some((name.to_vec(), value.to_vec()));
@@ -4007,7 +3942,7 @@ fn env_shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         env_fresh_string_in(globals, env_string_bytes(&name), target),
         env_fresh_string_in(globals, env_string_bytes(&value), target),
     );
-    env_delete_bytes(vm, globals, lfp.self_val(), &name)?;
+    env_delete_bytes(&name);
     Ok(pair)
 }
 
@@ -4061,7 +3996,7 @@ fn env_merge_bang(
             // name is converted.
             vm.with_temp_scope(|vm| {
                 vm.temp_push(v);
-                env_aset(vm, globals, lfp.self_val(), k, v)
+                env_aset(vm, globals, k, v)
             })?;
         }
     }
@@ -4094,7 +4029,7 @@ fn env_replace(
     let other = lfp.arg(0).coerce_to_hash(vm, globals)?;
     let pairs: Vec<(Value, Value)> = other.iter().collect();
     for (k, v) in pairs {
-        env_aset(vm, globals, lfp.self_val(), k, v)?;
+        env_aset(vm, globals, k, v)?;
         // `rb_ary_delete(keys, key)`: a key that is not a String has
         // raised in `env_aset`, or was deleted there with a nil value.
         if let Some(name) = k.is_rstring_inner() {
@@ -4102,7 +4037,7 @@ fn env_replace(
         }
     }
     for name in stale {
-        env_delete_bytes(vm, globals, lfp.self_val(), name)?;
+        env_delete_bytes(name);
     }
     Ok(lfp.self_val())
 }
@@ -8129,6 +8064,111 @@ mod tests {
               ENV.each_value.size == n, ENV.select.size == n, ENV.reject.size == n,
               ENV.delete_if.size == n, ENV.keep_if.size == n,
               ENV.select!.size == n, ENV.reject!.size == n,
+            ]
+            "##,
+        );
+    }
+
+    // -- ENV is a plain Object extended with Enumerable (#2077) ----------
+
+    /// ENV is no Hash: it is an Object whose singleton class has ENV's
+    /// own methods and includes Enumerable, and nothing of `Hash`'s.
+    #[test]
+    fn env_is_an_object_extended_with_enumerable() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            def t; yield; rescue Exception => e; [e.class, e.message.sub(/0x\h+/, "0x")]; end
+            [
+              ENV.class, ENV.is_a?(Hash), Hash === ENV, ENV.is_a?(Enumerable),
+              ENV.instance_of?(Object), ENV.singleton_class.include?(Enumerable),
+              ENV.singleton_class.ancestors.include?(Hash),
+              ENV.singleton_methods.sort,
+              (ENV.methods - Object.new.methods - ENV.singleton_methods - Enumerable.instance_methods).sort,
+              (Enumerable.instance_methods - ENV.methods).sort,
+              %i[compare_by_identity default default= transform_values! dig merge to_proc
+                 fetch_values flatten deconstruct_keys].map { |m| ENV.respond_to?(m) },
+              ENV.method(:map).owner, ENV.method(:each).owner == ENV.singleton_class,
+              ENV.method(:first).owner, ENV.method(:sort).owner,
+              (case ENV when Hash then :hash when Enumerable then :enum end),
+              ENV.frozen?, ENV.instance_variables, ENV == ENV.to_h, ENV == ENV,
+              ENV.eql?(ENV), ENV.equal?(ENV), ENV.hash == ENV.hash,
+              t { ENV.merge({}) }, t { ENV.dig("PATH") }, t { ENV.default },
+              t { ENV.compare_by_identity },
+              t { Hash.instance_method(:size).bind_call(ENV) },
+              t { Marshal.dump(ENV) }, t { Marshal.dump([ENV]) },
+              t { ENV.dup }, t { ENV.clone }, t { ENV.freeze },
+              ENV.to_s, ENV.inspect == ENV.to_h.inspect,
+              Object.instance_method(:inspect).bind_call(ENV).sub(/0x\h+/, "0x"),
+              ObjectSpace.each_object(Hash).any? { |h| h.equal?(ENV) },
+              Ractor.shareable?(ENV),
+              Enumerable.instance_method(:map).bind_call(ENV) { 1 }.sum == ENV.size,
+            ]
+            "##,
+        );
+    }
+
+    /// Enumerable's methods run over `ENV.each`: the `[name, value]`
+    /// pairs of the moment.
+    #[test]
+    fn env_enumerable_methods() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            k = "MONORUBY_ENV_ENUM"
+            ENV[k] = "1"
+            n = ENV.size
+            r = [
+              ENV.first.class, ENV.first(1).size, ENV.entries.size == n,
+              ENV.find { |a, b| a == k }, ENV.detect { |a, b| a == k }.class,
+              ENV.each_slice(2).first.size, ENV.lazy.map { |a, b| a }.first(1).size,
+              ENV.each.class, ENV.each.size == n, ENV.map.size == n,
+              ENV.each_with_index.size == n, ENV.sort.size == n, ENV.sort.first.class,
+              ENV.min.class, ENV.max(1).class, ENV.zip([1]).first.size,
+              ENV.sum([]).size == n * 2, ENV.filter_map { |a, b| b if a == k },
+              ENV.to_set.size == n, ENV.count { |a, b| a == k }, ENV.count == n,
+              ENV.include?(k), ENV.member?(k), ENV.group_by { |a, b| a == k }[true],
+              ENV.partition { |a, b| a == k }[0],
+              ENV.each_with_object([]) { |(a, b), acc| acc << b if a == k },
+              ENV.inject(0) { |acc, (a, b)| acc + 1 } == n,
+              ENV.min_by { |a, b| a == k ? 0 : 1 }, ENV.max_by { |a, b| a == k ? 1 : 0 },
+              ENV.each_entry.first.class, ENV.reduce { |a, b| a }.size,
+              ENV.to_enum.size == n, ENV.each_pair.with_index.first.flatten.size,
+              ENV.any? { |a, b| a == k }, ENV.none? { |a, b| a == k },
+              ENV.all? { |a, b| a.is_a?(String) }, ENV.one? { |a, b| a == k },
+              ENV.any?, ENV.none?, ENV.tally.class, ENV.uniq.size == n,
+              ENV.find_index { |a, b| a == k } == ENV.keys.index(k),
+              ENV.find_all { |a, b| a == k }, ENV.flat_map { |a, b| a == k ? [b] : [] },
+              ENV.collect { |a, b| a }.size == n, ENV.take_while { true }.size == n,
+              ENV.drop(n - 1).size, ENV.each_cons(n).to_a.size,
+              ENV.reverse_each.first == ENV.to_a.last, ENV.cycle(2).count == 2 * n,
+              ENV.chunk_while { |a, b| true }.to_a.size, ENV.grep(Array).size == n,
+              ENV.compact.class, ENV.minmax.size, ENV.to_a.first.map(&:frozen?),
+              ENV.sort_by { |a, b| a }.size == n,
+            ]
+            ENV.delete(k)
+            r
+            "##,
+        );
+    }
+
+    /// What takes a Hash takes ENV through `to_hash`, and what takes a
+    /// list takes it through `each` (it has no `to_ary`).
+    #[test]
+    fn env_converts_with_to_hash() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            def kw(**k) = k.size
+            n = ENV.size
+            [
+              {}.merge(ENV).size == n, {}.update(ENV).size == n, {}.replace(ENV).size == n,
+              Hash[ENV].size == n, Hash(ENV).size == n, Hash.try_convert(ENV).class,
+              kw(**ENV) == n, {**ENV}.size == n, ({} == ENV), (ENV.to_h == ENV),
+              ENV.respond_to?(:to_hash), ENV.respond_to?(:to_ary),
+              [ENV].flatten.size, Array(ENV).size == n, [*ENV].size == n,
+              system(ENV, "true"), IO.popen(ENV, "echo hi", &:read),
+              ("%{PATH}" % ENV rescue $!.class),
             ]
             "##,
         );

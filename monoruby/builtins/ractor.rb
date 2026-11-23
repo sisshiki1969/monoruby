@@ -210,7 +210,8 @@ class Ractor
 
     def __shareable?(obj, seen)
       return true if obj.is_a?(Module) || obj.is_a?(Symbol) || obj.is_a?(Numeric) ||
-                     obj.nil? || obj == true || obj == false || obj.is_a?(Ractor)
+                     obj.nil? || obj == true || obj == false || obj.is_a?(Ractor) ||
+                     obj.equal?(::ENV)
       return true if seen.key?(obj)
       return false unless obj.frozen?
       seen[obj] = true
