@@ -405,6 +405,15 @@ pub struct ISeqInfo {
     /// callers reach with a direct `call` — once the body exists.
     #[cfg(target_arch = "x86_64")]
     pub(super) late_direct_calls: HashMap<ClassId, Vec<u64>>,
+    /// x86-64 only: the `patch_point`s (`JitInfo::entry`) of the bodies
+    /// [`Self::drop_jit_code`] has just dropped, until the code generator
+    /// points them at the function's own entry
+    /// (`Codegen::retire_patch_points`). Callers that proved the receiver
+    /// class `call` a `patch_point` directly, and nothing else would stop
+    /// them entering a body that is gone (aarch64's twin: the guard-free
+    /// slots are zeroed).
+    #[cfg(target_arch = "x86_64")]
+    pub(super) retired_patch_points: Vec<DestLabel>,
     /// Bounded per-self-class warm-up profile used to decide *which* receiver
     /// class is hot enough to specialize for. Without it, the first call that
     /// trips the global warm-up counter compiles for whatever class happens to
@@ -666,6 +675,8 @@ impl ISeqInfo {
             jit_guard_free_slot: HashMap::default(),
             #[cfg(target_arch = "x86_64")]
             late_direct_calls: HashMap::default(),
+            #[cfg(target_arch = "x86_64")]
+            retired_patch_points: Vec::new(),
             jit_class_profile: Vec::new(),
             jit_invalidated: false,
             bop_deps: Vec::new(),
@@ -1292,6 +1303,13 @@ impl ISeqInfo {
         self.late_direct_calls.remove(&class).unwrap_or_default()
     }
 
+    /// x86-64 only: the `patch_point`s of the bodies dropped since the last
+    /// call (see the field).
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn take_retired_patch_points(&mut self) -> Vec<DestLabel> {
+        std::mem::take(&mut self.retired_patch_points)
+    }
+
     /// aarch64 only: the guard-free dispatch-slot address for a self class,
     /// if compiled or awaited by a caller (a zero slot until compiled, see
     /// [`Self::add_late_direct_call`]). `None` once invalidated (the slots are also zeroed then,
@@ -1515,6 +1533,12 @@ impl ISeqInfo {
     /// recoverable [`Self::evict_jit_code`]; on its own it says nothing about
     /// whether the iseq may be compiled again.
     fn drop_jit_code(&mut self) {
+        // The direct callers' way in to each body goes with it: leave the
+        // `patch_point`s for the code generator to point at the function's
+        // entry (`Codegen::retire_patch_points`).
+        #[cfg(target_arch = "x86_64")]
+        self.retired_patch_points
+            .extend(self.jit_entry.drain().map(|(_, info)| info.entry));
         self.jit_entry.clear();
         // The entry stops going to the chain (x86-64: the callers of this
         // function put the wrapper's jump back; aarch64: the slots are
