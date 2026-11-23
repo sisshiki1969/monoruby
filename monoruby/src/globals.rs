@@ -926,9 +926,10 @@ impl Globals {
         let probed_ruby_file = monoruby_dir.join("probed_ruby");
 
         if let Some(p) = std::env::var_os("MONORUBY_GEM_PATH") {
-            // SAFETY: `Globals::new` runs single-threaded on the main
-            // thread before any worker threads are spawned.
-            unsafe { std::env::set_var("GEM_PATH", p) };
+            // Through `environ`, as every write of the interpreter's
+            // goes: another interpreter of this process (the test
+            // harness runs several) may be reading the environment.
+            crate::environ::set(b"GEM_PATH", p.as_encoded_bytes());
         } else if std::env::var_os("GEM_PATH").is_none() {
             let cached = std::fs::read_to_string(&gem_path_file)
                 .ok()
@@ -981,8 +982,7 @@ impl Globals {
             if let Some(s) = from_probe.or(cached)
                 && !s.is_empty()
             {
-                // SAFETY: as above — single-threaded main-thread init.
-                unsafe { std::env::set_var("GEM_PATH", s) };
+                crate::environ::set(b"GEM_PATH", s.as_bytes());
             }
         }
 
@@ -997,8 +997,7 @@ impl Globals {
         if let Ok(gp) = std::env::var("GEM_PATH")
             && !gp.is_empty()
         {
-            // SAFETY: as above — single-threaded main-thread init.
-            unsafe { std::env::set_var("MONORUBY_HOST_GEM_PATH", &gp) };
+            crate::environ::set(b"MONORUBY_HOST_GEM_PATH", gp.as_bytes());
         }
 
         // Derive the host CRuby's `rubylibprefix` / `ruby_api_version`
@@ -1028,11 +1027,8 @@ impl Globals {
                 if !ok {
                     continue;
                 }
-                // SAFETY: as above — single-threaded main-thread init.
-                unsafe {
-                    std::env::set_var("MONORUBY_HOST_RUBYLIBPREFIX", prefix);
-                    std::env::set_var("MONORUBY_HOST_RUBY_API_VERSION", api);
-                }
+                crate::environ::set(b"MONORUBY_HOST_RUBYLIBPREFIX", prefix.as_bytes());
+                crate::environ::set(b"MONORUBY_HOST_RUBY_API_VERSION", api.as_bytes());
                 break;
             }
         }

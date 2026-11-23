@@ -28,6 +28,8 @@ monoruby/                   # Workspace root
 │   │   │                   #   deferred: the prism tree kept alive + unlowered def bodies)
 │   │   ├── alloc.rs        # Custom GC allocator (mark-and-sweep)
 │   │   ├── poll_flag.rs    # Safepoint poll word (GC/preempt/signal byte lanes)
+│   │   ├── environ.rs      # Process environment: `environ` / getenv(3) read as bytes
+│   │   │                   #   under one lock (ENV, spawn); ENV keeps no copy
 │   │   ├── id_table.rs     # Interned identifier table (IdentId)
 │   │   ├── value.rs        # Value type (tagged-union, 64-bit, NonZeroU64)
 │   │   ├── value/
