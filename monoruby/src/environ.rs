@@ -186,7 +186,10 @@ pub(crate) fn set(name: &[u8], value: &[u8]) {
 }
 
 /// `unsetenv(name)`. A name `unsetenv` rejects (empty, or with a `=` or
-/// a NUL in it) names no variable, so there is nothing to remove.
+/// a NUL in it) is left alone. `getenv` can still find a variable for
+/// one (Darwin's compares only up to the `=`, glibc's finds `A=x` in the
+/// entry `A=x=y`); ENV raises `unsetenv`'s `EINVAL` then, as CRuby does
+/// (`env_delete_name`).
 pub(crate) fn unset(name: &[u8]) {
     if !is_settable_name(name) || name.contains(&0) {
         return;
