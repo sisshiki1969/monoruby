@@ -226,12 +226,16 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                 let stream = if is_dash {
                     stdin_value(globals)
                 } else {
-                    let f = open_file(vm, globals, name)?;
-                    // The fresh File lives only in this Rust local while
-                    // `inplace_redirect` re-enters Ruby (`close`,
-                    // `File.open`) — root it until it lands in
-                    // `inner.current` below.
+                    // The name `shift_queue` took off the queue lives only
+                    // in `name` until it lands in `inner.filename` below,
+                    // and the fresh File only in `f` until it lands in
+                    // `inner.current`. Ruby runs in between: `File.open`
+                    // (a Ruby one may drop its parameter and collect), and
+                    // in `inplace_redirect` the previous output's `close`,
+                    // before `name` is read again. Root both.
                     vm.with_temp_scope(|vm| {
+                        vm.temp_push(name);
+                        let f = open_file(vm, globals, name)?;
                         vm.temp_push(f);
                         inplace_redirect(vm, globals, argf, name)?;
                         Ok(f)
@@ -347,8 +351,15 @@ fn inplace_finish(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Resu
     let stdout_id = IdentId::get_id("$stdout");
     let cur_stdout = globals.get_gvar(stdout_id).unwrap_or_default();
     if cur_stdout != saved {
-        let _ = invoke0(vm, globals, cur_stdout, "close");
-        globals.set_gvar(stdout_id, saved);
+        // Out of `inner` now, `saved` lives only in this local while the
+        // output's `close` runs, which can be Ruby (an override, a
+        // prepended module) that collects: root it until it is `$stdout`
+        // again.
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(saved);
+            let _ = invoke0(vm, globals, cur_stdout, "close");
+            globals.set_gvar(stdout_id, saved);
+        });
     }
     Ok(())
 }
@@ -521,11 +532,17 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         return forward_call_to_stdin(vm, globals, stdin, "readlines", &args, kw, None);
     }
     let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
-    let mut lines = vec![];
-    while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
-        lines.push(line);
-    }
-    Ok(Value::array_from_vec(lines))
+    // The lines go into an Array on the temp stack as they are read: the
+    // walk runs Ruby (`close` on a drained file, `File.open` on the next)
+    // and parks the thread, and a collection there would free the lines a
+    // Rust `Vec` held.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
+            vm.temp_array_push(line);
+        }
+        Ok(vm.temp_pop())
+    })
 }
 
 #[monoruby_builtin]
@@ -689,19 +706,28 @@ fn finish_read(
     let Some(v) = outbuf else {
         return Ok(result.unwrap_or_default());
     };
-    let mut out = v.coerce_to_rstring(vm, globals)?.as_val();
-    out.ensure_string_mutable(vm, globals)?;
-    match result.and_then(|r| r.is_rstring_inner().map(|s| (*s).clone())) {
-        Some(inner) => {
-            *out.as_rstring_inner_mut() = inner;
-            Ok(out)
+    // The String just read, and the buffer `to_str` makes, live only in
+    // locals while `to_str` and the chilled-String warning (written to
+    // `$stderr`) run Ruby: keep them on the temp stack.
+    vm.with_temp_scope(|vm| {
+        if let Some(r) = result {
+            vm.temp_push(r);
         }
-        None => {
-            let enc = out.as_rstring_inner().encoding();
-            *out.as_rstring_inner_mut() = RStringInner::from_encoding(b"", enc);
-            Ok(Value::nil())
+        let mut out = v.coerce_to_rstring(vm, globals)?.as_val();
+        vm.temp_push(out);
+        out.ensure_string_mutable(vm, globals)?;
+        match result.and_then(|r| r.is_rstring_inner().map(|s| (*s).clone())) {
+            Some(inner) => {
+                *out.as_rstring_inner_mut() = inner;
+                Ok(out)
+            }
+            None => {
+                let enc = out.as_rstring_inner().encoding();
+                *out.as_rstring_inner_mut() = RStringInner::from_encoding(b"", enc);
+                Ok(Value::nil())
+            }
         }
-    }
+    })
 }
 
 /// Shared engine for `readpartial` / `read_nonblock`: read from the
@@ -745,7 +771,12 @@ fn partial_read(
             // raising): treat like EOFError below.
             finish_read(vm, globals, Some(v), outbuf)
         }
-        Err(e) if is_eof_error(globals, &e) => {
+        // The Values `e` carries (the exception object a Ruby `readpartial`
+        // raised) live only in it while the stream is closed and the buffer
+        // converted, both of which can run Ruby, and it is raised again
+        // after that: root them.
+        Err(e) if is_eof_error(globals, &e) => vm.with_temp_scope(|vm| {
+            e.for_each_value(|v| vm.temp_push(v));
             finish_stream(vm, globals, argf)?;
             let inner = expect_inner(argf)?;
             let more = inner
@@ -760,7 +791,7 @@ fn partial_read(
                 finish_read(vm, globals, None, outbuf)?;
                 Err(e)
             }
-        }
+        }),
         Err(e) => Err(e),
     }
 }
@@ -1561,4 +1592,246 @@ mod tests {
         );
     }
 
+    /// `ARGF.readlines` keeps the lines it has read rooted while a Ruby
+    /// `File#close` collects at each switch to the next file.
+    #[test]
+    fn argf_readlines_lines_survive_gc_in_close() {
+        run_test_once(
+            r##"
+            module CloseGC
+              def close
+                r = super
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                r
+              end
+            end
+            File.prepend(CloseGC)
+            paths = 3.times.map { |i| "/tmp/monoruby_test_argf_readlines_gc_#{Process.pid}_#{rand(100000)}_#{i}" }
+            paths.each_with_index { |pa, i| File.write(pa, "file #{i} line one with some length\nfile #{i} line two with some length\n") }
+            begin
+              3.times.map { ARGF.class.new(*paths).readlines }.uniq
+            ensure
+              paths.each { File.unlink(_1) }
+            end
+            "##,
+        );
+    }
+
+    /// `ARGF#read` / `#readpartial` / `#read_nonblock` keep the String they
+    /// read rooted while the buffer's `to_str` collects.
+    #[test]
+    fn argf_read_outbuf_survives_gc_in_to_str() {
+        run_test_once(
+            r##"
+            class GCBuf
+              def to_str
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                String.new("buffer")
+              end
+            end
+            path = "/tmp/monoruby_test_argf_outbuf_gc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "hello world, this is the content of the file which is long enough\n" * 3)
+            begin
+              [
+                3.times.map { ARGF.class.new(path).read(nil, GCBuf.new) }.map(&:size).uniq,
+                3.times.map { ARGF.class.new(path).read(20, GCBuf.new) }.uniq,
+                3.times.map { ARGF.class.new(path).readpartial(30, GCBuf.new) }.uniq,
+                3.times.map { ARGF.class.new(path).read_nonblock(30, GCBuf.new) }.uniq,
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// In-place editing moves on to the next file after closing the
+    /// previous output; the file name taken off the queue must survive a
+    /// collection in that `close`.
+    #[test]
+    fn argf_inplace_name_survives_gc_in_close() {
+        run_test_once(
+            r##"
+            module CloseGC
+              def close
+                r = super
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                r
+              end
+            end
+            File.prepend(CloseGC)
+            dir = "/tmp/monoruby_test_argf_inplace_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(dir)
+            begin
+              3.times.map do |k|
+                paths = 2.times.map { |i| "#{dir}/file_with_a_long_enough_name_#{k}_#{i}.txt" }
+                paths.each { File.write(_1, "content of #{File.basename(_1)}\n") }
+                a = ARGF.class.new(*paths.map { _1.dup })
+                a.inplace_mode = ".bak"
+                names = []
+                begin
+                  while (line = a.gets)
+                    names << File.basename(a.filename)
+                    print line.upcase
+                  end
+                ensure
+                  $stdout = STDOUT
+                end
+                [names, paths.map { File.read(_1) == File.read(_1 + ".bak").upcase }]
+              end
+            ensure
+              Dir.children(dir).each { File.unlink(File.join(dir, _1)) }
+              Dir.rmdir(dir)
+            end
+            "##,
+        );
+    }
+
+    /// The file name the walk takes off the queue is held only by ARGF's
+    /// own code while `File.open` opens it, and becomes `ARGF.filename`
+    /// after that; a Ruby `File.open` that drops its parameter and
+    /// collects must not free it in between. CRuby opens the file without
+    /// calling `File.open`, so the wrapper only runs here.
+    #[test]
+    fn argf_filename_survives_gc_in_file_open() {
+        run_test_once(
+            r##"
+            class << File
+              alias __argf_gc_orig_open open
+              def open(name, *rest, **kw, &blk)
+                name = String.new(name)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                __argf_gc_orig_open(name, *rest, **kw, &blk)
+              end
+            end
+            dir = "/tmp/monoruby_test_argf_name_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(dir)
+            paths = 3.times.map { |i| "#{dir}/file_with_a_long_enough_name_#{i}.txt" }
+            paths.each_with_index { |pa, i| File.write(pa, "line #{i}\n") }
+            begin
+              3.times.map do
+                a = ARGF.class.new(*paths.map { _1 + "" })
+                names = []
+                while (line = a.gets)
+                  names << [File.basename(a.filename), line]
+                end
+                names << File.basename(a.filename)
+              end.uniq
+            ensure
+              Dir.children(dir).each { File.unlink(File.join(dir, _1)) }
+              Dir.rmdir(dir)
+            end
+            "##,
+        );
+    }
+
+    /// At the end of an in-place walk ARGF closes the last output and puts
+    /// back the `$stdout` it saved when the walk began, which it has taken
+    /// out of its own state by then; that object must survive a collection
+    /// in a Ruby `close`. Not compared with CRuby, which leaves the last
+    /// in-place output as `$stdout` rather than restoring the saved one.
+    #[test]
+    fn argf_inplace_saved_stdout_survives_gc_in_close() {
+        let ok = run_test_no_result_check(
+            r##"
+            module CloseGC
+              def close
+                r = super
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                r
+              end
+            end
+            File.prepend(CloseGC)
+            class Sink
+              attr_reader :buf
+              def initialize = @buf = +""
+              def write(*a) = a.sum { |s| @buf << s.to_s; s.to_s.bytesize }
+            end
+            dir = "/tmp/monoruby_test_argf_inplace_stdout_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(dir)
+            begin
+              res = 3.times.map do |k|
+                path = "#{dir}/file_with_a_long_enough_name_#{k}.txt"
+                File.write(path, "line #{k}\n")
+                $stdout = Sink.new
+                a = ARGF.class.new(path)
+                a.inplace_mode = ".bak"
+                while (line = a.gets)
+                  print line.upcase
+                end
+                restored = $stdout
+                $stdout = STDOUT
+                restored.write("after")
+                [restored.class, restored.buf, File.read(path), File.read(path + ".bak")]
+              end
+              res == 3.times.map { |k| [Sink, "after", "LINE #{k}\n", "line #{k}\n"] }
+            ensure
+              $stdout = STDOUT
+              Dir.children(dir).each { File.unlink(File.join(dir, _1)) }
+              Dir.rmdir(dir)
+            end
+            "##,
+        );
+        assert_eq!(
+            ok,
+            crate::Value::bool(true),
+            "the `$stdout` saved when the in-place walk began was not restored \
+             intact after the collection in the last output's `close`"
+        );
+    }
+
+    /// `ARGF#readpartial` at the end of the last file closes the stream
+    /// and then raises the stream's EOFError again; one a Ruby
+    /// `readpartial` raised must survive a collection in that `close`.
+    /// Not compared with CRuby, whose ARGF calls its own `io_getpartial`
+    /// rather than a Ruby `readpartial`, and raises an EOFError of its own.
+    #[test]
+    fn argf_readpartial_eof_error_survives_gc_in_close() {
+        let ok = run_test_no_result_check(
+            r##"
+            module RP
+              def readpartial(*a)
+                super
+              rescue EOFError
+                raise EOFError, "custom eof " + "!" * 30
+              end
+            end
+            module CloseGC
+              def close
+                r = super
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                r
+              end
+            end
+            File.prepend(RP)
+            File.prepend(CloseGC)
+            path = "/tmp/monoruby_test_argf_eof_gc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abc")
+            begin
+              res = 3.times.map do
+                a = ARGF.class.new(path)
+                x = a.readpartial(100)
+                y = begin; a.readpartial(100); rescue EOFError => e; [e.class, e.message]; end
+                [x, y]
+              end.uniq
+              res == [["abc", [EOFError, "custom eof " + "!" * 30]]]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+        assert_eq!(
+            ok,
+            crate::Value::bool(true),
+            "either the EOFError a Ruby `File#readpartial` raised did not survive \
+             the collection in `close`, or ARGF no longer calls a Ruby \
+             `readpartial` and this test needs another way to raise one"
+        );
+    }
 }

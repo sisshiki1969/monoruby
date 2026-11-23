@@ -205,11 +205,14 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     let enc_obj = entries_enc_obj(globals, enc_val);
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     names.extend(read_dir_names(globals, &path)?);
+    // The block is resolved before the name Strings are made: a `to_proc`
+    // it needs runs Ruby, and until they are on the temp stack below
+    // nothing roots them.
+    let p = vm.get_block_data(globals, bh)?;
     let entries: Vec<Value> = names
         .into_iter()
         .map(|n| external_str_with_enc(globals, n, enc_obj))
         .collect();
-    let p = vm.get_block_data(globals, bh)?;
     // Root the not-yet-yielded name strings: the block body reaches
     // safepoints, and a bare Rust `Vec<Value>` is invisible to the GC
     // mark phase (caught by the true `gc-stress` mode).
@@ -945,7 +948,12 @@ fn chdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     };
     let display = path.to_string_lossy().to_string();
     if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
+        // `path_val`, a fresh String, lives only in this local until the
+        // block gets it, and a `to_proc` of the block runs Ruby: root it.
+        let data = vm.with_temp_scope(|vm| {
+            vm.temp_push(path_val);
+            vm.get_block_data(globals, bh)
+        })?;
         let old_pwd = std::env::current_dir().unwrap();
         match std::env::set_current_dir(&path) {
             Ok(_) => {}
@@ -1806,6 +1814,36 @@ mod tests {
             end
             Dir.rmdir(base)
             [raised, d.path == base]
+            "##,
+        );
+    }
+
+    /// The Strings `Dir.foreach` and `Dir.chdir` yield must survive a
+    /// collection in the `to_proc` of a block given as `&obj`.
+    #[test]
+    fn dir_foreach_and_chdir_survive_gc_in_to_proc() {
+        run_test_once(
+            r##"
+            class GCToProc
+              def to_proc
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                $keep = proc { |x| ($r ||= []) << x; x.size }
+              end
+            end
+            d = "/tmp/monoruby_test_dir_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(d)
+            30.times { |i| File.write("#{d}/file_with_a_reasonably_long_name_number_#{i}.txt", "") }
+            begin
+              [
+                3.times.map { $r = []; Dir.foreach(d, &GCToProc.new); $r.sort }.uniq.size,
+                3.times.map { $r = []; Dir.foreach(d, &GCToProc.new); $r.map(&:size).sum }.uniq,
+                3.times.map { Dir.chdir(d, &GCToProc.new) == d.size }.uniq,
+              ]
+            ensure
+              Dir.children(d).each { File.unlink(File.join(d, _1)) }
+              Dir.rmdir(d)
+            end
             "##,
         );
     }

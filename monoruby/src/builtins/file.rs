@@ -357,9 +357,21 @@ fn file_join(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                     return Err(MonorubyErr::argumenterr("recursive array"));
                 }
                 seen.push(id);
-                for v in ainfo.iter().cloned() {
-                    flatten(vm, globals, parts, v, seen)?;
-                }
+                // Read by index, the length re-read at every step as CRuby's
+                // `rb_file_join` does: a `to_path` / `to_str` below may shrink
+                // the Array, and an iterator would go on to elements it no
+                // longer holds, which a collection frees. The Array itself
+                // stays on the temp stack, in case one drops it from its
+                // parent.
+                vm.with_temp_scope(|vm| {
+                    vm.temp_push(val);
+                    let mut i = 0;
+                    while let Some(v) = ainfo.get(i).copied() {
+                        flatten(vm, globals, parts, v, seen)?;
+                        i += 1;
+                    }
+                    Ok(())
+                })?;
                 seen.pop();
             }
             None => {
@@ -493,7 +505,7 @@ fn file_expand_path(
     let dfl: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
+        Some(to_path_keeping(vm, globals, arg1, rs)?.as_bytes().to_vec())
     } else {
         None
     };
@@ -667,7 +679,13 @@ fn file_basename(
     let filename = to_path_rstring(vm, globals, lfp.arg(0))?;
     let enc = filename.encoding();
     let suffix: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1) {
-        let s = arg1.coerce_to_rstring(vm, globals)?;
+        // `filename` may be a fresh String (`to_path`'s) that nothing else
+        // holds, and the suffix's `to_str` runs Ruby: keep it on the temp
+        // stack meanwhile.
+        let s = vm.with_temp_scope(|vm| {
+            vm.temp_push(filename.as_val());
+            arg1.coerce_to_rstring(vm, globals)
+        })?;
         if s.is_empty() {
             None
         } else {
@@ -722,7 +740,13 @@ fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         Err(e) => {
             let to_io = IdentId::get_id("to_io");
             if globals.check_method(arg, to_io).is_some() {
-                let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+                // `e` is what is raised when `to_io` gives no IO, and the
+                // Values it carries (the exception object a Ruby `to_path`
+                // raised) live only in it while `to_io` runs: root them.
+                let io = vm.with_temp_scope(|vm| {
+                    e.for_each_value(|v| vm.temp_push(v));
+                    vm.invoke_method_inner(globals, to_io, arg, &[], None, None)
+                })?;
                 if let Some(rv) = io.try_rvalue()
                     && rv.ty() == ObjTy::IO
                 {
@@ -964,7 +988,7 @@ fn realpath(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let base: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
+        Some(to_path_keeping(vm, globals, arg1, rs)?.as_bytes().to_vec())
     } else {
         None
     };
@@ -1187,8 +1211,17 @@ pub(super) fn block_close(
     io: Value,
     block_result: Result<Value>,
 ) -> Result<Value> {
-    let close_result =
-        vm.invoke_method_inner(globals, IdentId::get_id("close"), io, &[], None, None);
+    // The block's value, or the Values its error carries (the raised
+    // exception object, a `break` value), live only in `block_result`
+    // while `close` runs, which can be Ruby (an override, a prepended
+    // module): keep them on the temp stack, or a collection frees them.
+    let close_result = vm.with_temp_scope(|vm| {
+        match &block_result {
+            Ok(v) => vm.temp_push(*v),
+            Err(e) => e.for_each_value(|v| vm.temp_push(v)),
+        }
+        vm.invoke_method_inner(globals, IdentId::get_id("close"), io, &[], None, None)
+    });
     match close_result {
         Err(ce) if !ce.message().contains("closed stream") => Err(ce),
         _ => block_result,
@@ -1305,7 +1338,25 @@ fn open_impl(
     lfp: Lfp,
     is_new: bool,
 ) -> Result<Value> {
+    vm.with_temp_scope(|vm| open_impl_body(vm, globals, lfp, is_new))
+}
+
+/// [`open_impl`]'s work, inside its temp scope: what this pushes on the
+/// temp stack stays rooted until the open is over.
+fn open_impl_body(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    is_new: bool,
+) -> Result<Value> {
     let kw_hash = open_kw_hash(vm, globals, lfp)?;
+    // The options Hash is made here and nothing else refers to it, while
+    // conversions (`to_path`, the mode's or `path:`'s `to_str`, `flags:`'s
+    // `to_int`) run Ruby and a FIFO's open parks the thread, all before
+    // `init_io_encodings` reads it: root it.
+    if let Some(h) = kw_hash {
+        vm.temp_push(h);
+    }
     // `rb_io_extract_modeenc` reads the conversion options before
     // anything is opened, so a bad `invalid:` / `undef:` / `replace:` is
     // reported even for a path that does not exist.
@@ -1448,10 +1499,8 @@ fn open_impl(
     }
     // CRuby rejects newline decorators on a binary-mode stream.
     if binmode
-        && (open_kw(lfp, "newline").is_some() || {
-            let h = open_kw_hash(vm, globals, lfp)?.map(|h| h.as_hash());
-            super::io::newline_decorator_given(vm, globals, h)?
-        })
+        && (open_kw(lfp, "newline").is_some()
+            || super::io::newline_decorator_given(vm, globals, kw_hash.map(|h| h.as_hash()))?)
     {
         return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
     }
@@ -1473,6 +1522,9 @@ fn open_impl(
     }
     let path_rs = to_path_rstring(vm, globals, lfp.arg(0))?;
     let path_bytes = path_rs.as_bytes().to_vec();
+    // Read now: `path_rs` may be a fresh String (`to_path`'s), and a FIFO's
+    // open below parks the thread, which lets a collection free it.
+    let path_enc = path_rs.encoding();
     let path = String::from_utf8_lossy(&path_bytes).to_string();
     // NUL bytes were rejected by to_path_rstring, so this cannot fail.
     let cpath = std::ffi::CString::new(path_bytes.clone())
@@ -1529,7 +1581,7 @@ fn open_impl(
     let res = Value::new_file(
         file,
         path,
-        Some((path_bytes.clone(), path_rs.encoding())),
+        Some((path_bytes.clone(), path_enc)),
         readable,
         writable,
     );
@@ -1673,7 +1725,7 @@ fn absolute_path(
     let base = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        bytes_to_pathbuf(to_path_rstring(vm, globals, arg1)?.as_bytes())
+        bytes_to_pathbuf(to_path_keeping(vm, globals, arg1, rs)?.as_bytes())
     } else {
         match std::env::current_dir() {
             Ok(dir) => dir,
@@ -1769,6 +1821,21 @@ pub(super) fn to_path_rstring(
         return Err(MonorubyErr::argumenterr("path name contains null byte"));
     }
     Ok(rs)
+}
+
+/// [`to_path_rstring`] of a second path argument, with `keep` — the first
+/// one's String, which may be a fresh one `to_path` made and nothing else
+/// holds — on the temp stack while `val`'s conversion runs Ruby.
+fn to_path_keeping(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    keep: RString,
+) -> Result<RString> {
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(keep.as_val());
+        to_path_rstring(vm, globals, val)
+    })
 }
 
 /// Reject ASCII-incompatible path encodings (UTF-16/32, ISO-2022-JP)
@@ -2001,7 +2068,13 @@ fn size_source(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<S
             if globals.check_method(arg, to_io).is_none() {
                 return Err(path_err);
             }
-            let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+            // `path_err` is what is raised when `to_io` gives no IO, and the
+            // Values it carries (the exception object a Ruby `to_path`
+            // raised) live only in it while `to_io` runs: root them.
+            let io = vm.with_temp_scope(|vm| {
+                path_err.for_each_value(|v| vm.temp_push(v));
+                vm.invoke_method_inner(globals, to_io, arg, &[], None, None)
+            })?;
             if io.try_rvalue().map(|rv| rv.ty()) != Some(ObjTy::IO) {
                 return Err(path_err);
             }
@@ -3064,7 +3137,7 @@ fn file_realdirpath(
     let base: Option<Vec<u8>> = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        Some(to_path_rstring(vm, globals, arg1)?.as_bytes().to_vec())
+        Some(to_path_keeping(vm, globals, arg1, rs)?.as_bytes().to_vec())
     } else {
         None
     };
@@ -4740,6 +4813,223 @@ mod tests {
               File.unlink(path) rescue nil
             end
             "#,
+        );
+    }
+
+    /// `File.open` / `File.new` keep the Hash they fold the keywords into
+    /// rooted until the encodings are set: a `to_path` (or a `path:`
+    /// keyword's `to_str`, on the fd form) collects in between.
+    #[test]
+    fn file_open_keywords_survive_gc_in_to_path() {
+        run_test_once(
+            r##"
+            class GCPath
+              def initialize(s) = @s = s
+              def to_path
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                @s
+              end
+              def to_str = to_path
+            end
+            path = "/tmp/monoruby_test_open_kw_gc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "hello")
+            begin
+              r = []
+              r << 3.times.map { File.open(GCPath.new(path), "r", encoding: "ISO-8859-1") { |f| [f.external_encoding.name, f.read] } }.uniq
+              r << 3.times.map { f = File.new(GCPath.new(path), "r", external_encoding: "ISO-8859-1"); e = f.external_encoding.name; f.close; e }.uniq
+              r << 3.times.map do
+                fd = IO.sysopen(path)
+                File.open(fd, "r", path: GCPath.new(path), encoding: "ISO-8859-1") { |f| [f.external_encoding.name, f.path == path] }
+              end.uniq
+              r
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// Opening a FIFO parks the thread until a writer appears, and the
+    /// File made after that carries the path's encoding; the String
+    /// `to_path` made must not be needed by then (the main thread collects
+    /// meanwhile). A reader that never shows as parked fails the test
+    /// after a deadline rather than hanging it.
+    #[test]
+    fn file_open_fifo_path_survives_gc_while_parked() {
+        run_test_once(
+            r##"
+            class FreshPath
+              def initialize(s) = @s = s
+              def to_path = String.new(@s)
+            end
+            fifo = "/tmp/monoruby_test_open_fifo_gc_#{Process.pid}_#{rand(100000)}"
+            File.mkfifo(fifo)
+            begin
+              3.times.map do
+                t = Thread.new do
+                  File.open(FreshPath.new(fifo), "r", encoding: "ISO-8859-1") { |f| [f.external_encoding.name, f.read] }
+                end
+                deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 30
+                while t.alive? && t.status != "sleep"
+                  if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+                    # Let the reader go (a writer that never blocks) before failing.
+                    File.open(fifo, File::WRONLY | File::NONBLOCK) { } rescue nil
+                    raise "the reader never parked"
+                  end
+                  Thread.pass
+                end
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                File.open(fifo, "w") { |f| f.write("hello") } if t.alive?
+                t.value
+              end.uniq
+            ensure
+              File.unlink(fifo)
+            end
+            "##,
+        );
+    }
+
+    /// `File.open { }` keeps the block's value, its exception and its
+    /// `break` value rooted while a Ruby `close` collects, on the path and
+    /// the fd forms alike.
+    #[test]
+    fn file_open_block_result_survives_gc_in_close() {
+        run_test_once(
+            r##"
+            module CloseGC
+              def close
+                r = super
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                r
+              end
+            end
+            File.prepend(CloseGC)
+            class MyErr < StandardError; end
+            path = "/tmp/monoruby_test_block_close_gc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "hello world " * 10)
+            begin
+              r = []
+              r << 3.times.map { File.open(path) { |f| f.read + "!" * 30 } }.map(&:size).uniq
+              r << 3.times.map { begin; File.open(path) { raise MyErr, "boom" + "!" * 30 }; rescue MyErr => e; [e.class, e.message.size]; end }.uniq
+              r << 3.times.map { File.open(path) { |f| break f.read(5) + "-brk" * 10 } }.uniq
+              r << 3.times.map do
+                fd = IO.sysopen(path)
+                File.open(fd) { |f| f.read(5) + "-fd" * 10 }
+              end.uniq
+              r
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// `File.expand_path`, `absolute_path`, `realpath`, `realdirpath` and
+    /// `basename` keep the String the first argument's `to_path` made
+    /// rooted while the second argument's `to_path` / `to_str` collects.
+    #[test]
+    fn file_path_functions_survive_gc_in_second_argument() {
+        run_test_once(
+            r##"
+            class FreshPath
+              def initialize(s) = @s = s
+              def to_path = String.new(@s)
+            end
+            class GCPath
+              def initialize(s) = @s = s
+              def to_path
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                @s
+              end
+              alias to_str to_path
+            end
+            dir = "/tmp/monoruby_test_paths_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(dir)
+            name = "some_reasonably_long_file_name_abcdef.txt"
+            File.write("#{dir}/#{name}", "")
+            begin
+              rel = "some/relative/path/that/is/long/enough/to/matter"
+              r = []
+              r << 3.times.map { File.expand_path(FreshPath.new(rel), GCPath.new("/base/dir")) }.uniq
+              r << 3.times.map { File.absolute_path(FreshPath.new(rel), GCPath.new("/base/dir")) }.uniq
+              r << 3.times.map { File.realpath(FreshPath.new(name), GCPath.new(dir)) == File.realpath("#{dir}/#{name}") }.uniq
+              r << 3.times.map { File.realdirpath(FreshPath.new("not_there_" + name), GCPath.new(dir)) == File.realdirpath("#{dir}/not_there_#{name}") }.uniq
+              r << 3.times.map { File.basename(FreshPath.new("/a/b/#{name}"), GCPath.new(".txt")) }.uniq
+              r
+            ensure
+              File.unlink("#{dir}/#{name}")
+              Dir.rmdir(dir)
+            end
+            "##,
+        );
+    }
+
+    /// `File.join` reads a nested Array as it stands at each step, as
+    /// CRuby does: a `to_path` that clears it ends the walk instead of
+    /// handing on elements nothing holds any more, and one that drops the
+    /// Array from its parent does not free it under the walk.
+    #[test]
+    fn file_join_reads_array_live() {
+        run_test_once(
+            r##"
+            class Clearer
+              def to_path
+                $inner.clear
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                "a"
+              end
+            end
+            class Dropper
+              def to_path
+                $outer.clear
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                "x"
+              end
+            end
+            def build_inner
+              $inner = [Clearer.new, "b" + "c" * 30 + "!", ["d" + "e" * 30 + "!"]]
+              nil
+            end
+            def build_outer
+              $outer = [[Dropper.new, "y" + "z" * 30 + "!", "w" + "v" * 30 + "!"]]
+              nil
+            end
+            r = []
+            r << 3.times.map { build_inner; File.join($inner) }.uniq
+            r << 3.times.map { build_outer; File.join($outer) }.uniq
+            r
+            "##,
+        );
+    }
+
+    /// `File.directory?`, `File.size` and `File.size?` fall back to `to_io`
+    /// when `to_path` raises, and raise that error when `to_io` gives no
+    /// IO; its exception object must survive a collection in `to_io`.
+    #[test]
+    fn file_stat_predicates_keep_to_path_error_rooted() {
+        run_test_once(
+            r##"
+            class MyErr < StandardError; end
+            class NoPath
+              def to_path = raise(MyErr.new("bad" + "path"))
+              def to_io
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                nil
+              end
+            end
+            [
+              3.times.map { (File.directory?(NoPath.new) rescue [$!.class, $!.message]) }.uniq,
+              3.times.map { (File.size(NoPath.new) rescue [$!.class, $!.message]) }.uniq,
+              3.times.map { (File.size?(NoPath.new) rescue [$!.class, $!.message]) }.uniq,
+            ]
+            "##,
         );
     }
 }

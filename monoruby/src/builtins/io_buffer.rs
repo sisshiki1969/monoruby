@@ -649,11 +649,21 @@ fn each(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         return vm.generate_enumerator(IdentId::get_id("each"), lfp.self_val(), args, pc);
     };
     let pairs = each_values(vm, globals, lfp)?;
-    let p = vm.get_block_data(globals, bh)?;
-    for (off, v) in pairs {
-        vm.invoke_block(globals, &p, &[Value::integer(off as i64), v])?;
-    }
-    Ok(lfp.self_val())
+    // The values are all decoded up front, and the ones not yielded yet
+    // (a Bignum for a large 64-bit integer, a heap Float) live only in
+    // `pairs` while the block's `to_proc` and the block run: keep them in
+    // an Array on the temp stack.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(pairs.len());
+        for &(_, v) in &pairs {
+            vm.temp_array_push(v);
+        }
+        let p = vm.get_block_data(globals, bh)?;
+        for (off, v) in pairs {
+            vm.invoke_block(globals, &p, &[Value::integer(off as i64), v])?;
+        }
+        Ok(lfp.self_val())
+    })
 }
 
 ///
@@ -2436,6 +2446,22 @@ mod tests {
               r << (buf.slice(*d).xor!(buf.slice(*m)) && :ok rescue [$!.class, $!.message])
             end
             r
+            "##,
+        );
+    }
+
+    /// `IO::Buffer#each` decodes every value before the first yield; the
+    /// Bignums not yet yielded must survive a collection in the block.
+    #[test]
+    fn io_buffer_each_values_survive_gc_in_block() {
+        run_test_once(
+            r##"
+            Warning[:experimental] = false
+            buf = IO::Buffer.new(8 * 20)
+            20.times { |i| buf.set_value(:u64, i * 8, 2**63 + i) }
+            res = []
+            buf.each(:u64) { |off, v| GC.start; $junk = Array.new(2_000) { [_1] }; res << [off, v - 2**63] }
+            res
             "##,
         );
     }
