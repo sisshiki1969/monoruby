@@ -165,13 +165,20 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 fn complex_polar(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Both arguments accept a real Numeric or a zero-imaginary Complex
     // (CRuby's `nucomp_real_check`).
-    let abs = real_component_for_rect(vm, globals, lfp.arg(0))?;
-    let arg = if let Some(theta) = lfp.try_arg(1) {
-        real_component_for_rect(vm, globals, theta)?
-    } else {
-        Real::from(0)
-    };
-    polar_real(vm, globals, abs.get(), arg.get())
+    vm.with_temp_scope(|vm| {
+        // A Bignum or a heap Float comes back as a fresh copy that only
+        // these locals hold, while the angle's `#real?` and `polar_real`'s
+        // `== 0` and `*` run Ruby that can collect.
+        let abs = real_component_for_rect(vm, globals, lfp.arg(0))?;
+        vm.temp_push(abs.get());
+        let arg = if let Some(theta) = lfp.try_arg(1) {
+            real_component_for_rect(vm, globals, theta)?
+        } else {
+            Real::from(0)
+        };
+        vm.temp_push(arg.get());
+        polar_real(vm, globals, abs.get(), arg.get())
+    })
 }
 
 ///
@@ -183,13 +190,19 @@ fn complex_polar(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecode
 /// [https://docs.ruby-lang.org/ja/latest/method/Complex/s/rect.html]
 #[monoruby_builtin]
 fn complex_rect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let r = real_component_for_rect(vm, globals, lfp.arg(0))?;
-    let i = if let Some(i_arg) = lfp.try_arg(1) {
-        real_component_for_rect(vm, globals, i_arg)?
-    } else {
-        Real::from(0)
-    };
-    Ok(Value::complex(r, i))
+    vm.with_temp_scope(|vm| {
+        let r = real_component_for_rect(vm, globals, lfp.arg(0))?;
+        // A Bignum or a heap Float comes back as a fresh copy that only
+        // `r` holds while the imaginary part's `#real?` runs, and that
+        // can collect.
+        vm.temp_push(r.get());
+        let i = if let Some(i_arg) = lfp.try_arg(1) {
+            real_component_for_rect(vm, globals, i_arg)?
+        } else {
+            Real::from(0)
+        };
+        Ok(Value::complex(r, i))
+    })
 }
 
 /// Extract the real component to store for `Complex.rect`. Accepts a built-in
@@ -569,10 +582,16 @@ fn complex_denominator(
     c: &ComplexInner,
 ) -> Result<Value> {
     let den_id = IdentId::get_id("denominator");
-    let re_den = vm.invoke_method_inner(globals, den_id, c.re().get(), &[], None, None)?;
-    let im_den = vm.invoke_method_inner(globals, den_id, c.im().get(), &[], None, None)?;
-    let lcm_id = IdentId::get_id("lcm");
-    vm.invoke_method_inner(globals, lcm_id, re_den, &[im_den], None, None)
+    vm.with_temp_scope(|vm| {
+        let re_den = vm.invoke_method_inner(globals, den_id, c.re().get(), &[], None, None)?;
+        // A fresh Integer (a Bignum one for a Rational part) that only
+        // this local holds while the imaginary part's `#denominator`
+        // runs, and that can collect.
+        vm.temp_push(re_den);
+        let im_den = vm.invoke_method_inner(globals, den_id, c.im().get(), &[], None, None)?;
+        let lcm_id = IdentId::get_id("lcm");
+        vm.invoke_method_inner(globals, lcm_id, re_den, &[im_den], None, None)
+    })
 }
 
 ///
@@ -1178,16 +1197,25 @@ fn pow(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     if matches!(rhs.unpack(), RV::BigInt(_)) {
         let c = self_val.as_complex();
         let (re, im) = (c.re().get(), c.im().get());
-        if let Some(v) = vm.with_temp_scope(|vm| pow_for_special_angle(vm, globals, re, im, rhs))? {
-            return Ok(v);
-        }
-        if globals
-            .get_gvar(IdentId::get_id("$VERBOSE"))
-            .is_some_and(|v| !v.is_nil())
-        {
-            vm.ruby_warn_caller(globals, "warning: in a**b, b may be too big")?;
-        }
-        return pow_by_real(vm, globals, self_val, rhs);
+        return vm.with_temp_scope(|vm| {
+            // A Bignum exponent can be the numerator `rational_canonicalize`
+            // made, a fresh object only `rhs` holds while the special-angle
+            // test, the "b may be too big" warning and `#abs` run Ruby that
+            // can collect.
+            vm.temp_push(rhs);
+            if let Some(v) =
+                vm.with_temp_scope(|vm| pow_for_special_angle(vm, globals, re, im, rhs))?
+            {
+                return Ok(v);
+            }
+            if globals
+                .get_gvar(IdentId::get_id("$VERBOSE"))
+                .is_some_and(|v| !v.is_nil())
+            {
+                vm.ruby_warn_caller(globals, "warning: in a**b, b may be too big")?;
+            }
+            pow_by_real(vm, globals, self_val, rhs)
+        });
     }
     if let Some(e) = rhs.try_complex() {
         // `exp(e.re * log r - e.im * theta)` at
@@ -1850,5 +1878,92 @@ mod tests {
             "Complex(Rational(10**30, 7), Rational(1, 3)).numerator.to_s",
             "Complex(Rational(10**30, 7), Rational(1, 3)).denominator",
         ]);
+    }
+
+    /// `Complex.rect` and `Complex.polar` copy a Bignum or heap-Float
+    /// argument, and the copy used to wait in a Rust local while the other
+    /// argument's `#real?` (or `polar_real`'s `== 0`) ran. A collection
+    /// there freed it: the new Complex held a dead part, or `polar_real`
+    /// read one.
+    #[test]
+    fn rect_and_polar_keep_copied_parts_rooted() {
+        run_test_once(
+            r##"
+            def gc_churn
+              GC.start
+              $junk = Array.new(2000) { [_1] }
+            end
+            class GcReal < Numeric
+              def initialize(v) = @v = v
+              attr_reader :v
+              def real?
+                gc_churn
+                true
+              end
+              def ==(o)
+                gc_churn
+                o.is_a?(GcReal) && o.v == @v
+              end
+              def *(o) = GcReal.new(@v * o)
+              def to_f = @v.to_f
+            end
+            big = 2**70 + 12345
+            3.times.map do
+              r = Complex.rect(big, GcReal.new(1))
+              f = Complex.rect(1e-100, GcReal.new(1))
+              p1 = Complex.polar(big, GcReal.new(0))
+              p2 = Complex.polar(GcReal.new(2.0), 1e-100)
+              [r.real == big, f.real, p1.real, p1.imaginary, p2.real.v, p2.imaginary.v]
+            end.uniq
+            "##,
+        );
+    }
+
+    /// `Complex#denominator` (which `#numerator` starts from) held the real
+    /// part's denominator, a fresh Bignum, in a Rust local while the
+    /// imaginary part's `#denominator` ran. A collection there freed it,
+    /// and `lcm` was sent to whatever reused the cell.
+    #[test]
+    fn denominator_keeps_real_denominator_rooted() {
+        run_test_once(
+            r##"
+            class Rational
+              alias_method :__gc_den, :denominator
+              def denominator
+                GC.start
+                $junk = Array.new(2000) { [_1] }
+                __gc_den
+              end
+            end
+            c = Complex(Rational(1, 2**70 + 1), Rational(1, 2**65 + 3))
+            3.times.map { [c.denominator, c.numerator.real, c.numerator.imaginary] }.uniq
+            "##,
+        );
+    }
+
+    /// `Complex#**` with a Rational exponent whose denominator is 1 works
+    /// with its numerator, a fresh Bignum here. It used to wait in a Rust
+    /// local across the "b may be too big" warning, and a collection in
+    /// that warning's `$stderr.write` freed it.
+    #[test]
+    fn pow_keeps_canonical_exponent_rooted() {
+        run_test_once(
+            r##"
+            class GcSink
+              def write(*a)
+                GC.start
+                $junk = Array.new(2000) { [_1] }
+                a.sum { _1.size }
+              end
+            end
+            $VERBOSE = false
+            $stderr = GcSink.new
+            c = Complex(0.5, 0.25)
+            e = Rational(2**70 + 5, 1)
+            r = 3.times.map { c ** e }
+            $stderr = STDERR
+            r.map { [_1.real, _1.imaginary] }.uniq
+            "##,
+        );
     }
 }

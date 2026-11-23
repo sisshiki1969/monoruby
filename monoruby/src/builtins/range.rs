@@ -1229,12 +1229,17 @@ fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let self_val = lfp.self_val();
     let range = self_val.as_range();
     let (start, end, excl) = (range.start(), range.end(), range.exclude_end());
-    let s = rb_obj_as_string(vm, globals, start)?;
-    let e = rb_obj_as_string(vm, globals, end)?;
-    let mut buf = InspectBuf::from_piece(&globals.store, s.as_rstring_inner())?;
-    buf.cat(if excl { "..." } else { ".." });
-    buf.append(&globals.store, e.as_rstring_inner())?;
-    Ok(buf.into_value())
+    vm.with_temp_scope(|vm| {
+        let s = rb_obj_as_string(vm, globals, start)?;
+        // The begin's `#to_s` is a fresh String only this local holds
+        // while the end's `#to_s` runs, which can collect.
+        vm.temp_push(s);
+        let e = rb_obj_as_string(vm, globals, end)?;
+        let mut buf = InspectBuf::from_piece(&globals.store, s.as_rstring_inner())?;
+        buf.cat(if excl { "..." } else { ".." });
+        buf.append(&globals.store, e.as_rstring_inner())?;
+        Ok(buf.into_value())
+    })
 }
 
 #[cfg(test)]
@@ -1966,5 +1971,31 @@ mod tests {
                r = (x..y)
                [$c, ((r.each { |i| i }) rescue $!.class.to_s), $c]"#,
         ]);
+    }
+
+    /// `Range#to_s` (and `"#{range}"`) holds the begin's `#to_s`, a fresh
+    /// String, while the end's `#to_s` runs. A collection there used to
+    /// free it, and the result was read from the dead cell.
+    #[test]
+    fn to_s_keeps_begin_string_across_end_to_s() {
+        run_test_once(
+            r##"
+            class ToSBegin
+              def <=>(o) = 0
+              def to_s = "beg" + "in" * 3
+            end
+            class ToSEnd
+              def <=>(o) = 0
+              def to_s
+                GC.start
+                $junk = Array.new(2000) { [_1] }
+                "end"
+              end
+            end
+            r = ToSBegin.new..ToSEnd.new
+            x = ToSBegin.new...ToSEnd.new
+            3.times.map { [r.to_s, "#{r}", x.to_s] }.uniq
+            "##,
+        );
     }
 }
