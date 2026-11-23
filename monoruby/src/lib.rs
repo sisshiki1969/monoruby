@@ -57,6 +57,7 @@ mod builtins;
 mod bytecode;
 mod bytecodegen;
 mod codegen;
+mod environ;
 mod executor;
 mod ext;
 mod fork;

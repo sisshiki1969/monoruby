@@ -141,7 +141,10 @@ pub(crate) fn parse_exec_args(
     let mut items: Vec<Value> = args.to_vec();
 
     // --- env hash (leading) ---
-    let mut env_ops: Vec<(String, Option<String>)> = vec![];
+    // Names and values travel as bytes: neither is necessarily text in
+    // any encoding, in the Hash given here or in the environment the
+    // child inherits (#2135).
+    let mut env_ops: Vec<(Vec<u8>, Option<Vec<u8>>)> = vec![];
     let mut have_env = false;
     if let Some(first) = items.first().copied() {
         let env_hash = if let Some(h) = first.try_hash_ty() {
@@ -152,21 +155,23 @@ pub(crate) fn parse_exec_args(
             None
         };
         if let Some(h) = env_hash {
-            for (k, v) in h.iter() {
-                let key = k.coerce_to_str(vm, globals)?;
-                if key.contains('\0') {
+            let pairs: Vec<(Value, Value)> = h.iter().collect();
+            for (k, v) in pairs {
+                let key = k.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
+                if key.contains(&0) {
                     return Err(null_byte());
                 }
-                if key.contains('=') {
+                if key.contains(&b'=') {
                     return Err(MonorubyErr::argumenterr(format!(
-                        "environment name contains a equal : {key}"
+                        "environment name contains a equal : {}",
+                        String::from_utf8_lossy(&key)
                     )));
                 }
                 if v.is_nil() {
                     env_ops.push((key, None));
                 } else {
-                    let val = v.coerce_to_str(vm, globals)?;
-                    if val.contains('\0') {
+                    let val = v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
+                    if val.contains(&0) {
                         return Err(null_byte());
                     }
                     env_ops.push((key, Some(val)));
@@ -347,17 +352,21 @@ pub(crate) fn parse_exec_args(
     // The program is looked up along the env Hash's `PATH` when it gives
     // one, and the parent's otherwise — `unsetenv_others:` clears the
     // child's environment, not the search (CRuby's `path_env`).
-    let path_env = env_ops
+    let path_env: Vec<u8> = env_ops
         .iter()
         .rev()
-        .find(|(k, _)| k == "PATH")
+        .find(|(k, _)| k == b"PATH")
         .and_then(|(_, v)| v.clone())
-        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+        .or_else(|| crate::environ::get(b"PATH", |v| v.to_vec()))
+        .unwrap_or_default();
     // --- final environment ---
-    let mut env: Vec<(String, String)> = if unsetenv_others {
+    let mut env: Vec<(Vec<u8>, Vec<u8>)> = if unsetenv_others {
         vec![]
     } else {
-        std::env::vars().collect()
+        crate::environ::Snapshot::take()
+            .iter()
+            .map(|(name, value)| (name.to_vec(), value.to_vec()))
+            .collect()
     };
     for (k, v) in env_ops {
         env.retain(|(ek, _)| ek != &k);
@@ -367,7 +376,7 @@ pub(crate) fn parse_exec_args(
     }
     let envp: Vec<CString> = env
         .into_iter()
-        .filter_map(|(k, v)| CString::new(format!("{k}={v}")).ok())
+        .filter_map(|(k, v)| CString::new([&k[..], b"=", &v[..]].concat()).ok())
         .collect();
 
     // --- program path candidates (PATH resolution is finalized by the
@@ -385,10 +394,10 @@ pub(crate) fn parse_exec_args(
             .unwrap_or_default()
     } else {
         path_env
-            .split(':')
+            .split(|b| *b == b':')
             .filter(|d| !d.is_empty())
             .filter_map(|d| {
-                let mut path = format!("{d}/").into_bytes();
+                let mut path = [d, b"/"].concat();
                 path.extend_from_slice(&program);
                 CString::new(path).ok()
             })
@@ -1444,6 +1453,29 @@ mod tests {
             r.read
             "#,
         );
+    }
+
+    #[test]
+    fn spawn_env_hash_bytes() {
+        // Names and values of the env Hash are bytes, not text (#2135):
+        // they reach the child as they are, and a `PATH` given there is
+        // the one the program is looked up along.
+        run_test_once(
+            r#"
+            a = IO.popen({"SPAWN_B1" => "b\xFF"}, "printenv SPAWN_B1", &:read).bytes
+            b = IO.popen({"SPAWN_B\xFE".b => "1"}, "env", &:read).b.lines.select { |l| l.start_with?("SPAWN_B\xFE=".b) }.map(&:bytes)
+            c = IO.popen({"SPAWN_B2" => "\xC6\xFC".dup.force_encoding("EUC-JP")}, "printenv SPAWN_B2", &:read).bytes
+            [a, b, c]
+            "#,
+        );
+        run_test_once(
+            r#"
+            ok = system({"PATH" => "/nonexistent-dir::/bin:/usr/bin"}, "true")
+            missing = system({"PATH" => "/nonexistent-dir"}, "true")
+            [ok, missing]
+            "#,
+        );
+        run_test_error(r#"Process.spawn({"A=\xFF" => "v"}, "echo")"#);
     }
 
     #[test]
