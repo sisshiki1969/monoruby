@@ -273,6 +273,48 @@ impl Codegen {
     }
 
     ///
+    /// x86-64: send the `patch_point`s of *iseq_id*'s dropped bodies
+    /// (`ISeqInfo::retired_patch_points`) through the function's own entry.
+    ///
+    /// A caller that proved the receiver class calls a `patch_point`
+    /// directly — compiled after the body, or repointed to it once the body
+    /// existed (`ISeqInfo::add_late_direct_call`) — and none of its own
+    /// guards is about the callee: a basic-op redefinition evicts only the
+    /// units that inlined the operator, and a permanently invalidated callee
+    /// is withdrawn from the index that would poison its callers. Left
+    /// alone, such a call enters the dropped body for good. Through the
+    /// entry it meets the warm-up stub (or `vm_entry`), as a call through
+    /// the wrapper does; a body compiled for the class later gets a
+    /// `patch_point` of its own.
+    ///
+    /// The wrapper reads the callee's first pc from `r13`, which a call
+    /// through it sets (`emit_call`) and a direct call does not, so the
+    /// `patch_point`s go to a stub that sets it first.
+    ///
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn retire_patch_points(&mut self, store: &mut Store, iseq_id: ISeqId) {
+        let patch_points = store[iseq_id].take_retired_patch_points();
+        if patch_points.is_empty() {
+            return;
+        }
+        let func_id = store[iseq_id].func_id();
+        let entry = store[func_id].entry_label();
+        let (_, _, pc) = store[func_id].get_data();
+        let pc = pc.expect("an iseq function has a pc").as_ptr();
+        let retired = self.jit.label();
+        monoasm! { &mut self.jit,
+        retired:
+            movq r13, (pc);
+            jmp entry;
+        }
+        self.jit.finalize();
+        for patch_point in patch_points {
+            let addr = self.jit.get_label_address(&patch_point);
+            self.jit.apply_jmp_patch_address(addr, &retired);
+        }
+    }
+
+    ///
     /// Generate class guard stub for JIT code.
     ///
     /// ~~~text

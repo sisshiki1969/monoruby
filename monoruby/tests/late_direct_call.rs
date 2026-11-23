@@ -9,6 +9,10 @@ use monoruby::tests::*;
 // cases here make the caller compile first and then check that the
 // repointed call reaches the right body, and stops reaching it when it
 // goes stale.
+//
+// A callee with a loop is not inlined into its caller (a frameless body
+// would be, and then there is no call to repoint), so the callees here
+// carry one.
 
 #[test]
 fn late_direct_call_reaches_the_callee() {
@@ -16,7 +20,11 @@ fn late_direct_call_reaches_the_callee() {
         r#"
         class LdcA
           def initialize(x) = @x = x
-          def callee(y) = @x + y
+          def callee(y)
+            i = 0
+            while i < 1; i += 1; end
+            @x + y
+          end
         end
         def ldc_caller(o, y) = o.callee(y)
         o = LdcA.new(10)
@@ -35,7 +43,11 @@ fn late_direct_call_per_receiver_class() {
     run_test_once(
         r#"
         class LdcBase
-          def get = [@a, @b]
+          def get
+            i = 0
+            while i < 1; i += 1; end
+            [@a, @b]
+          end
         end
         class LdcS1 < LdcBase
           def initialize = (@a = 1; @b = 2)
@@ -61,7 +73,11 @@ fn late_direct_call_callee_redefined() {
     run_test_once(
         r#"
         class LdcR
-          def callee = 1
+          def callee
+            i = 0
+            while i < 1; i += 1; end
+            1
+          end
         end
         def ldc_r(o) = o.callee
         o = LdcR.new
@@ -109,4 +125,82 @@ fn late_direct_call_bop_redefined_in_callee() {
         r.last(3)
         "#,
     );
+}
+
+/// The caller of a body that inlined `Integer#-` did not inline it, so
+/// redefining the operator evicts the callee and not the caller. The
+/// caller's call, repointed at the body (`caller_first`) or direct from
+/// the start (`callee_first`), must not reach the evicted body: on x86 it
+/// went on returning the old operator's results for good.
+#[test]
+fn late_direct_call_bop_redefined_in_called_body() {
+    for callee_first in ["false", "true"] {
+        run_test_once(
+            &r#"
+            class LdcK
+              def initialize(n) = @n = n
+              def step(x)
+                i = 0
+                s = 0
+                while i < 3
+                  s += x - i
+                  i += 1
+                end
+                s + @n
+              end
+            end
+            o = LdcK.new(1)
+            300.times { |i| o.step(i) } if CALLEE_FIRST
+            def ldc_k(o, x) = o.step(x) * 2
+            r = []
+            300.times { |i| r << ldc_k(o, i) }
+            class Integer
+              alias_method :__ldc_orig_minus, :-
+              def -(o) = __ldc_orig_minus(o) + 1000
+            end
+            r << ldc_k(o, 10) << ldc_k(o, 11)
+            class Integer
+              alias_method :-, :__ldc_orig_minus
+            end
+            r.last(3)
+            "#
+            .replace("CALLEE_FIRST", callee_first),
+        );
+    }
+}
+
+/// A callee whose compile for one receiver class bails is given up for
+/// good, and the bodies it has for other classes go with it — out of the
+/// index that a later redefinition poisons. A caller's call repointed at
+/// (or compiled straight into) one of those bodies must not keep running
+/// it: on x86 it did, and missed `helper` being redefined.
+#[test]
+fn late_direct_call_after_callee_invalidated() {
+    for callee_first in ["false", "true"] {
+        run_test_once(
+            &r#"
+            class LdcP
+              def flag = false
+              def m(x)
+                i = 0
+                while i < 1; i += 1; end
+                return (-> { x }).call if flag
+                helper(x)
+              end
+              def helper(x) = x + 1
+            end
+            class LdcPA < LdcP; end
+            class LdcPB < LdcP; def flag = true; end
+            def ldc_g(o, x) = o.m(x)
+            a = LdcPA.new
+            b = LdcPB.new
+            1000.times { |i| a.m(i) } if CALLEE_FIRST
+            1000.times { |i| ldc_g(a, i) }
+            1000.times { |i| b.m(i) }
+            class LdcP; def helper(x) = x + 100; end
+            [ldc_g(a, 1), a.m(1)]
+            "#
+            .replace("CALLEE_FIRST", callee_first),
+        );
+    }
 }

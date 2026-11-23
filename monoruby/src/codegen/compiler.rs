@@ -94,6 +94,7 @@ impl Codegen {
         true
     }
 
+
     ///
     /// Generate code for recompilation of the loop / method.
     ///
@@ -449,6 +450,10 @@ impl Codegen {
                         let vm_entry = self.vm_entry();
                         self.jit.apply_jmp_patch_address(entry, &vm_entry);
                     }
+                    // The bodies that did compile, for other self classes,
+                    // are gone too: their direct callers go to the entry.
+                    #[cfg(target_arch = "x86_64")]
+                    self.retire_patch_points(&mut globals.store, iseq_id);
                 }
                 #[cfg(feature = "jit-log")]
                 {

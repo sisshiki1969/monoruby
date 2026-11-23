@@ -3250,6 +3250,14 @@ impl Store {
                     }
                 }
             }
+            // A caller that did not inline the operator is not evicted, and
+            // its direct `call`s into the evicted bodies (x86's
+            // `patch_point`s) would keep reaching them: send them to the
+            // entry, past which the stub just rearmed waits.
+            #[cfg(target_arch = "x86_64")]
+            for &iseq in &stale {
+                codegen.retire_patch_points(self, iseq);
+            }
         });
     }
 
