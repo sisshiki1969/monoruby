@@ -547,6 +547,56 @@ mod tests {
         );
     }
 
+    /// A `WeakKeyMap` lookup calls `#hash` and `#eql?` — collecting, here
+    /// — while it scans the keys. The keys it has not looked at yet stay
+    /// reachable meanwhile, though the map holds them weakly, and the
+    /// pair found is the one of the key that matched, however the
+    /// collection rearranged the map.
+    #[test]
+    fn weak_key_map_lookup_survives_collections() {
+        run_test_once(
+            r##"
+            class WkGcKey
+              attr_reader :v
+              attr_accessor :gc
+              def initialize(v, gc = true) = (@v = v; @gc = gc)
+              def hash
+                if @gc
+                  GC.start
+                  $wk_junk = Array.new(2000) { [_1] }
+                end
+                @v.hash
+              end
+              def eql?(o) = o.is_a?(WkGcKey) && o.v == v
+            end
+            # Keys nothing else holds, freed by the first `#hash` of a scan.
+            def wk_gc_dead_keys
+              m = ObjectSpace::WeakKeyMap.new
+              keep = WkGcKey.new(:kept)
+              m[keep] = :kept_value
+              5.times { |i| m[WkGcKey.new(i)] = i }
+              [m[WkGcKey.new(:kept)], m.key?(WkGcKey.new(:kept)), m.getkey(WkGcKey.new(:kept)).equal?(keep)]
+            end
+            # A collection in the middle of a scan that would drop the
+            # first pair and move the others down.
+            def wk_gc_moved_pairs
+              m = ObjectSpace::WeakKeyMap.new
+              m[WkGcKey.new(:a, false)] = :a_value
+              live = WkGcKey.new(:b, false)
+              m[live] = :b_value
+              c = WkGcKey.new(:c, false)
+              m[c] = :c_value
+              live.gc = true
+              r = [m[WkGcKey.new(:b, false)]]
+              b2 = WkGcKey.new(:b, false)
+              m[b2] = :b2
+              r << m[c] << m.getkey(live).equal?(b2) << m.delete(WkGcKey.new(:b, false)) << m[c]
+            end
+            [wk_gc_dead_keys, wk_gc_moved_pairs]
+            "##,
+        );
+    }
+
     /// The `WeakMap` corners its own specs cover, which were failing
     /// alongside the missing `WeakKeyMap`.
     #[test]
@@ -673,8 +723,9 @@ extern "C" fn weakkeymap_alloc(class_id: ClassId, _globals: &mut Globals) -> Val
 }
 
 ///
-/// The index of the pair whose key is `eql?` to `key`, by CRuby's rule
-/// for a `WeakKeyMap`: `#hash` first, then `#eql?`.
+/// The key the map holds that is `eql?` to `key`, by CRuby's rule for a
+/// `WeakKeyMap`: `#hash` first, then `#eql?`. The caller finds its pair
+/// with [`weakkeymap_position`].
 ///
 /// An immediate — Integer, Float, Symbol, `true`, `false`, `nil` — is
 /// never a key, because it has no cell and so can never be collected;
@@ -686,12 +737,17 @@ extern "C" fn weakkeymap_alloc(class_id: ClassId, _globals: &mut Globals) -> Val
 /// and it keeps the comparison in one place — `#eql?` can run arbitrary
 /// Ruby, which a hash table would have to do while rehashing too.
 ///
+/// That Ruby can collect, and a collection breaks the pairs whose keys
+/// died and compacts the map, so the scan reads the keys from a
+/// snapshot it keeps on the temp stack, and answers a key rather than
+/// a position in the map.
+///
 fn weakkeymap_find(
     vm: &mut Executor,
     globals: &mut Globals,
     self_val: Value,
     key: Value,
-) -> Result<Option<usize>> {
+) -> Result<Option<Value>> {
     if key.try_rvalue().is_none() {
         return Ok(None);
     }
@@ -702,28 +758,62 @@ fn weakkeymap_find(
         .collect();
     // Identity first, so a key finds itself however its `#eql?`
     // behaves — CRuby has an example for exactly that.
-    if let Some(i) = entries.iter().position(|k| k.id() == key.id()) {
-        return Ok(Some(i));
+    if entries.iter().any(|k| k.id() == key.id()) {
+        return Ok(Some(key));
     }
-    // Then `#hash`, once, on the key being looked up. A key with no
-    // `#hash` fails here, which is what makes `map[BasicObject.new] = 1`
-    // a NoMethodError rather than a stored pair.
-    let hash = IdentId::get_id("hash");
-    let key_hash = vm.invoke_method_inner(globals, hash, key, &[], None, None)?;
-    for (i, k) in entries.into_iter().enumerate() {
-        let k_hash = vm.invoke_method_inner(globals, hash, k, &[], None, None)?;
-        if !vm.eq_values_funcall(globals, k_hash, key_hash)?.as_bool() {
-            continue;
+    vm.with_temp_scope(|vm| {
+        // The map holds its keys weakly, so nothing but the temp stack
+        // keeps the snapshot's alive while `#hash` and `#eql?` run.
+        for &k in &entries {
+            vm.temp_push(k);
         }
-        // `#eql?` goes to the key being looked up, not the one held:
-        // CRuby asks the argument, and the specs check that the stored
-        // key is never asked.
-        let eq = vm.invoke_method_inner(globals, IdentId::get_id("eql?"), key, &[k], None, None)?;
-        if eq.as_bool() {
-            return Ok(Some(i));
+        // Then `#hash`, once, on the key being looked up. A key with no
+        // `#hash` fails here, which is what makes `map[BasicObject.new]
+        // = 1` a NoMethodError rather than a stored pair. Its answer is
+        // compared after each of the other calls, so it is kept too.
+        let hash = IdentId::get_id("hash");
+        let key_hash = vm.invoke_method_inner(globals, hash, key, &[], None, None)?;
+        vm.temp_push(key_hash);
+        for k in entries {
+            let k_hash = vm.invoke_method_inner(globals, hash, k, &[], None, None)?;
+            if !vm.eq_values_funcall(globals, k_hash, key_hash)?.as_bool() {
+                continue;
+            }
+            // `#eql?` goes to the key being looked up, not the one held:
+            // CRuby asks the argument, and the specs check that the
+            // stored key is never asked.
+            let eq =
+                vm.invoke_method_inner(globals, IdentId::get_id("eql?"), key, &[k], None, None)?;
+            if eq.as_bool() {
+                return Ok(Some(k));
+            }
         }
+        Ok(None)
+    })
+}
+
+/// Where the map holds *key* now, by identity. The lookup that found
+/// it ran Ruby, which may have removed it, or moved the pairs after a
+/// collection broke others; a key no longer held is a miss.
+fn weakkeymap_position(globals: &Globals, self_val: Value, key: Value) -> Result<Option<usize>> {
+    Ok(map_of(globals, &self_val)?
+        .entries()
+        .iter()
+        .position(|(k, _)| k.id() == key.id()))
+}
+
+/// The pair of *self_val* whose key is `eql?` to *key*, as its position
+/// in the map ([`weakkeymap_find`], then [`weakkeymap_position`]).
+fn weakkeymap_find_position(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+    key: Value,
+) -> Result<Option<usize>> {
+    match weakkeymap_find(vm, globals, self_val, key)? {
+        Some(found) => weakkeymap_position(globals, self_val, found),
+        None => Ok(None),
     }
-    Ok(None)
 }
 
 /// WeakKeyMap#[](key) -> the value, or nil
@@ -736,7 +826,8 @@ fn weakkeymap_index(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     map_of(globals, &self_val)?;
-    Ok(match weakkeymap_find(vm, globals, self_val, lfp.arg(0))? {
+    let found = weakkeymap_find_position(vm, globals, self_val, lfp.arg(0))?;
+    Ok(match found {
         Some(i) => map_of(globals, &self_val)?.entries()[i].1,
         None => Value::nil(),
     })
@@ -762,7 +853,7 @@ fn weakkeymap_index_assign(
     }
     // The lookup calls `#hash` on the key, so one that has none fails
     // there — `map[BasicObject.new] = 1` is a NoMethodError.
-    match weakkeymap_find(vm, globals, self_val, key)? {
+    match weakkeymap_find_position(vm, globals, self_val, key)? {
         // An equal key replaces the one already held, as well as its
         // value: CRuby's newest key wins, so `#getkey` afterwards
         // answers the one stored most recently rather than the first.
@@ -785,7 +876,8 @@ fn weakkeymap_getkey(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     map_of(globals, &self_val)?;
-    Ok(match weakkeymap_find(vm, globals, self_val, lfp.arg(0))? {
+    let found = weakkeymap_find_position(vm, globals, self_val, lfp.arg(0))?;
+    Ok(match found {
         Some(i) => map_of(globals, &self_val)?.entries()[i].0,
         None => Value::nil(),
     })
@@ -801,7 +893,7 @@ fn weakkeymap_key_p(
 ) -> Result<Value> {
     let self_val = lfp.self_val();
     map_of(globals, &self_val)?;
-    let found = weakkeymap_find(vm, globals, self_val, lfp.arg(0))?;
+    let found = weakkeymap_find_position(vm, globals, self_val, lfp.arg(0))?;
     Ok(Value::bool(found.is_some()))
 }
 
@@ -816,7 +908,7 @@ fn weakkeymap_delete(
     let mut self_val = lfp.self_val();
     map_of(globals, &self_val)?;
     let key = lfp.arg(0);
-    if let Some(i) = weakkeymap_find(vm, globals, self_val, key)? {
+    if let Some(i) = weakkeymap_find_position(vm, globals, self_val, key)? {
         return Ok(self_val.as_weakmap_inner_mut().remove_at(i));
     }
     // A miss runs the block on the key, if one was given.

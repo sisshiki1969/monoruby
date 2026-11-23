@@ -889,9 +889,11 @@ impl Executor {
         (self.temp_stack[base + 2 * i], self.temp_stack[base + 2 * i + 1])
     }
 
-    /// Overwrite slot `idx`, one the caller pushed and has not cleared: a
-    /// loop that roots one item at a time keeps a fixed slot for it rather
-    /// than pushing and clearing on every turn.
+    /// Overwrite slot `idx`, one the caller pushed and has not cleared
+    /// (see [`Self::temp_at`]). A loop that roots one item at a time keeps
+    /// a fixed slot for it rather than pushing and clearing on every turn,
+    /// and a scope can push a slot early for a Value made later in it,
+    /// when nested scopes opened in between would let go of a plain push.
     #[inline]
     pub fn temp_set(&mut self, idx: usize, val: Value) {
         self.temp_stack[idx] = val;
