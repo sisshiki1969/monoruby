@@ -364,3 +364,197 @@ fn json_generate_collections() {
         r#"require "json"; JSON.generate("line\n\ttab\"q\\b\b\f\r")"#,
     ]);
 }
+
+/// `JSON.generate(obj, opts)` and `State.new(opts)`: the frozen copies
+/// made of unfrozen `indent:` / `space:` / `object_nl:` Strings stay
+/// reachable while `as_json:`'s `#to_proc` runs, which collects here.
+#[test]
+fn json_generator_options_survive_collection_in_to_proc() {
+    run(r##"
+        class JsonGcProc
+          def to_proc
+            GC.start
+            $json_junk = Array.new(2000) { "j" * 40 }
+            proc { |o, is_key| o.to_s }
+          end
+        end
+        r = st = nil
+        20.times do
+          r = JSON.generate({"a" => [1, 2]}, indent: "  ".dup, object_nl: "\n".dup, as_json: JsonGcProc.new)
+          st = JSON::State.new(indent: "\t".dup, space: " ".dup, as_json: JsonGcProc.new)
+        end
+        GC.start
+        [r, st.indent, st.space]
+    "##);
+}
+
+/// `ParserConfig.new(opts)` and `Parser.parse(source, opts)`: a
+/// `decimal_class:` whose `respond_to?` takes `on_load:`'s proc out of
+/// `opts` and collects, and whose `try_convert` collects during the
+/// parse. The proc read before that stays reachable, held by nothing
+/// but the config.
+#[test]
+fn json_parser_options_survive_collection_in_decimal_class() {
+    run(r##"
+        class JsonGcDecimal
+          def self.respond_to?(m, priv = false)
+            if m == :try_convert && $json_opts
+              $json_opts.delete(:on_load)
+              $json_opts = nil
+              GC.start
+              $json_junk = Array.new(2000) { proc { 1 } }
+            end
+            super
+          end
+          def self.try_convert(s) = (GC.start; $json_junk = Array.new(2000) { proc { 2 } }; s.to_f)
+        end
+        # The proc is made by `eval`, so that no frame here holds it.
+        def json_gc_opts = {on_load: eval("proc { |x| x.is_a?(Float) ? x * 2 : x }"), decimal_class: JsonGcDecimal}
+        r = []
+        3.times do
+          $json_opts = json_gc_opts
+          cfg = JSON::Ext::ParserConfig.new($json_opts)
+          GC.start
+          r << cfg.parse("[1.5, 2]")
+          $json_opts = json_gc_opts
+          r << JSON::Ext::Parser.parse("[2.5, 3]", $json_opts)
+        end
+        r.uniq
+    "##);
+}
+
+/// `ParserConfig#parse(source)`: a source whose `#to_str` initializes
+/// the ParserConfig again, with an `on_load:` proc of its own, and
+/// collects. The proc the config held before stays reachable for the
+/// parse. Both procs double a Float, so the answer is the same whichever
+/// one the parse uses.
+#[test]
+fn json_parser_config_parse_survives_reinitialize_in_to_str() {
+    run(r##"
+        class JsonGcSrc
+          def to_str
+            $json_cfg.send(:initialize, {on_load: eval("proc { |x| x.is_a?(Float) ? x * 2 : x }")})
+            GC.start
+            $json_junk = Array.new(2000) { proc { 1 } }
+            "[1.5, 2]"
+          end
+        end
+        # The proc is made by `eval`, so that no frame here holds it.
+        def json_gc_cfg = JSON::Ext::ParserConfig.new({on_load: eval("proc { |x| x.is_a?(Float) ? x * 2 : x }")})
+        r = []
+        3.times do
+          $json_cfg = json_gc_cfg
+          r << $json_cfg.parse(JsonGcSrc.new)
+        end
+        r.uniq
+    "##);
+}
+
+/// `JSON.generate` goes on with the State a `to_json` is handed, with
+/// what a `to_json` leaves on that State, and with the Array or Hash it
+/// is writing. Ruby it runs later can take each of them away and
+/// collect: a key's `to_s` gives the State an `indent:` again after a
+/// `to_json` in a nested Array gave it one (the same text, so the
+/// answer is the same whichever of the two is written); a `to_json`
+/// that keeps no hold of the State is followed by a collection before
+/// the next one is handed it; a `to_json` takes its Array off the
+/// outer one, and a key's `to_s` its Hash.
+#[test]
+fn json_generator_survives_collection_in_to_json_and_to_s() {
+    run(r##"
+        class JsonGcSetIndent
+          def to_json(state, *)
+            state.indent = "  ".dup
+            $json_st = state
+            "1"
+          end
+        end
+        class JsonGcResetIndent
+          def initialize(n) = @n = n
+          def to_s
+            $json_st.indent = "  ".dup
+            GC.start
+            $json_junk = Array.new(2000) { "j" * 40 }
+            "k#{@n}"
+          end
+        end
+        class JsonGcStateName
+          def to_json(state, *) = state.class.name.inspect
+        end
+        class JsonGcCollectingKey
+          def initialize(n) = @n = n
+          def to_s
+            GC.start
+            $json_junk = Array.new(2000) { Object.new }
+            "c#{@n}"
+          end
+        end
+        class JsonGcTakeArray
+          def to_json(*)
+            $json_outer[0] = nil
+            GC.start
+            $json_junk = Array.new(2000) { [7, 7, 7, 7, 7, 7] }
+            "1"
+          end
+        end
+        class JsonGcTakeHash
+          def initialize(n) = @n = n
+          def to_s
+            $json_outer[0] = nil
+            GC.start
+            $json_junk = Array.new(2000) { {zz: 1} }
+            "k#{@n}"
+          end
+        end
+        r = []
+        3.times do
+          r << JSON.generate([[JsonGcSetIndent.new], {JsonGcResetIndent.new(1) => JsonGcSetIndent.new, JsonGcResetIndent.new(2) => 2}],
+                             array_nl: "\n", object_nl: "\n")
+          r << JSON.generate([[JsonGcStateName.new], {JsonGcCollectingKey.new(1) => JsonGcStateName.new}])
+          $json_outer = [[JsonGcTakeArray.new, "a" * 3, "b" * 3, "c" * 3]]
+          r << JSON.generate($json_outer)
+          $json_outer = [{JsonGcTakeHash.new(1) => 1, "s" => 2, JsonGcTakeHash.new(2) => 3}]
+          r << JSON.generate($json_outer)
+        end
+        r.uniq
+    "##);
+}
+
+/// The State a `to_json` is handed, made three Arrays down, and what a
+/// `to_json` leaves on it, are held until the generation ends, where
+/// Ruby cannot reach them: a key's `to_s` empties every Array holding a
+/// State that `ObjectSpace.each_object` finds, drops its own reference
+/// (and gives the State an `indent:` again, after a `to_json` gave it
+/// one), and collects before the next `to_json` is handed the State.
+#[test]
+fn json_generator_roots_out_of_ruby_reach() {
+    run(r##"
+        class JsonEoTo
+          def to_json(state, *)
+            $json_st = state
+            state.indent = "  ".dup if $json_set
+            "1"
+          end
+        end
+        class JsonEoKey
+          def initialize(n) = @n = n
+          def to_s
+            $json_st.indent = "  ".dup if $json_set && $json_st
+            ObjectSpace.each_object(Array) { |a| a.clear if !a.frozen? && a.any? { JSON::State === _1 } }
+            $json_st = nil
+            GC.start
+            $json_junk = Array.new(20000) { "j" * 40 }
+            "k#{@n}"
+          end
+        end
+        r = []
+        [false, true].each do |set|
+          $json_set = set
+          3.times do
+            r << JSON.generate([[[JsonEoTo.new]], {JsonEoKey.new(1) => JsonEoTo.new, JsonEoKey.new(2) => [2]}, JsonEoTo.new],
+                               array_nl: "\n", object_nl: "\n")
+          end
+        end
+        r.uniq
+    "##);
+}

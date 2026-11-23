@@ -648,8 +648,21 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
     if exception.is_exception().unwrap().raw_message.is_some() {
         return Ok(message_value(&globals.store, exception));
     }
-    // (start, length, replacement): CRuby renders the class first.
-    let mut parts: Vec<(usize, usize, Value)> = Vec::new();
+    // (start, length, replacement bytes, their encoding): CRuby renders
+    // the class first. A replacement is kept as its bytes, not as the
+    // String it was rendered to: rendering the name next runs Ruby (a
+    // redefined `Symbol#to_s`), and a collection there would free a
+    // String held only here.
+    let mut parts: Vec<(usize, usize, Vec<u8>, crate::value::Encoding)> = Vec::new();
+    let rendered = |start: u32, len: u32, shown: Value| {
+        let shown = shown.as_rstring_inner();
+        (
+            start as usize,
+            len as usize,
+            shown.as_bytes().to_vec(),
+            shown.encoding(),
+        )
+    };
     if let Some((start, len)) = exception.is_exception().unwrap().class_span
         && let Some(receiver) = globals
             .store
@@ -665,7 +678,7 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
         let shown_now = message.get(start as usize..(start + len) as usize);
         if !shown_now.is_some_and(|text| class_name_is(globals, class, text)) {
             let shown = nameerr_class_text(vm, globals, class);
-            parts.push((start as usize, len as usize, shown));
+            parts.push(rendered(start, len, shown));
         }
     }
     if let Some((start, len)) = exception.is_exception().unwrap().name_span
@@ -678,31 +691,30 @@ fn message_rendered(vm: &mut Executor, globals: &mut Globals, exception: Value) 
             .filter(|name| name.try_symbol().is_some())
     {
         let shown = vm.obj_as_string(globals, name)?;
-        parts.push((start as usize, len as usize, shown));
+        parts.push(rendered(start, len, shown));
     }
     let ex = exception.is_exception().unwrap();
     if parts.is_empty() || ex.raw_message.is_some() {
         return Ok(message_value(&globals.store, exception));
     }
-    parts.sort_by_key(|(start, _, _)| *start);
+    parts.sort_by_key(|(start, ..)| *start);
     let message = ex.message.as_bytes();
     let mut bytes = Vec::with_capacity(message.len() + 16);
     let mut pos = 0;
     // The format is ASCII and the rest of the message UTF-8: a part in
     // another encoding brings its own, as `rb_str_format` has it.
     let mut other_enc = None;
-    for (start, len, shown) in &parts {
+    for (start, len, shown, shown_enc) in &parts {
         // A message the exception was given since (`initialize` called
         // again from one of the methods above) has no such span.
         if *start < pos || start + len > message.len() {
             return Ok(message_value(&globals.store, exception));
         }
-        let shown = shown.as_rstring_inner();
         bytes.extend_from_slice(&message[pos..*start]);
-        bytes.extend_from_slice(shown.as_bytes());
+        bytes.extend_from_slice(shown);
         pos = start + len;
-        if !shown.as_bytes().is_ascii() && other_enc.is_none() {
-            other_enc = Some(shown.encoding());
+        if !shown.is_ascii() && other_enc.is_none() {
+            other_enc = Some(*shown_enc);
         }
     }
     bytes.extend_from_slice(&message[pos..]);
@@ -1026,13 +1038,20 @@ fn exception_eq(
     // Compare backtraces using #backtrace (so we go through the same
     // path users see). Both nil or both equal arrays count as equal.
     let bt_id = IdentId::get_id("backtrace");
-    let self_bt = vm
-        .invoke_method_if_exists(globals, bt_id, self_v, &[], None, None)?
-        .unwrap_or_default();
-    let other_bt = vm
-        .invoke_method_if_exists(globals, bt_id, other, &[], None, None)?
-        .unwrap_or_default();
-    Ok(Value::bool(vm.eq_values_bool(globals, self_bt, other_bt)?))
+    vm.with_temp_scope(|vm| {
+        // A `#backtrace` of the program's may answer a fresh Array, which
+        // nothing else holds while the other one runs: it stays on the
+        // temp stack, or a collection there frees it.
+        let self_bt = vm
+            .invoke_method_if_exists(globals, bt_id, self_v, &[], None, None)?
+            .unwrap_or_default();
+        vm.temp_push(self_bt);
+        let other_bt = vm
+            .invoke_method_if_exists(globals, bt_id, other, &[], None, None)?
+            .unwrap_or_default();
+        vm.temp_push(other_bt);
+        Ok(Value::bool(vm.eq_values_bool(globals, self_bt, other_bt)?))
+    })
 }
 
 /// ### KeyError#receiver
@@ -1922,6 +1941,60 @@ mod tests {
             c = C.new
             [c.capture("boom"), c[:error].message]
             "#,
+        );
+    }
+
+    /// A NoMethodError's message renders the class and the name on every
+    /// read. The class's text — a fresh String from the class's own
+    /// `name` here — stays reachable while a redefined `Symbol#to_s`
+    /// renders the name and collects.
+    #[test]
+    fn message_rendering_survives_collection_in_symbol_to_s() {
+        run_test_once(
+            r##"
+            class ExcGcFoo
+              def self.name = "ExcGcFoo" + "Custom"
+            end
+            class Symbol
+              alias __exc_gc_orig_to_s to_s
+              def to_s
+                if $exc_gc_in_to_s
+                  GC.start
+                  $exc_gc_junk = [1, 2].map { _1 }
+                end
+                __exc_gc_orig_to_s
+              end
+            end
+            begin
+              ExcGcFoo.new.exc_gc_missing
+            rescue NoMethodError => e
+              $exc_gc_in_to_s = true
+              m = e.message
+              $exc_gc_in_to_s = false
+              m
+            end
+            "##,
+        );
+    }
+
+    /// `Exception#==` keeps the first `#backtrace` — a fresh Array from a
+    /// `#backtrace` that collects, here — reachable while the second one
+    /// runs.
+    #[test]
+    fn exception_eq_survives_collection_in_backtrace() {
+        run_test_once(
+            r##"
+            class ExcGcErr < StandardError
+              def backtrace
+                GC.start
+                $exc_gc_junk = Array.new(2000) { Object.new }
+                ["a:1", "b:2"].map { |s| s + "" }
+              end
+            end
+            r = []
+            10.times { r << (ExcGcErr.new("x") == ExcGcErr.new("x")) }
+            r.uniq
+            "##,
         );
     }
 }

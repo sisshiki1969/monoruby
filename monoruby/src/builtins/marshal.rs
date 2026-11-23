@@ -67,8 +67,21 @@ fn dump(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let mut symbols: Vec<IdentId> = Vec::new();
     // Object link table: every non-immediate object written takes a slot
     // in dump order; a repeated reference is emitted as a back-reference.
-    let mut objects: Vec<u64> = Vec::new();
-    marshal_dump_value(&mut buf, obj, vm, globals, &mut symbols, &mut objects, level)?;
+    // It is rooted for the whole walk (see `DumpLinks`), and an object
+    // with what is still to write of it while it is written (see
+    // `marshal_dump_value`).
+    vm.with_temp_scope(|vm| {
+        let mut objects = DumpLinks::new(vm);
+        marshal_dump_value(
+            &mut buf,
+            obj,
+            vm,
+            globals,
+            &mut symbols,
+            &mut objects,
+            level,
+        )
+    })?;
     match port {
         None => Ok(Value::bytes(buf)),
         Some(port) => {
@@ -159,7 +172,9 @@ fn load(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     cursor.proc = proc;
     // Root the reader's object link table for the whole load: it is the
     // only reference to most partially-reconstructed values while
-    // `_load` / `marshal_load` / the load proc run Ruby.
+    // `_load` / `marshal_load` / the load proc run Ruby. What the load
+    // holds that takes no slot of it is pushed in this scope too (see
+    // `MarshalReader::hold`).
     let objects = cursor.objects;
     vm.with_temp_scope(|vm| {
         vm.temp_push(objects.into());
@@ -455,6 +470,20 @@ impl<'a> MarshalReader<'a> {
         self.fire_proc(vm, globals, value)
     }
 
+    /// Hold *val*, an object the load made or the load proc answered that
+    /// takes no slot of the link table, until the load is over: the
+    /// caller may keep it in a local across the Ruby the rest of the load
+    /// runs (see `fire_proc`, `read_data`). It goes on the temp stack, in
+    /// `load`'s scope: the reader opens no scope of its own, and Ruby
+    /// cannot reach the temp stack (an Array holding it could be found
+    /// through `ObjectSpace.each_object` and emptied). An immediate is
+    /// left off: no collection can free it.
+    fn hold(vm: &mut Executor, val: Value) {
+        if val.try_rvalue().is_some() {
+            vm.temp_push(val);
+        }
+    }
+
     /// Run the load proc on `value` (if one was given) and return its
     /// replacement, unless `value` is a container still under
     /// construction (a self-reference), which CRuby does not visit.
@@ -466,7 +495,19 @@ impl<'a> MarshalReader<'a> {
     ) -> Result<Value> {
         if let Some(proc) = self.proc {
             if !self.building.contains(&value.id()) {
-                return vm.invoke_proc(globals, &proc, &[value]);
+                let result = vm.invoke_proc(globals, &proc, &[value])?;
+                // An answer other than the value replaces it, but not in
+                // the link table: the caller keeps it in a local (a Hash
+                // key while its value is read, an object's ivars until the
+                // last one is) across the next calls of the proc. It is
+                // held until the load is over, or a collection in one of
+                // them would free it. The value itself is held already,
+                // by the link table or as an earlier answer, and an
+                // immediate needs no holding.
+                if result.id() != value.id() {
+                    Self::hold(vm, result);
+                }
+                return Ok(result);
             }
         }
         Ok(value)
@@ -1326,6 +1367,9 @@ impl<'a> MarshalReader<'a> {
             )));
         }
         let instance = crate::builtins::class::call_alloc_func(globals, module.id())?;
+        // It takes no slot of the link table, and the caller may keep it
+        // in a local (a Hash key while its value is read) across Ruby.
+        Self::hold(vm, instance);
         vm.invoke_method_inner(globals, load_data_id, instance, &[value], None, None)?;
         Ok(instance)
     }
@@ -2117,8 +2161,9 @@ fn marshal_write_symbol(buf: &mut Vec<u8>, id: IdentId, symbols: &mut Vec<IdentI
 fn marshal_write_name_err_mesg(
     buf: &mut Vec<u8>,
     mesg: Value,
+    vm: &mut Executor,
     symbols: &mut Vec<IdentId>,
-    objects: &mut Vec<u64>,
+    objects: &mut DumpLinks,
 ) {
     let inner = mesg.as_rstring_inner();
     // A built NameError message is US-ASCII, or UTF-8 with non-ASCII
@@ -2132,7 +2177,7 @@ fn marshal_write_name_err_mesg(
     buf.extend_from_slice(inner.as_bytes());
     marshal_write_fixnum(buf, 1);
     marshal_write_encoding_ivar_pair(buf, enc, symbols);
-    objects.push(0);
+    objects.add_unnamed(vm);
 }
 
 /// Write just the encoding instance-variable *pair* (symbol + value),
@@ -2158,6 +2203,168 @@ fn marshal_write_encoding_ivar_pair(buf: &mut Vec<u8>, enc: Encoding, symbols: &
     }
 }
 
+/// `Marshal.dump`'s link table: what has been written, by slot, so that
+/// a later reference to the same object is written as a link (`'@'` and
+/// its slot). It holds the objects themselves, in an Array rooted on the
+/// temp stack in `dump`'s scope: writing can run Ruby (a `marshal_dump` /
+/// `_dump` of the program's) that collects, and the id of an object freed
+/// there would name the next one made in its cell, which would then be
+/// written as a link to it.
+struct DumpLinks {
+    ary: Array,
+    /// Its slot on the temp stack.
+    slot: usize,
+}
+
+impl DumpLinks {
+    /// An empty table, rooted in the current temp scope (`dump`'s, which
+    /// lasts for the whole walk).
+    fn new(vm: &mut Executor) -> Self {
+        let ary = Array::new_empty();
+        let slot = vm.temp_len();
+        vm.temp_push(ary.into());
+        Self { ary, slot }
+    }
+
+    /// The slot *obj* was written in. Identity is `Value::id()`, the raw
+    /// tagged bits, which is CRuby's key: pointer bits for heap values,
+    /// value bits for flonums.
+    fn find(&self, obj: Value) -> Option<usize> {
+        let id = obj.id();
+        self.ary.iter().position(|v| v.id() == id)
+    }
+
+    /// The next slot, for *obj*.
+    fn add(&mut self, vm: &mut Executor, obj: Value) {
+        self.growable(vm).push(obj);
+    }
+
+    /// The next slot, for an object the dump makes up, which no later
+    /// reference can name.
+    fn add_unnamed(&mut self, vm: &mut Executor) {
+        self.growable(vm).push(Value::nil());
+    }
+
+    /// The table, to grow. It is an ordinary Array, which Ruby can find
+    /// through `ObjectSpace.each_object`. One Ruby froze is the root of
+    /// the slices taken of it since, which view its buffer, and growing
+    /// it would move the buffer under them: the walk then goes on with a
+    /// copy, rooted in its slot instead. Ruby's other changes to it can
+    /// make the dump wrong, but not read freed memory: nothing here keeps
+    /// a borrow of it across Ruby.
+    fn growable(&mut self, vm: &mut Executor) -> &mut Array {
+        if self.ary.as_val().is_frozen() {
+            self.ary = Array::new_from_vec(self.ary.to_vec());
+            vm.temp_set(self.slot, self.ary.into());
+        }
+        &mut self.ary
+    }
+}
+
+/// Hold *val* on the temp stack while the object being written is (in
+/// the scope `marshal_dump_value` opens for an object it writes in
+/// full). An immediate is left off: no collection can free it.
+fn marshal_hold(vm: &mut Executor, val: Value) {
+    if val.try_rvalue().is_some() {
+        vm.temp_push(val);
+    }
+}
+
+/// Hold *obj*, an object about to be written in full, in the scope
+/// opened for it. It may be what a `marshal_dump` answered, held by
+/// nothing else, and an object written through its `_dump` takes its
+/// link slot only once it is written (CRuby's TYPE_USERDEF): after the
+/// ivars of the String `_dump` answered, and writing those can run Ruby
+/// that collects.
+fn marshal_hold_while_written(vm: &mut Executor, obj: Value) {
+    vm.temp_push(obj);
+}
+
+/// A container with more values than this is held by one Array while it
+/// is written, not by a temp entry per value (`Snapshot`).
+const MARSHAL_SNAPSHOT_PUSH_MAX: usize = 256;
+
+/// The values a container held when its writing began, to be written
+/// one by one. Writing one can run Ruby (a `marshal_dump` / `_dump` of
+/// the program's), which may take the rest off the container, so they
+/// are held until the container is written, in the scope
+/// `marshal_dump_value` opens for it: a few, one by one on the temp
+/// stack; more, in one Array, so that a container of millions costs one
+/// entry rather than leaving the temp stack that large.
+///
+/// That Array is an ordinary one, which Ruby can find through
+/// `ObjectSpace.each_object` and change while the values are written —
+/// growing it moves its buffer. So no borrow of the buffer is kept
+/// across that Ruby: each value is read from the Array afresh, by index
+/// (`get`), and is one the Array holds then. A value Ruby took out of it
+/// is written as nil, as the count is written before the values.
+enum Snapshot {
+    Pushed(Vec<Value>),
+    /// The Array, and how many values were put in it.
+    Array(Array, usize),
+}
+
+impl Snapshot {
+    fn hold(vm: &mut Executor, vals: Vec<Value>) -> Self {
+        if vals.len() <= MARSHAL_SNAPSHOT_PUSH_MAX {
+            for &val in &vals {
+                marshal_hold(vm, val);
+            }
+            Self::Pushed(vals)
+        } else {
+            let len = vals.len();
+            let ary = Array::new_from_vec(vals);
+            vm.temp_push(ary.into());
+            Self::Array(ary, len)
+        }
+    }
+
+    /// How many values were taken.
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            Self::Pushed(vals) => vals.len(),
+            Self::Array(_, len) => *len,
+        }
+    }
+
+    /// The *i*-th value taken (`i < len()`), read afresh.
+    #[inline]
+    fn get(&self, i: usize) -> Value {
+        match self {
+            Self::Pushed(vals) => vals[i],
+            Self::Array(ary, _) => ary.get(i).copied().unwrap_or_default(),
+        }
+    }
+}
+
+impl Drop for Snapshot {
+    /// The Array's storage goes as soon as the container is written, as a
+    /// `Vec` snapshot's would, not at the next collection — unless Ruby
+    /// froze the Array: a frozen Array is the root of the slices taken of
+    /// it, which view its buffer, so it is left to the collector.
+    fn drop(&mut self) {
+        if let Self::Array(ary, _) = self
+            && !ary.as_val().is_frozen()
+        {
+            ary.replace(vec![]);
+        }
+    }
+}
+
+/// *obj*'s instance variables, to be written one by one. Writing one
+/// can run Ruby (a `marshal_dump` / `_dump` of the program's), which
+/// may remove or replace the rest: they are held until *obj* is
+/// written, or a collection there could free one held only by this
+/// list.
+fn marshal_ivars(vm: &mut Executor, globals: &Globals, obj: Value) -> Vec<(IdentId, Value)> {
+    let ivars = globals.get_ivars(obj);
+    for &(_, val) in &ivars {
+        marshal_hold(vm, val);
+    }
+    ivars
+}
+
 /// Write a trailing ivar block — the ivar count followed by each
 /// (symbol, dumped value) pair — inside an already-opened `'I'` wrapper.
 fn marshal_write_ivar_block(
@@ -2166,7 +2373,7 @@ fn marshal_write_ivar_block(
     vm: &mut Executor,
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
-    objects: &mut Vec<u64>,
+    objects: &mut DumpLinks,
     limit: i32,
 ) -> Result<()> {
     marshal_write_fixnum(buf, ivars.len() as i32);
@@ -2267,7 +2474,7 @@ fn marshal_dump_set(
     vm: &mut Executor,
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
-    objects: &mut Vec<u64>,
+    objects: &mut DumpLinks,
     limit: i32,
 ) -> Result<()> {
     marshal_check_singleton(globals, obj)?;
@@ -2277,12 +2484,14 @@ fn marshal_dump_set(
             "can't dump anonymous class {class_name}"
         )));
     }
-    // Snapshot the members: dumping one can re-enter user code.
+    // Snapshot the members: dumping one can re-enter user code, which
+    // may remove the rest, so they are held.
     let (members, cbi): (Vec<Value>, bool) = {
         let inner = obj.as_hashmap_inner();
         (inner.keys(), inner.is_compare_by_identity())
     };
-    let ivars = globals.get_ivars(obj);
+    let members = Snapshot::hold(vm, members);
+    let ivars = marshal_ivars(vm, globals, obj);
     if !ivars.is_empty() {
         buf.push(b'I');
     }
@@ -2303,7 +2512,7 @@ fn marshal_dump_set(
     // The inner Hash is an object of its own in CRuby's link table (a
     // fresh one per dump, so nothing ever links back to it): it takes a
     // slot, and every later link index counts it.
-    objects.push(0);
+    objects.add_unnamed(vm);
     if cbi {
         buf.push(b'C');
         marshal_write_symbol(buf, IdentId::get_id("Hash"), symbols);
@@ -2314,7 +2523,8 @@ fn marshal_dump_set(
     if limit == 0 {
         return Err(MonorubyErr::argumenterr("exceed depth limit"));
     }
-    for member in members {
+    for i in 0..members.len() {
+        let member = members.get(i);
         marshal_dump_value(buf, member, vm, globals, symbols, objects, limit - 1)?;
         // The `true` each member maps to, and
         if limit == 1 {
@@ -2342,17 +2552,19 @@ fn marshal_dump_set(
 /// (by identity) is written as a `TYPE_LINK` (`@`) back-reference.
 /// Only nil / true / false / Fixnum / Symbol are exempt — every other
 /// value (String, Bignum, Float, Array, Hash, user object, …) takes a
-/// link slot in dump order. `Value::id()` returns the raw tagged bits,
-/// which is exactly CRuby's identity key: pointer bits for heap values,
-/// value bits for flonums.
-fn marshal_emit_link(buf: &mut Vec<u8>, obj: Value, objects: &mut Vec<u64>) -> bool {
-    let obj_id = obj.id();
-    if let Some(idx) = objects.iter().position(|&x| x == obj_id) {
+/// link slot in dump order (see `DumpLinks::find` for the identity).
+fn marshal_emit_link(
+    buf: &mut Vec<u8>,
+    obj: Value,
+    vm: &mut Executor,
+    objects: &mut DumpLinks,
+) -> bool {
+    if let Some(idx) = objects.find(obj) {
         buf.push(b'@');
         marshal_write_fixnum(buf, idx as i32);
         true
     } else {
-        objects.push(obj_id);
+        objects.add(vm, obj);
         false
     }
 }
@@ -2392,15 +2604,14 @@ fn build_marshal_regexp(bytes: &[u8], opt_byte: u32, encoding: Encoding) -> Resu
 /// (`'U'` / `'u'`), register its link slot, and return `true`. Returns
 /// `false` when neither is defined so the caller falls back to the
 /// built-in encoding. The caller must have already resolved any
-/// back-reference for `obj`; `obj_id` is `obj.id()`.
+/// back-reference for `obj`.
 fn marshal_try_user_protocol(
     buf: &mut Vec<u8>,
     obj: Value,
-    obj_id: u64,
     vm: &mut Executor,
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
-    objects: &mut Vec<u64>,
+    objects: &mut DumpLinks,
     limit: i32,
 ) -> Result<bool> {
     let marshal_dump_id = IdentId::get_id("marshal_dump");
@@ -2419,7 +2630,7 @@ fn marshal_try_user_protocol(
         let class_name_id = IdentId::get_id(&class_name);
         // 'U' (TYPE_USRMARSHAL): the object takes its link slot *before*
         // its #marshal_dump payload is serialized.
-        objects.push(obj_id);
+        objects.add(vm, obj);
         let payload = vm.invoke_method_inner(globals, marshal_dump_id, obj, &[], None, None)?;
         buf.push(b'U');
         marshal_write_symbol(buf, class_name_id, symbols);
@@ -2459,7 +2670,7 @@ fn marshal_try_user_protocol(
             // value is finer than a nanosecond dumps them as the
             // rational CRuby does, not as a truncated integer.
             let (sub_num, sub_den) = crate::builtins::time::time_marshal_subnano(globals, obj);
-            let user_ivars = globals.get_ivars(obj);
+            let user_ivars = marshal_ivars(vm, globals, obj);
             buf.push(b'I');
             buf.push(b'u');
             marshal_write_symbol(buf, class_name_id, symbols);
@@ -2512,7 +2723,7 @@ fn marshal_try_user_protocol(
                 // It is still an object in the stream: it takes a link
                 // slot (no live object shares it, so it is never linked
                 // to), or every later `'@'` would be off by one.
-                objects.push(0);
+                objects.add_unnamed(vm);
             }
             if !is_utc {
                 marshal_write_symbol(buf, IdentId::get_id("offset"), symbols);
@@ -2537,13 +2748,13 @@ fn marshal_try_user_protocol(
             }
             // TYPE_USERDEF: the object's own link slot follows the objects
             // embedded in its ivars.
-            objects.push(obj_id);
+            objects.add(vm, obj);
             return Ok(true);
         }
         // The String `_dump` returned may carry instance variables of
         // its own; CRuby writes them in the same `I` block as its
         // encoding (encoding first), and they were dropped here.
-        let payload_ivars = globals.get_ivars(payload);
+        let payload_ivars = marshal_ivars(vm, globals, payload);
         let has_enc_ivar = enc != Encoding::Ascii8;
         let ivar_count = has_enc_ivar as usize + payload_ivars.len();
         if ivar_count > 0 {
@@ -2566,19 +2777,24 @@ fn marshal_try_user_protocol(
         // 'u' (TYPE_USERDEF): the object's own link slot follows any
         // objects embedded in the returned string's ivars — CRuby
         // indexes those first and the object itself last.
-        objects.push(obj_id);
+        objects.add(vm, obj);
         return Ok(true);
     }
     Ok(false)
 }
 
+/// Write *obj*. A String or an object written in full (not as a link)
+/// is written in a temp scope of its own: what is held for it — itself,
+/// the values it holds and is still to write — is let go once it is
+/// written, when the link table holds what was written. A link, an
+/// immediate, a Float or an Integer runs no Ruby and holds nothing.
 fn marshal_dump_value(
     buf: &mut Vec<u8>,
     obj: Value,
     vm: &mut Executor,
     globals: &mut Globals,
     symbols: &mut Vec<IdentId>,
-    objects: &mut Vec<u64>,
+    objects: &mut DumpLinks,
     limit: i32,
 ) -> Result<()> {
     // `Marshal.dump(obj, limit)`: CRuby checks the remaining depth for
@@ -2609,7 +2825,7 @@ fn marshal_dump_value(
                 // Outside the 30-bit range it goes out as a bignum — and
                 // a bignum, unlike a fixnum, takes a slot in the object
                 // table, so every later link index shifts by one.
-                objects.push(obj.id());
+                objects.add(vm, obj);
                 let big = BigInt::from(n);
                 marshal_write_bignum(buf, &big);
             }
@@ -2624,13 +2840,13 @@ fn marshal_dump_value(
                     return Ok(());
                 }
             }
-            if marshal_emit_link(buf, obj, objects) {
+            if marshal_emit_link(buf, obj, vm, objects) {
                 return Ok(());
             }
             marshal_write_bignum(buf, n);
         }
         RV::Float(f) => {
-            if marshal_emit_link(buf, obj, objects) {
+            if marshal_emit_link(buf, obj, vm, objects) {
                 return Ok(());
             }
             marshal_write_float(buf, f);
@@ -2639,46 +2855,54 @@ fn marshal_dump_value(
             marshal_write_symbol(buf, id, symbols);
         }
         RV::String(s) => {
-            if marshal_emit_link(buf, obj, objects) {
+            if marshal_emit_link(buf, obj, vm, objects) {
                 return Ok(());
             }
             let bytes = s.as_bytes().to_vec();
             let enc = s.encoding();
-            let ivars = globals.get_ivars(obj);
-            // A binary string needs no encoding ivar; any other encoding
-            // does. User ivars share the same `I` block.
-            let has_enc_ivar = enc != Encoding::Ascii8;
-            let ivar_count = has_enc_ivar as usize + ivars.len();
-            let has_i = ivar_count > 0;
-            if has_i {
-                buf.push(b'I');
-            }
-            marshal_write_extended_and_class(buf, globals, obj, STRING_CLASS, symbols)?;
-            buf.push(b'"');
-            marshal_write_fixnum(buf, bytes.len() as i32);
-            buf.extend_from_slice(&bytes);
-            if has_i {
-                marshal_write_fixnum(buf, ivar_count as i32);
-                if has_enc_ivar {
-                    marshal_write_encoding_ivar_pair(buf, enc, symbols);
+            // The link table holds the String from here on; what is held
+            // for its ivars is let go once they are written.
+            vm.with_temp_scope(|vm| -> Result<()> {
+                let ivars = marshal_ivars(vm, globals, obj);
+                // A binary string needs no encoding ivar; any other
+                // encoding does. User ivars share the same `I` block.
+                let has_enc_ivar = enc != Encoding::Ascii8;
+                let ivar_count = has_enc_ivar as usize + ivars.len();
+                let has_i = ivar_count > 0;
+                if has_i {
+                    buf.push(b'I');
                 }
-                for (name, val) in ivars {
-                    marshal_write_symbol(buf, name, symbols);
-                    marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
+                marshal_write_extended_and_class(buf, globals, obj, STRING_CLASS, symbols)?;
+                buf.push(b'"');
+                marshal_write_fixnum(buf, bytes.len() as i32);
+                buf.extend_from_slice(&bytes);
+                if has_i {
+                    marshal_write_fixnum(buf, ivar_count as i32);
+                    if has_enc_ivar {
+                        marshal_write_encoding_ivar_pair(buf, enc, symbols);
+                    }
+                    for (name, val) in ivars {
+                        marshal_write_symbol(buf, name, symbols);
+                        marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
+                    }
                 }
-            }
+                Ok(())
+            })?;
         }
         // Complex / Rational are their own RV variants but are dumped via
         // the #marshal_dump protocol ('U' tag), so route them through the
         // same user-protocol path as plain objects.
         RV::Complex(_) | RV::Rational(_) => {
-            let obj_id = obj.id();
-            if let Some(idx) = objects.iter().position(|&x| x == obj_id) {
+            if let Some(idx) = objects.find(obj) {
                 buf.push(b'@');
                 marshal_write_fixnum(buf, idx as i32);
                 return Ok(());
             }
-            if !marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects, limit)? {
+            let written = vm.with_temp_scope(|vm| {
+                marshal_hold_while_written(vm, obj);
+                marshal_try_user_protocol(buf, obj, vm, globals, symbols, objects, limit)
+            })?;
+            if !written {
                 return Err(MonorubyErr::typeerr(format!(
                     "no _dump_data is defined for class {}",
                     globals.get_class_name(obj.class())
@@ -2686,32 +2910,35 @@ fn marshal_dump_value(
             }
         }
         RV::Object(_rv) => {
-            let obj_id = obj.id();
             // Already dumped this object? → emit a back-reference.
-            if let Some(idx) = objects.iter().position(|&x| x == obj_id) {
+            if let Some(idx) = objects.find(obj) {
                 buf.push(b'@');
                 marshal_write_fixnum(buf, idx as i32);
                 return Ok(());
             }
-            // User-defined serialization protocols ('U'/'u') take
-            // precedence over the built-in container/object encodings.
-            if marshal_try_user_protocol(buf, obj, obj_id, vm, globals, symbols, objects, limit)? {
-                return Ok(());
-            }
-            // Register the object in the link table *before* writing its
-            // body so that self-referential / cyclic structures resolve
-            // to a back-reference instead of recursing forever.
-            objects.push(obj_id);
-            let r = (|| -> Result<()> {
+            // What is held for the object (see `marshal_hold_while_written`)
+            // is let go once it is written.
+            let r = vm.with_temp_scope(|vm| -> Result<()> {
+                marshal_hold_while_written(vm, obj);
+                // User-defined serialization protocols ('U'/'u') take
+                // precedence over the built-in container/object encodings.
+                if marshal_try_user_protocol(buf, obj, vm, globals, symbols, objects, limit)? {
+                    return Ok(());
+                }
+                // Register the object in the link table *before* writing
+                // its body so that self-referential / cyclic structures
+                // resolve to a back-reference instead of recursing forever.
+                objects.add(vm, obj);
                 // Check for Array and Hash via ty()
                 match obj.ty() {
                     Some(ObjTy::ARRAY) => {
                         // Snapshot the elements so re-entrant user code
                         // invoked while dumping can't invalidate the
-                        // borrow into the live array.
-                        let elems: Vec<Value> =
-                            obj.as_array_inner().iter().copied().collect();
-                        let ivars = globals.get_ivars(obj);
+                        // borrow into the live array. That code may
+                        // remove the rest from it, so they are held.
+                        let elems =
+                            Snapshot::hold(vm, obj.as_array_inner().iter().copied().collect());
+                        let ivars = marshal_ivars(vm, globals, obj);
                         let has_ivars = !ivars.is_empty();
                         if has_ivars {
                             buf.push(b'I');
@@ -2721,7 +2948,8 @@ fn marshal_dump_value(
                         )?;
                         buf.push(b'[');
                         marshal_write_fixnum(buf, elems.len() as i32);
-                        for elem in elems {
+                        for i in 0..elems.len() {
+                            let elem = elems.get(i);
                             marshal_dump_value(buf, elem, vm, globals, symbols, objects, limit)?;
                         }
                         if has_ivars {
@@ -2794,17 +3022,23 @@ fn marshal_dump_value(
                         marshal_dump_set(buf, obj, vm, globals, symbols, objects, limit)?;
                     }
                     Some(ObjTy::HASH) => {
-                        // Snapshot the pairs to avoid holding a borrow into
-                        // the live hash across re-entrant user code.
+                        // Snapshot the pairs (each key followed by its
+                        // value) to avoid holding a borrow into the live
+                        // hash across re-entrant user code.
                         let (pairs, default, cbi, has_proc): (
-                            Vec<(Value, Value)>,
+                            Vec<Value>,
                             Option<Value>,
                             bool,
                             bool,
                         ) = {
                             let inner = obj.as_hashmap_inner();
+                            let mut pairs = Vec::with_capacity(inner.len() * 2);
+                            for (k, v) in inner.iter() {
+                                pairs.push(k);
+                                pairs.push(v);
+                            }
                             (
-                                inner.iter().collect(),
+                                pairs,
                                 inner.default_value(),
                                 inner.is_compare_by_identity(),
                                 inner.defalut_proc().is_some(),
@@ -2817,7 +3051,13 @@ fn marshal_dump_value(
                                 "can't dump hash with default proc",
                             ));
                         }
-                        let ivars = globals.get_ivars(obj);
+                        // User code run while dumping may remove the
+                        // pairs from the live hash: they are held.
+                        let pairs = Snapshot::hold(vm, pairs);
+                        if let Some(d) = default {
+                            marshal_hold(vm, d);
+                        }
+                        let ivars = marshal_ivars(vm, globals, obj);
                         let has_ivars = !ivars.is_empty();
                         if has_ivars {
                             buf.push(b'I');
@@ -2836,9 +3076,11 @@ fn marshal_dump_value(
                         // (the default is written after the pairs); a plain
                         // hash uses '{'.
                         buf.push(if default.is_some() { b'}' } else { b'{' });
-                        marshal_write_fixnum(buf, pairs.len() as i32);
-                        for (k, v) in pairs {
+                        marshal_write_fixnum(buf, (pairs.len() / 2) as i32);
+                        for i in 0..pairs.len() / 2 {
+                            let k = pairs.get(2 * i);
                             marshal_dump_value(buf, k, vm, globals, symbols, objects, limit)?;
+                            let v = pairs.get(2 * i + 1);
                             marshal_dump_value(buf, v, vm, globals, symbols, objects, limit)?;
                         }
                         if let Some(d) = default {
@@ -2887,7 +3129,7 @@ fn marshal_dump_value(
                             )));
                         }
                         let class_name_id = IdentId::get_id(&class_name);
-                        let mut ivars = globals.get_ivars(obj);
+                        let mut ivars = marshal_ivars(vm, globals, obj);
                         // The fields CRuby keeps under names without an
                         // `@` come first.
                         if has_object_fields(&class_name) {
@@ -2898,6 +3140,9 @@ fn marshal_dump_value(
                                     Some((IdentId::get_id(wire), val))
                                 })
                                 .collect();
+                            for &(_, val) in &fields {
+                                marshal_hold(vm, val);
+                            }
                             ivars.splice(0..0, fields);
                         }
                         for m in marshal_extended_modules(globals, obj) {
@@ -2945,7 +3190,7 @@ fn marshal_dump_value(
                         // is guaranteed to carry the members array of
                         // Symbols.
                         let members = lookup_struct_members(globals, real).unwrap();
-                        let ivars = globals.get_ivars(obj);
+                        let ivars = marshal_ivars(vm, globals, obj);
                         let has_ivars = !ivars.is_empty();
                         if has_ivars {
                             buf.push(b'I');
@@ -2964,9 +3209,15 @@ fn marshal_dump_value(
                         let inner = obj.as_struct();
                         buf.push(b'S');
                         marshal_write_symbol(buf, class_name_id, symbols);
-                        marshal_write_fixnum(buf, members.len() as i32);
-                        for (i, m) in members.iter().enumerate() {
-                            let sym = m.try_symbol().unwrap();
+                        // The names are read out first. The members Array
+                        // is a Ruby object (`ObjectSpace.each_object`
+                        // finds it), and Ruby run by a member's dump may
+                        // grow it, moving the buffer an iterator would
+                        // still be reading. Symbols need no rooting.
+                        let names: Vec<IdentId> =
+                            members.iter().map(|m| m.try_symbol().unwrap()).collect();
+                        marshal_write_fixnum(buf, names.len() as i32);
+                        for (i, sym) in names.into_iter().enumerate() {
                             marshal_write_symbol(buf, sym, symbols);
                             let val = inner.try_get(i).unwrap_or(Value::nil());
                             marshal_dump_value(buf, val, vm, globals, symbols, objects, limit)?;
@@ -2991,7 +3242,7 @@ fn marshal_dump_value(
                         // low bits). Mask off any internal-only bits.
                         let opt = (re.option() & 0x37) as u8;
                         let enc = re.declared_encoding();
-                        let ivars = globals.get_ivars(obj);
+                        let ivars = marshal_ivars(vm, globals, obj);
                         // As for a String, a BINARY source carries no
                         // encoding ivar — and with no user ivars either,
                         // no `I` wrapper at all.
@@ -3077,8 +3328,32 @@ fn marshal_dump_value(
                             .store
                             .get_ivar(obj, IdentId::get_id("/cause"))
                             .filter(|v| !v.is_nil());
+                        // The message is read here, with the flags above.
+                        // A `#backtrace` that initializes the exception
+                        // again could otherwise contradict them: a
+                        // NameError::message must be a String. It is the
+                        // message's *own* bytes and encoding, not a UTF-8
+                        // rebuild of its text: CRuby dumps a BINARY
+                        // message as a bare string, and a UTF-8 one
+                        // wrapped in `I…:E`.
+                        let mesg = (!uninit && !msg_unset)
+                            .then(|| super::exception::mesg_value(&globals.store, obj));
+                        // `#backtrace` below runs Ruby, which may
+                        // initialize the exception again and so replace
+                        // these on it: they stay on the temp stack, or a
+                        // collection there frees them.
+                        for &(_, val) in &fields {
+                            marshal_hold(vm, val);
+                        }
+                        for val in cause.into_iter().chain(mesg) {
+                            marshal_hold(vm, val);
+                        }
                         // #backtrace returns nil for a never-raised
-                        // exception, else an array of location strings.
+                        // exception, else an array of location strings —
+                        // a fresh one, from a `#backtrace` of the
+                        // program's. It is written after the message,
+                        // which can run Ruby, so it stays on the temp
+                        // stack.
                         let bt = vm.invoke_method_inner(
                             globals,
                             IdentId::get_id("backtrace"),
@@ -3087,6 +3362,7 @@ fn marshal_dump_value(
                             None,
                             None,
                         )?;
+                        marshal_hold(vm, bt);
                         // `bt_locations`: a raised exception dumps the
                         // backtrace its raise captured under this name
                         // too — a link to `bt` unless `set_backtrace`
@@ -3145,6 +3421,17 @@ fn marshal_dump_value(
                         } else {
                             (None, loaded_locations)
                         };
+                        // Writing one of these can run Ruby, which may
+                        // remove or replace the rest on the exception:
+                        // they stay on the temp stack, as the fields do.
+                        for &(_, val) in user_ivars
+                            .iter()
+                            .chain(&late_ivars)
+                            .chain(&early_locations)
+                            .chain(&loaded_locations)
+                        {
+                            marshal_hold(vm, val);
+                        }
                         // `KeyError.new(msg, receiver:, key:)` sets the
                         // receiver first, the VM's own KeyError the key:
                         // CRuby dumps them in the order they were set.
@@ -3176,21 +3463,14 @@ fn marshal_dump_value(
                         // explicitly given.
                         if write_mesg {
                             marshal_write_symbol(buf, IdentId::get_id("mesg"), symbols);
-                            if msg_unset {
-                                buf.push(b'0'); // nil
-                            } else {
-                                // The message's *own* bytes and encoding, not
-                                // a UTF-8 rebuild of its text: CRuby dumps a
-                                // BINARY message as a bare string, and a
-                                // UTF-8 one wrapped in `I…:E`.
-                                let msg_val = super::exception::mesg_value(&globals.store, obj);
-                                if name_err_mesg {
-                                    marshal_write_name_err_mesg(buf, msg_val, symbols, objects);
-                                } else {
-                                    marshal_dump_value(
-                                        buf, msg_val, vm, globals, symbols, objects, limit,
-                                    )?;
+                            match mesg {
+                                None => buf.push(b'0'), // nil
+                                Some(msg_val) if name_err_mesg => {
+                                    marshal_write_name_err_mesg(buf, msg_val, vm, symbols, objects);
                                 }
+                                Some(msg_val) => marshal_dump_value(
+                                    buf, msg_val, vm, globals, symbols, objects, limit,
+                                )?,
                             }
                         }
                         // :bt
@@ -3247,7 +3527,7 @@ fn marshal_dump_value(
                     }
                 }
                 Ok(())
-            })();
+            });
             r?;
         }
         _ => {
@@ -3541,6 +3821,35 @@ mod tests {
             Marshal.load("\x04\x08d:\x12MDataNeverDef" + "i\x06")
             "##,
         );
+    }
+
+    /// The instance a 'd' (TYPE_DATA) record makes takes no slot of the
+    /// link table, so it is held until the load is over: here it is a
+    /// Hash key, waiting while its value is read, whose `marshal_load`
+    /// collects. Freed, it was the dead key the pair was stored under.
+    /// Monoruby-only, as `marshal_load_data` is: CRuby takes a 'd'
+    /// record only for a T_DATA class.
+    #[test]
+    fn marshal_load_data_instance_survives_collection() {
+        // '{' + 1 pair: 'd' + symbol("MDataGc") (len 7 ⇒ 0x0c) + the
+        // payload "p1", then the value.
+        let v = run_test_no_result_check(
+            r##"
+            class MDataGc
+              def _load_data(v) = @v = v
+              attr_reader :v
+            end
+            class MDataGcOnLoad
+              def marshal_dump = 0
+              def marshal_load(_) = (GC.start; $md_junk = Array.new(20000) { MDataGc.allocate }; nil)
+            end
+            blob = "\x04\x08{\x06d:\x0cMDataGc".b + Marshal.dump("p1".b)[2..] + Marshal.dump(MDataGcOnLoad.new)[2..]
+            r = 3.times.map { Marshal.load(blob).keys.map { [_1.class.name, _1.v] } }.uniq
+            raise r.inspect unless r == [[["MDataGc", "p1"]]]
+            1
+            "##,
+        );
+        assert_eq!(v.try_fixnum(), Some(1));
     }
 
     /// 'c' (TYPE_CLASS), 'm' (TYPE_MODULE) and 'M' (TYPE_MODULE_OLD)
@@ -5069,6 +5378,421 @@ mod tests {
             r << (Marshal.dump(m::N) rescue $!.message.sub(/0x\h+/, "X"))
             r << (Marshal.dump(Class.new) rescue $!.message.sub(/0x\h+/, "X"))
             r
+            "##,
+        );
+    }
+
+    /// `Marshal.dump` keeps what it writes, and what it is still to
+    /// write, reachable until it is done: what a `marshal_dump` answers,
+    /// a fresh `#backtrace`, and the rest of an object's instance
+    /// variables or an Array's / a Hash's elements once a nested
+    /// `marshal_dump` has taken them away. Each `marshal_dump` here
+    /// collects. A freed object's id stayed in the link table, and the
+    /// next one made in its cell was written as a link to it.
+    #[test]
+    fn marshal_dump_survives_collection_in_user_code() {
+        run_test_once(
+            r##"
+            class MdGcA
+              def initialize(n) = @n = n
+              def marshal_dump = (GC.start; [@n, "s#{@n}"])
+              def marshal_load(a) = @a = a
+              attr_reader :a
+            end
+            class MdGcB
+              def initialize(n) = @n = n
+              def marshal_dump = (GC.start; $md_junk = Array.new(2000) { [_1] }; @n)
+              def marshal_load(n) = @n = n
+              def to_s = "B#{@n}"
+            end
+            class MdGcNested
+              def initialize(n) = @n = n
+              def marshal_dump = [MdGcB.new(1), "str#{@n}", MdGcB.new(2), [3, "x#{@n}"], {"k" => "v#{@n}"}]
+              def marshal_load(a) = @a = a
+              attr_reader :a
+            end
+            class MdGcTakeAway
+              def initialize(&b) = @b = b
+              def marshal_dump = (@b.call; GC.start; $md_junk = Array.new(2000) { "z" * 30 }; 0)
+              def marshal_load(_) = nil
+            end
+            class MdGcErr < StandardError
+              def backtrace = ["a:1", "b:2"].map { _1 + "" }
+            end
+            class MdGcHolder; end
+            r = []
+            r << Marshal.load(Marshal.dump((1..6).map { MdGcA.new(_1) })).map(&:a)
+            r << Marshal.load(Marshal.dump(MdGcNested.new(99))).a.map { _1.is_a?(MdGcB) ? _1.to_s : _1 }
+            r << Marshal.load(Marshal.dump(MdGcErr.new(MdGcB.new(3)))).backtrace
+            h = MdGcHolder.new
+            h.instance_variable_set(:@a, MdGcTakeAway.new { h.remove_instance_variable(:@b) })
+            h.instance_variable_set(:@b, "bee" * 5)
+            r << Marshal.load(Marshal.dump(h)).instance_variable_get(:@b)
+            # CRuby refuses an Array changed while it is dumped, and writes
+            # fewer pairs than it announced for such a Hash; monoruby writes
+            # what they held. Either way nothing freed is read.
+            arr = []
+            arr << MdGcTakeAway.new { arr.clear }
+            arr.concat((1..5).map { "str#{_1}" * 3 })
+            r << begin
+              Marshal.dump(arr)
+              :dumped
+            rescue RuntimeError
+              :dumped
+            end
+            hsh = {a: MdGcTakeAway.new { hsh.clear }}
+            5.times { |i| hsh["k#{i}" * 3] = "v#{i}" * 3 }
+            Marshal.dump(hsh)
+            r << :dumped
+            r
+            "##,
+        );
+    }
+
+    /// `Marshal.load(source, proc)`: what the proc answers stands in for
+    /// what was read — a Hash key, an object's or a String's instance
+    /// variable — and stays reachable while the rest is read and the
+    /// proc, which collects here, runs again.
+    #[test]
+    fn marshal_load_proc_results_survive_collection() {
+        run_test_once(
+            r##"
+            class MlGcFoo
+              def initialize(a, b, c) = (@a = a; @b = b; @c = c)
+              attr_reader :a, :b, :c
+            end
+            # A String the proc gets is replaced, unless it carries
+            # instance variables, whose values are then replaced.
+            pr = lambda do |x|
+              GC.start
+              junk = Array.new(20) { "j" * 40 }
+              x.is_a?(String) && x.instance_variables.empty? ? x + "!" : x
+            end
+            s = "str".dup
+            s.instance_variable_set(:@x, "one")
+            s.instance_variable_set(:@y, "two")
+            h = o = t = nil
+            10.times do
+              h = Marshal.load(Marshal.dump({"a" => "b", "c" => "d", "e" => "f"}), pr)
+              o = Marshal.load(Marshal.dump(MlGcFoo.new("x", "y", "z")), pr)
+              t = Marshal.load(Marshal.dump(s), pr)
+            end
+            [h, [o.a, o.b, o.c], [t, t.instance_variable_get(:@x), t.instance_variable_get(:@y)]]
+            "##,
+        );
+    }
+
+    /// `Marshal.dump` of an exception reads its fields, then calls its
+    /// `#backtrace`, which here initializes it again and collects. The
+    /// fields read before stay reachable, and are what is written, as
+    /// CRuby (which calls no `#backtrace`) writes them.
+    #[test]
+    fn marshal_dump_exception_fields_survive_reinitialize_in_backtrace() {
+        run_test_once(
+            r##"
+            class MdBtKeyErr < KeyError
+              def backtrace
+                if $md_bt_reinit
+                  $md_bt_reinit = false
+                  send(:initialize, "m", receiver: Array.new(3) { "n" * 20 }, key: Array.new(3) { "k" * 20 })
+                  GC.start
+                  $md_junk = Array.new(20000) { ["j" * 30] }
+                end
+                super
+              end
+            end
+            # Made in a method, so that no frame here holds the fields.
+            def md_bt_key_err(i) = MdBtKeyErr.new("m", receiver: ["recv#{i}", "x"].map { _1 * 2 }, key: {"key#{i}" => [i]})
+            r = []
+            5.times do |i|
+              $md_bt_reinit = true
+              l = Marshal.load(Marshal.dump(md_bt_key_err(i)))
+              r << [l.receiver, l.key, l.message]
+            end
+            r
+            "##,
+        );
+    }
+
+    /// A NameError the VM raised has its message written as a
+    /// `NameError::message`. The message is read before `#backtrace`
+    /// runs, together with the flags that choose that form, so a
+    /// `#backtrace` that gives the exception a message of another kind
+    /// cannot contradict them.
+    #[test]
+    fn marshal_dump_exception_message_read_before_backtrace() {
+        run_test_once(
+            r##"
+            class NameError
+              def backtrace
+                if $md_bt_reinit_name
+                  $md_bt_reinit_name = false
+                  send(:initialize, 42)
+                end
+                super
+              end
+            end
+            e = begin
+              md_bt_undefined_name
+            rescue NameError => ex
+              ex
+            end
+            $md_bt_reinit_name = true
+            l = Marshal.load(Marshal.dump(e))
+            [l.class, l.message]
+            "##,
+        );
+    }
+
+    /// What an Array, a Hash or a Set held when its writing began is
+    /// held until it is written, a big one's (more than
+    /// `MARSHAL_SNAPSHOT_PUSH_MAX` values) by one Array: the first
+    /// value's `marshal_dump` replaces the rest with copies (for the Set,
+    /// takes them out of it) and collects. CRuby writes the copies (for
+    /// the Set, the members it gathered before it writes any), which are
+    /// equal to what was replaced.
+    #[test]
+    fn marshal_dump_holds_container_values_while_written() {
+        run_test_once(
+            r##"
+            class MdGcSwap
+              def initialize(&b) = @b = b
+              def marshal_dump = (@b.call; GC.start; $md_junk = Array.new(2000) { "z" * 30 }; 0)
+              def marshal_load(_) = nil
+            end
+            r = []
+            [5, 300].each do |n|
+              arr = [MdGcSwap.new { arr.map! { _1.is_a?(String) ? _1.dup : _1 } }]
+              arr.concat((1..n).map { "a#{_1}" * 3 })
+              r << Marshal.load(Marshal.dump(arr)).drop(1)
+              hsh = {a: MdGcSwap.new { hsh.transform_values! { _1.is_a?(String) ? _1.dup : _1 } }}
+              n.times { |i| hsh[i] = "v#{i}" * 3 }
+              r << Marshal.load(Marshal.dump(hsh)).values.drop(1)
+              set = Set[MdGcSwap.new { set.clear }]
+              n.times { |i| set << "m#{i}" * 3 }
+              r << Marshal.load(Marshal.dump(set)).grep(String)
+            end
+            r.map { [_1.size, _1.first, _1.last, _1.uniq.size] }
+            "##,
+        );
+    }
+
+    /// An object written through its `_dump` takes its link slot only
+    /// after the ivars of the String `_dump` answered (CRuby's
+    /// TYPE_USERDEF), so while those are written nothing but the dump
+    /// holds an object a `marshal_dump` made: here one of them collects.
+    /// Freed, the object's cell went to another, which was then written
+    /// as a link to it.
+    #[test]
+    fn marshal_dump_holds_userdef_object_while_written() {
+        run_test_once(
+            r##"
+            class MdGcCollect
+              def marshal_dump = (GC.start; $md_junk = Array.new(2000) { MdGcUd.allocate }; 0)
+              def marshal_load(_) = nil
+            end
+            class MdGcUd
+              def initialize(n) = @n = n
+              attr_reader :n
+              def _dump(_)
+                s = "ud#{@n}".dup
+                s.instance_variable_set(:@g, MdGcCollect.new)
+                s
+              end
+              def self._load(s) = new(s.to_s)
+            end
+            class MdGcWrap
+              def initialize(n) = @n = n
+              def marshal_dump = MdGcUd.new(@n)
+              def marshal_load(ud) = @ud = ud
+              attr_reader :ud
+            end
+            r = []
+            3.times do
+              ws = (1..6).map { MdGcWrap.new(_1) }
+              r << Marshal.load(Marshal.dump(ws + ws)).map { _1.ud.n }
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// A Struct class's members Array is an ordinary one too, which
+    /// `ObjectSpace.each_object` finds. A member's `marshal_dump` grows
+    /// it, moving its buffer, while the dump walked the member names
+    /// through a borrow of the old one: it read garbage and panicked
+    /// (`try_symbol().unwrap()`), with no collection needed. The names
+    /// are now read out before the walk. CRuby's members Array is
+    /// hidden, so it grows nothing. Only the dump is compared: here the
+    /// grown Array is the class's members from then on, so a load of the
+    /// dump would see a struct of another size.
+    #[test]
+    fn marshal_dump_struct_members_grown_by_ruby() {
+        run_test_once(
+            r##"
+            class MdGrowMembers
+              def marshal_dump
+                ObjectSpace.each_object(Array) do |a|
+                  a.concat(Array.new(64) { :pad }) if !a.frozen? && a.size == 2 && a[0] == :a && a[1] == :b
+                end
+                1
+              end
+              def marshal_load(x) = nil
+            end
+            r = 3.times.map do |i|
+              s = Object.const_set("MdGrowMembers#{i}", Struct.new(:a, :b))
+              d = Marshal.dump(s.new(MdGrowMembers.new, "bee"))
+              d.sub(/MdGrowMembers\d/, "MdGrowMembers").unpack1("H*")
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// The Array a big container's values are held by while it is
+    /// written is an ordinary one, which `ObjectSpace.each_object` finds.
+    /// The first value's `marshal_dump` grows every Array of the
+    /// container's size it finds, which moves that one's buffer, and
+    /// collects: the walk read the rest through a borrow of the old
+    /// buffer, freed by then. CRuby has no such Array, so it grows none
+    /// of its own.
+    #[test]
+    fn marshal_dump_snapshot_grown_by_ruby() {
+        run_test_once(
+            r##"
+            class MdEoGrow
+              def initialize(n) = @n = n
+              def marshal_dump
+                ObjectSpace.each_object(Array) do |a|
+                  a.concat(Array.new(50000, 7)) if a.size == @n && !a.equal?($md_eo_arr) && !a.frozen?
+                end
+                GC.start
+                $md_junk = Array.new(20000) { "j" * 30 }
+                0
+              end
+              def marshal_load(_) = nil
+            end
+            r = []
+            3.times do
+              $md_eo_arr = [MdEoGrow.new(301)] + (1..300).map { "s#{_1}" * 3 }
+              l = Marshal.load(Marshal.dump($md_eo_arr))
+              r << [l.size, l[1], l[-1]]
+              h = {MdEoGrow.new(302) => 1}
+              150.times { |i| h["k#{i}"] = "v#{i}" }
+              l = Marshal.load(Marshal.dump(h))
+              r << [l.size, l.keys.last, l.values.last]
+              s = Set[MdEoGrow.new(301)]
+              300.times { |i| s << "m#{i}" }
+              l = Marshal.load(Marshal.dump(s))
+              r << [l.size, l.to_a.last]
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// The same Array, emptied instead, after the first value's
+    /// `marshal_dump` has replaced the rest of the container's values
+    /// with copies, so that only that Array held them; then it collects.
+    /// The walk went on with the values it had been holding, freed by
+    /// then. Now a value Ruby took out of the Array is written as nil;
+    /// CRuby, which finds no such Array, writes the copies.
+    #[test]
+    fn marshal_dump_snapshot_emptied_by_ruby() {
+        run_test_once(
+            r##"
+            class MdEoEmpty
+              def initialize(&b) = @b = b
+              def marshal_dump
+                @b.call
+                ObjectSpace.each_object(Array) { |a| a.clear if a.size == 301 && !a.equal?($md_eo_arr) && !a.frozen? }
+                GC.start
+                $md_junk = Array.new(20000) { "j" * 30 }
+                0
+              end
+              def marshal_load(_) = nil
+            end
+            r = []
+            3.times do
+              $md_eo_arr = [MdEoEmpty.new { $md_eo_arr.map! { String === _1 ? _1.dup : _1 } }] + (1..300).map { "s#{_1}" * 3 }
+              l = Marshal.load(Marshal.dump($md_eo_arr))
+              r << [l.size, l.drop(1).all? { _1.nil? || (String === _1 && _1.start_with?("s")) }]
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// The link table and the Array a big container's values are held by
+    /// are ordinary Arrays, which `ObjectSpace.each_object` finds. A
+    /// `marshal_dump` freezes each and keeps a slice of it: a frozen
+    /// Array is the root of the slices taken of it, which view its
+    /// buffer. The dump then moved the link table's buffer as it grew,
+    /// and freed the other's once the container was written, so the
+    /// slices read freed memory after the collection that follows. In
+    /// CRuby neither is found, and the slices stay nil.
+    #[test]
+    fn marshal_dump_tables_frozen_by_ruby() {
+        run_test_once(
+            r##"
+            class MdEoFreeze
+              def initialize(&b) = @b = b
+              def marshal_dump
+                ObjectSpace.each_object(Array) { |a| @b.call(a) if !a.frozen? && !a.equal?($md_eo_root) }
+                0
+              end
+              def marshal_load(_) = nil
+            end
+            r = []
+            3.times do
+              $md_eo_sv = $md_eo_lv = nil
+              e1 = MdEoFreeze.new { |a| ($md_eo_sv = a.freeze[0, a.size]) if a.size == 342 && a[0].equal?(e1) }
+              e2 = MdEoFreeze.new { |a| ($md_eo_lv = a.freeze[0, a.size]) if a.size >= 16 && a[0].equal?($md_eo_root) }
+              $md_eo_root = [e1] + (1..40).map { "s#{_1}" * 2 } + [e2] + (1..300).map { "t#{_1}" * 2 }
+              size = Marshal.load(Marshal.dump($md_eo_root)).size
+              GC.start
+              $md_junk = Array.new(20000) { "j" * 30 }
+              sv = $md_eo_sv.nil? || ($md_eo_sv.size == 342 && $md_eo_sv.all? { MdEoFreeze === _1 || String === _1 })
+              lv = $md_eo_lv.nil? || $md_eo_lv.all? { _1.equal?($md_eo_root) || MdEoFreeze === _1 || String === _1 }
+              r << [size, sv, lv]
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `Marshal.load(source, proc)`: an answer of the proc that stands in
+    /// for a Hash key is held while the value is read, whose
+    /// `marshal_load` empties every Array holding such an answer that
+    /// `ObjectSpace.each_object` finds, and collects. The load held the
+    /// answers in one of those. An answer that is the value itself is
+    /// held by the link table.
+    #[test]
+    fn marshal_load_holds_proc_answers_out_of_ruby_reach() {
+        run_test_once(
+            r##"
+            class MlEoKey
+              def initialize(s) = @s = s
+              attr_reader :s
+              def hash = @s.hash
+              def eql?(o) = o.is_a?(MlEoKey) && o.s == @s
+            end
+            class MlEoVal
+              def marshal_dump = 0
+              def marshal_load(_)
+                ObjectSpace.each_object(Array) { |a| a.clear if !a.frozen? && a.any? { MlEoKey === _1 } }
+                GC.start
+                $ml_junk = Array.new(20000) { "j" * 30 }
+              end
+            end
+            r = []
+            3.times do
+              d = Marshal.dump({"a" => MlEoVal.new, "b" => MlEoVal.new})
+              h = Marshal.load(d, ->(x) { String === x && x.size == 1 ? MlEoKey.new(x * 2) : x })
+              r << h.keys.map { _1.is_a?(MlEoKey) ? _1.s : _1.class }
+              r << Marshal.load(d, ->(x) { x }).keys
+            end
+            r.uniq
             "##,
         );
     }

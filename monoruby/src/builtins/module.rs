@@ -1262,7 +1262,9 @@ fn const_defined(
     // intermediate qualifiers in a path string like `"A::B::C"` are
     // still resolved through the regular triggering lookup so we can
     // walk into the right class.
-    let found = probe_constant_path(vm, globals, module, lfp.arg(0), inherit)?;
+    let found = with_constant_path(vm, globals, lfp.arg(0), |vm, globals, path| {
+        probe_constant_path(vm, globals, module, path, inherit)
+    })?;
     Ok(Value::bool(found))
 }
 
@@ -1347,7 +1349,9 @@ fn const_missing(
 fn const_get(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let module = lfp.self_val().as_class();
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
-    lookup_constant_path(vm, globals, module, lfp.arg(0), inherit)
+    with_constant_path(vm, globals, lfp.arg(0), |vm, globals, path| {
+        lookup_constant_path(vm, globals, module, path, inherit)
+    })
 }
 
 /// `rb_is_const_name` of a name's bytes in *enc*: a character that
@@ -1531,8 +1535,8 @@ fn check_constant_path_string(store: &Store, path: &RStringInner) -> Result<()> 
     }
 }
 
-/// One segment of a [`ConstPath`] that is a constant name
-/// (`rb_check_id_cstr`'s answer for it).
+/// One segment of a [`ConstPath`] that is a constant name, as the walk
+/// reaches it (`rb_check_id_cstr`'s answer for it then).
 enum ConstSeg {
     /// The name, as the Symbol that exists for it.
     Id(IdentId),
@@ -1543,22 +1547,45 @@ enum ConstSeg {
     Unknown(Value),
 }
 
+/// What stops the walk of a [`ConstPath`] after its segments.
+enum ConstPathBad {
+    /// The name given is the wrong one: a Symbol that is no constant
+    /// name, or a String path malformed at that point (empty, an empty
+    /// segment, a lone `:`, a trailing `::`).
+    Whole,
+    /// The segment at this byte range of the path, which is no constant
+    /// name.
+    Seg(std::ops::Range<usize>),
+}
+
 /// A constant path given to `const_get` / `const_defined?` /
 /// `const_source_location`, as far as it can be walked.
+///
+/// The walk runs Ruby (an autoload's `require`, a `const_missing`), so
+/// the only object this holds is the path itself, which the walk keeps
+/// on the temp stack ([`with_constant_path`]). A segment's Symbol is
+/// looked for, and its String or the NameError made, when the walk
+/// reaches it, as in CRuby: one made earlier would be freed by a
+/// collection in that Ruby, and a Symbol the Ruby made (an autoloaded
+/// file defining the next segment) would be missed.
 struct ConstPath {
     /// A String path that starts with `::` is looked up from Object.
     start_at_object: bool,
-    /// The leading segments that are constant names.
-    segs: Vec<ConstSeg>,
+    /// The byte ranges, in `bytes`, of the leading segments that are
+    /// constant names.
+    segs: Vec<std::ops::Range<usize>>,
     /// What stops the walk after `segs`: the "wrong constant name"
     /// NameError of the first segment that is no constant name (or of
     /// the whole path, when it is malformed at that point). CRuby
     /// validates a segment only when the walk reaches it, so
     /// `"Nope::bad"` is an uninitialized `Nope` and `"X::y"` with a
     /// non-module `X` a TypeError before `y` is looked at.
-    bad: Option<MonorubyErr>,
+    bad: Option<ConstPathBad>,
     /// The path as given (a Symbol, or the String), for messages.
     path: Value,
+    /// The path's bytes (a Symbol's name), in its encoding.
+    bytes: Vec<u8>,
+    enc: crate::value::Encoding,
 }
 
 impl ConstPath {
@@ -1571,6 +1598,59 @@ impl ConstPath {
         }
     }
 
+    /// Segment *i*: its Symbol when one of that name exists by now
+    /// (the Symbol given, for a Symbol path), else the segment as a
+    /// String.
+    fn seg(&self, i: usize) -> ConstSeg {
+        if let Some(sym) = self.path.try_symbol() {
+            return ConstSeg::Id(sym);
+        }
+        let range = self.segs[i].clone();
+        match existing_name_id(&self.bytes[range.clone()], self.enc) {
+            Some(id) => ConstSeg::Id(id),
+            None => ConstSeg::Unknown(self.seg_string(range)),
+        }
+    }
+
+    /// The segment at *range* as a frozen String, or the path itself
+    /// when the segment is all of it.
+    fn seg_string(&self, range: std::ops::Range<usize>) -> Value {
+        if range.len() == self.bytes.len() {
+            return self.path;
+        }
+        let mut name =
+            Value::string_from_inner(RStringInner::from_encoding(&self.bytes[range], self.enc));
+        name.set_frozen();
+        name
+    }
+
+    /// The NameError [`Self::bad`] stands for, carrying *receiver* and —
+    /// as `#name` — the path given when it is wrong as a whole, else the
+    /// segment's Symbol when one of that name exists, the segment itself
+    /// otherwise.
+    fn bad_error(&self, globals: &mut Globals, receiver: Value) -> MonorubyErr {
+        let (bytes, name) = match &self.bad {
+            Some(ConstPathBad::Seg(range)) => {
+                let seg = &self.bytes[range.clone()];
+                let name = match existing_name_id(seg, self.enc) {
+                    Some(id) => Value::symbol(id),
+                    None => self.seg_string(range.clone()),
+                };
+                (seg, name)
+            }
+            _ => (&self.bytes[..], self.path),
+        };
+        crate::builtins::kernel::name_error_reflection_bytes(
+            globals,
+            "wrong constant name ",
+            bytes,
+            self.enc,
+            "",
+            name,
+            receiver,
+        )
+    }
+
     /// `"X::y" does not refer to class/module`: a segment that has
     /// more path after it resolved to something that is no module.
     fn not_a_module(&self, store: &Store) -> MonorubyErr {
@@ -1581,52 +1661,64 @@ impl ConstPath {
     }
 }
 
+/// The Symbol named *name* (in *enc*), when one exists
+/// (`rb_check_id_cstr`).
+fn existing_name_id(name: &[u8], enc: crate::value::Encoding) -> Option<IdentId> {
+    match std::str::from_utf8(name) {
+        Ok(s) => IdentId::try_get_id(s),
+        Err(_) => IdentId::try_get_id_from_bytes(name, enc),
+    }
+}
+
+/// Run *walk* over the [`ConstPath`] *name_arg* denotes, with the path
+/// on the temp stack: it may be the String a `#to_str` answered, which
+/// nothing else holds while the walk runs Ruby (an autoload's
+/// `require`, a `const_missing`), and a collection there would free it.
+fn with_constant_path<T>(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name_arg: Value,
+    walk: impl FnOnce(&mut Executor, &mut Globals, ConstPath) -> Result<T>,
+) -> Result<T> {
+    let path = constant_path_segments(vm, globals, name_arg)?;
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(path.path);
+        walk(vm, globals, path)
+    })
+}
+
 /// Coerce *name_arg* to a Symbol or String (via `#to_str`) and split it
-/// into the sequence of interned constant names the path denotes
+/// into the sequence of constant names the path denotes
 /// (`rb_mod_const_get`'s reading). A Symbol is a bare name; a String
 /// may be fully-qualified (`"::A::B"`: start at Object) or relative
 /// (`"A::B"`).
 ///
 /// A segment that is no constant name ends the list and is reported
-/// through [`ConstPath::bad`], the NameError carrying *receiver* and —
-/// as `#name` — the Symbol given, the segment's Symbol when one of that
-/// name exists, the segment itself otherwise, and the whole String for
-/// a path malformed there (an empty segment, a trailing `::`).
+/// through [`ConstPath::bad`] — as is a path malformed there (an empty
+/// segment, a trailing `::`).
 fn constant_path_segments(
     vm: &mut Executor,
     globals: &mut Globals,
-    receiver: Value,
     name_arg: Value,
 ) -> Result<ConstPath> {
-    use crate::builtins::kernel::name_error_reflection_bytes;
-    const WRONG: &str = "wrong constant name ";
     if let Some(sym) = name_arg.try_symbol() {
         // A Symbol is a bare name: it carries no scope qualifiers.
-        let ident = sym.get_ident_name_clone();
+        let bytes = sym.get_ident_name_clone().as_bytes().to_vec();
         let enc = sym
             .symbol_encoding()
             .unwrap_or(crate::value::Encoding::UTF8);
-        let bad = (!is_const_name_bytes(ident.as_bytes(), enc)).then(|| {
-            name_error_reflection_bytes(
-                globals,
-                WRONG,
-                ident.as_bytes(),
-                enc,
-                "",
-                name_arg,
-                receiver,
-            )
-        });
-        let segs = if bad.is_some() {
-            vec![]
+        let (segs, bad) = if is_const_name_bytes(&bytes, enc) {
+            (vec![0..bytes.len()], None)
         } else {
-            vec![ConstSeg::Id(sym)]
+            (vec![], Some(ConstPathBad::Whole))
         };
         return Ok(ConstPath {
             start_at_object: false,
             segs,
             bad,
             path: name_arg,
+            bytes,
+            enc,
         });
     }
     let path = if name_arg.is_rstring().is_some() {
@@ -1653,75 +1745,46 @@ fn constant_path_segments(
     check_constant_path_string(&globals.store, path.as_rstring_inner())?;
     let inner = path.as_rstring_inner();
     let (bytes, enc) = (inner.as_bytes().to_vec(), inner.encoding());
-    let whole = |globals: &mut Globals| {
-        name_error_reflection_bytes(globals, WRONG, &bytes, enc, "", path, receiver)
-    };
-    let mut segs = vec![];
-    let done = |segs, bad, start_at_object| {
-        Ok(ConstPath {
-            start_at_object,
-            segs,
-            bad,
-            path,
-        })
-    };
-    if bytes.is_empty() {
-        return done(segs, Some(whole(globals)), false);
-    }
     // `::` — being ASCII — never occurs inside a character of an
     // ASCII-compatible encoding, so the path splits bytewise.
-    let (start_at_object, mut rest) = match bytes.strip_prefix(b"::") {
-        Some(rest) if !rest.is_empty() => (true, rest),
-        _ => (false, &bytes[..]),
+    let start_at_object = bytes.len() > 2 && bytes.starts_with(b"::");
+    let mut start = if start_at_object { 2 } else { 0 };
+    let mut segs = vec![];
+    let bad = loop {
+        let end = bytes[start..]
+            .iter()
+            .position(|c| *c == b':')
+            .map_or(bytes.len(), |i| start + i);
+        // An empty segment (or an empty path), a lone `:` and a
+        // trailing `::` make the whole path the wrong name, at the
+        // segment they are met at.
+        if start == end {
+            break Some(ConstPathBad::Whole);
+        }
+        let next = if end == bytes.len() {
+            None
+        } else if bytes[end..].starts_with(b"::") && end + 2 < bytes.len() {
+            Some(end + 2)
+        } else {
+            break Some(ConstPathBad::Whole);
+        };
+        if !is_const_name_bytes(&bytes[start..end], enc) {
+            break Some(ConstPathBad::Seg(start..end));
+        }
+        segs.push(start..end);
+        match next {
+            Some(next) => start = next,
+            None => break None,
+        }
     };
-    loop {
-        let (seg, tail) = match rest.iter().position(|c| *c == b':') {
-            Some(i) => (&rest[..i], Some(&rest[i..])),
-            None => (rest, None),
-        };
-        // An empty segment, a lone `:` and a trailing `::` make the
-        // whole path the wrong name, at the segment they are met at.
-        let tail = match tail {
-            _ if seg.is_empty() => return done(segs, Some(whole(globals)), start_at_object),
-            None => None,
-            Some(tail) => match tail.strip_prefix(b"::") {
-                Some(next) if !next.is_empty() => Some(next),
-                _ => return done(segs, Some(whole(globals)), start_at_object),
-            },
-        };
-        // The segment's Symbol when there is one of that name already
-        // (`rb_check_id_cstr`), else the segment as a String.
-        let existing = match std::str::from_utf8(seg) {
-            Ok(s) => IdentId::try_get_id(s),
-            Err(_) => IdentId::try_get_id_from_bytes(seg, enc),
-        };
-        let seg_string = || {
-            if tail.is_none() && seg.len() == bytes.len() {
-                path
-            } else {
-                let mut name = Value::string_from_inner(RStringInner::from_encoding(seg, enc));
-                name.set_frozen();
-                name
-            }
-        };
-        if !is_const_name_bytes(seg, enc) {
-            // `#name` is the segment.
-            let name = match existing {
-                Some(id) => Value::symbol(id),
-                None => seg_string(),
-            };
-            let bad = name_error_reflection_bytes(globals, WRONG, seg, enc, "", name, receiver);
-            return done(segs, Some(bad), start_at_object);
-        }
-        segs.push(match existing {
-            Some(id) => ConstSeg::Id(id),
-            None => ConstSeg::Unknown(seg_string()),
-        });
-        match tail {
-            Some(tail) => rest = tail,
-            None => return done(segs, None, start_at_object),
-        }
-    }
+    Ok(ConstPath {
+        start_at_object,
+        segs,
+        bad,
+        path,
+        bytes,
+        enc,
+    })
 }
 
 /// `const_missing` for the segment *name* that *scope* does not have
@@ -1780,11 +1843,9 @@ fn lookup_constant_path(
     vm: &mut Executor,
     globals: &mut Globals,
     receiver: Module,
-    name_arg: Value,
+    path: ConstPath,
     inherit: bool,
 ) -> Result<Value> {
-    let mut path = constant_path_segments(vm, globals, receiver.as_val(), name_arg)?;
-
     // Walk the scope chain. The first segment honours `inherit`; nested
     // segments are looked up directly on the resolved class (CRuby
     // scopes `Foo::Bar::Baz` like the parser would, so each `::` step
@@ -1796,8 +1857,8 @@ fn lookup_constant_path(
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
-        let id = match seg {
+    for i in 0..path.segs.len() {
+        let id = match path.seg(i) {
             ConstSeg::Id(id) => id,
             ConstSeg::Unknown(name) => {
                 let v = call_const_missing_unknown(vm, globals, current, name)?;
@@ -1839,7 +1900,7 @@ fn lookup_constant_path(
             None => return Err(path.not_a_module(&globals.store)),
         }
     }
-    Err(path.bad.take().unwrap())
+    Err(path.bad_error(globals, receiver.as_val()))
 }
 
 /// Like `lookup_constant_path` but probes the *final* segment without
@@ -1851,20 +1912,18 @@ fn probe_constant_path(
     vm: &mut Executor,
     globals: &mut Globals,
     receiver: Module,
-    name_arg: Value,
+    path: ConstPath,
     inherit: bool,
 ) -> Result<bool> {
-    let mut path = constant_path_segments(vm, globals, receiver.as_val(), name_arg)?;
-
     let mut current = if path.start_at_object {
         globals.store[OBJECT_CLASS].get_module()
     } else {
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+    for i in 0..path.segs.len() {
         // A name no Symbol exists for is not defined anywhere.
-        let ConstSeg::Id(id) = seg else {
+        let ConstSeg::Id(id) = path.seg(i) else {
             return Ok(false);
         };
         if Some(i) == last_idx {
@@ -1899,7 +1958,7 @@ fn probe_constant_path(
             None => return Ok(false),
         }
     }
-    Err(path.bad.take().unwrap())
+    Err(path.bad_error(globals, receiver.as_val()))
 }
 
 ///
@@ -1976,7 +2035,9 @@ fn const_source_location(
 ) -> Result<Value> {
     let inherit = lfp.try_arg(1).is_none() || lfp.arg(1).as_bool();
     let module = lfp.self_val().as_class();
-    let result = lookup_constant_with_owner(vm, globals, module, lfp.arg(0), inherit)?;
+    let result = with_constant_path(vm, globals, lfp.arg(0), |_, globals, path| {
+        lookup_constant_with_owner(globals, module, path, inherit)
+    })?;
     match result {
         // Constant found and recorded by user code. Return [file, line].
         Some((owner_id, Some((file, line)))) => {
@@ -2033,27 +2094,23 @@ fn caller_source_location_with_pc(
 
 /// Walk a (possibly scoped) constant path and return the (defining class
 /// id, optional source location) of the resolved constant. Returns
-/// `Ok(None)` when no segment in the path resolves. The argument is
-/// coerced through `#to_str` like `Module#const_get`, with the same
-/// `::`-split rules.
+/// `Ok(None)` when no segment in the path resolves. The path is read as
+/// `Module#const_get` reads it (see [`with_constant_path`]).
 fn lookup_constant_with_owner(
-    vm: &mut Executor,
     globals: &mut Globals,
     receiver: Module,
-    name_arg: Value,
+    path: ConstPath,
     inherit: bool,
 ) -> Result<Option<(ClassId, Option<(String, u32)>)>> {
-    let mut path = constant_path_segments(vm, globals, receiver.as_val(), name_arg)?;
-
     let mut current = if path.start_at_object {
         globals.store[OBJECT_CLASS].get_module()
     } else {
         receiver
     };
     let last_idx = path.last_idx();
-    for (i, seg) in std::mem::take(&mut path.segs).into_iter().enumerate() {
+    for i in 0..path.segs.len() {
         // A name no Symbol exists for is not defined anywhere.
-        let ConstSeg::Id(id) = seg else {
+        let ConstSeg::Id(id) = path.seg(i) else {
             return Ok(None);
         };
         // First segment honours `inherit`; later segments are looked
@@ -2098,7 +2155,7 @@ fn lookup_constant_with_owner(
             None => return Err(path.not_a_module(&globals.store)),
         }
     }
-    Err(path.bad.take().unwrap())
+    Err(path.bad_error(globals, receiver.as_val()))
 }
 
 ///
@@ -9363,6 +9420,64 @@ mod tests {
             [(c.send(:alias_method, bad, :m) rescue [$!.class, $!.message]),
              (c.send(:alias_method, o, :m) rescue [$!.class, $!.message])]
             "#,
+        );
+    }
+
+    /// `const_get` / `const_defined?` with a String path while the Ruby
+    /// the walk runs for a segment — an autoload, a `const_missing`, each
+    /// running `GC.start` here — collects. A segment's Symbol is looked
+    /// for, and its String or "wrong constant name" NameError made, only
+    /// when the walk reaches it, so nothing made before is freed under
+    /// it, and a name the autoloaded file defined is found; the String a
+    /// `#to_str` answered stays reachable for the messages.
+    #[test]
+    fn const_path_walk_survives_collections() {
+        run_test_once(
+            r##"
+            r = []
+            paths = [1, 2].map { "/tmp/monoruby_const_path_gc_#{_1}_#{Process.pid}.rb" }
+            File.write(paths[0], <<~RUBY)
+              module CgGcFoo
+                GC.start
+                $cg_junk = Array.new(3000) { "y" * 40 }
+                class Qx7Widget; end
+              end
+            RUBY
+            File.write(paths[1], <<~RUBY)
+              module CgGcBar
+                GC.start
+                $cg_junk = Array.new(3000) { "y" * 40 }
+                class Qx8Gadget; end
+              end
+            RUBY
+            autoload :CgGcFoo, paths[0]
+            autoload :CgGcBar, paths[1]
+            class CgGcHost
+              def self.const_missing(n)
+                GC.start
+                $cg_junk = Array.new(3000) { "y" * 40 }
+                case n.to_s
+                when /\ACgGcBaz/ then const_set(n, Module.new)
+                when "CgGcNum" then 1
+                else super
+                end
+              end
+            end
+            class CgGcPath
+              def initialize(*parts) = @parts = parts
+              def to_str = @parts.join
+            end
+            r << Object.const_get("CgGcFoo::" + "Qx7" + "Widget").name
+            r << Object.const_defined?("CgGcBar::" + "Qx8" + "Gadget")
+            ["CgGcBaz1::bad_name", "CgGcBaz2::" + "Zq9" + "Thing",
+             CgGcPath.new("CgGc", "Baz3::"), CgGcPath.new("CgGc", "Num::X")].each do |name|
+              r << CgGcHost.const_get(name)
+            rescue NameError, TypeError => e
+              r << [e.class, e.message]
+            end
+            paths.each { File.delete(_1) }
+            r
+            "##,
         );
     }
 }

@@ -3752,30 +3752,47 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // default (no exception), not an error. It is `system`'s own option,
     // so it is taken out before the rest reaches the spawn parser.
     let mut exception = false;
-    if argv.len() > 1
-        && let Some(h) = argv.last().unwrap().try_hash_ty()
-    {
-        let key = Value::symbol(IdentId::get_id("exception"));
-        if let Some(v) = h.get(key, vm, globals)? {
-            if !v.is_nil() {
-                exception = bool_expected(&globals.store, "exception", v)?;
-            }
-            let mut rest = RubyMap::default();
-            for (k, v) in h.iter() {
-                if k != key {
+    let spec = vm.with_temp_scope(|vm| {
+        if argv.len() > 1
+            && let Some(h) = argv.last().unwrap().try_hash_ty()
+        {
+            let key = Value::symbol(IdentId::get_id("exception"));
+            if let Some(v) = h.get(key, vm, globals)? {
+                if !v.is_nil() {
+                    exception = bool_expected(&globals.store, "exception", v)?;
+                }
+                // The other options go to the spawn parser as a Hash made
+                // here, of a snapshot of the caller's pairs. Making it runs
+                // Ruby (a key's `#hash`), and so does parsing it (`chdir:`'s
+                // `#to_path`, `umask:`'s `#to_int`, ...). That Ruby may take
+                // the pairs out of the caller's Hash, so they, and then the
+                // new Hash, stay on the temp stack until the parser returns.
+                // Otherwise a collection there frees them.
+                let pairs: Vec<(Value, Value)> = h.iter().filter(|&(k, _)| k != key).collect();
+                for &(k, v) in &pairs {
+                    vm.temp_push(k);
+                    vm.temp_push(v);
+                }
+                let mut rest = RubyMap::default();
+                for (k, v) in pairs {
                     rest.insert(k, v, vm, globals)?;
                 }
-            }
-            argv.pop();
-            if !rest.is_empty() {
-                argv.push(Value::hash(rest));
+                argv.pop();
+                if !rest.is_empty() {
+                    let rest = Value::hash(rest);
+                    vm.temp_push(rest);
+                    argv.push(rest);
+                }
             }
         }
-    }
-    let simple =
-        argv[0].is_rstring().is_some() && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
-    if !simple {
-        let spec = crate::builtins::spawn::parse_spawn_args(vm, globals, &argv)?;
+        let simple =
+            argv[0].is_rstring().is_some() && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
+        if simple {
+            return Ok(None);
+        }
+        crate::builtins::spawn::parse_spawn_args(vm, globals, &argv).map(Some)
+    })?;
+    if let Some(spec) = spec {
         let pid = match crate::builtins::spawn::spawn_reporting_child(vm, globals, &spec)? {
             Ok(pid) => pid,
             // The child could not exec (an `Errno`): `nil`, as for the
@@ -4798,9 +4815,18 @@ fn catch_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     };
     let bh = lfp.expect_block()?;
     let saved_errinfo = vm.errinfo();
-    vm.push_catch_tag(tag);
-    let res = vm.invoke_block_once(globals, bh, &[tag]);
-    vm.pop_catch_tag();
+    // The tag made here is held by nothing else — the catch tags are
+    // bare ids, and a block that takes no parameter keeps no copy — so
+    // it stays on the temp stack while the block runs. A collection
+    // would free it, and `throw` of a later object made in its cell would
+    // be caught here.
+    let res = vm.with_temp_scope(|vm| {
+        vm.temp_push(tag);
+        vm.push_catch_tag(tag);
+        let res = vm.invoke_block_once(globals, bh, &[tag]);
+        vm.pop_catch_tag();
+        res
+    });
     match res {
         Ok(val) => Ok(val),
         Err(err) => {
@@ -5557,15 +5583,6 @@ fn class_predicate_under_set_guard(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/enum_for.html]
 #[monoruby_builtin]
 fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    // When a block is supplied, it becomes the size proc:
-    //   `to_enum(:step, limit, step) { step_size }`
-    // CRuby evaluates this lazily when `.size` is called on the
-    // returned Enumerator.
-    let size = if let Some(bh) = lfp.block() {
-        Some(vm.generate_proc(globals, bh, pc)?.as_val())
-    } else {
-        None
-    };
     let args = lfp.arg(0).as_array();
     let (method, args) = if args.is_empty() {
         (IdentId::EACH, vec![])
@@ -5574,6 +5591,17 @@ fn to_enum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
             args[0].expect_symbol_or_to_str(vm, globals)?,
             args[1..].to_vec(),
         )
+    };
+    // When a block is supplied, it becomes the size proc:
+    //   `to_enum(:step, limit, step) { step_size }`
+    // CRuby evaluates this lazily when `.size` is called on the
+    // returned Enumerator. The Proc is made after the method name's
+    // `#to_str` has run: nothing holds it until the Enumerator does,
+    // and a collection in that call would free it.
+    let size = if let Some(bh) = lfp.block() {
+        Some(vm.generate_proc(globals, bh, pc)?.as_val())
+    } else {
+        None
     };
     // An empty keyword hash is no keywords at all, not a positional
     // `{}` for the replay to hand the method.
@@ -12903,6 +12931,114 @@ BTL_ABS = caller_locations(0)[0].absolute_path
             res << acc
             res
             "#,
+        );
+    }
+
+    /// `system` with `exception:` and other spawn options hands the spawn
+    /// parser a Hash of the rest made for it, which stays reachable while
+    /// the parser runs Ruby: here `chdir:`'s `#to_path`, which collects
+    /// and then fills the heap with small Hashes.
+    #[test]
+    fn system_rest_options_survive_collection() {
+        run_test_once(
+            r##"
+            class SysGcPath
+              def to_path
+                GC.start
+                $sys_junk = Array.new(20000) { {zz1: 1, zz2: 2, zz3: 3} }
+                "/tmp"
+              end
+            end
+            r = []
+            5.times do
+              r << system("true", chdir: SysGcPath.new, umask: 0o22, pgroup: nil, exception: false)
+            rescue => e
+              r << "#{e.class}: #{e.message}"
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `system` with `exception:` copies the other options into a Hash of
+    /// their own for the spawn parser. Copying runs a key's `#hash`,
+    /// which here takes `chdir:` out of the caller's Hash and collects.
+    /// The pairs copied before stay reachable. (CRuby makes no such Hash
+    /// and calls no `#hash`.)
+    #[test]
+    fn system_rest_options_survive_collection_in_key_hash() {
+        run_test_once(
+            r##"
+            class SysGcPath2
+              def to_path = "/tmp"
+            end
+            class SysGcFds < Array
+              def hash
+                if $sys_opts
+                  h = $sys_opts
+                  $sys_opts = nil
+                  h.delete(:chdir)
+                  GC.start
+                  $sys_junk = Array.new(20000) { {zz1: 1, zz2: 2, zz3: 3} }
+                end
+                1
+              end
+            end
+            # Made in a method, so that no frame here holds the options.
+            def sys_gc_opts = {chdir: SysGcPath2.new, SysGcFds[1] => File::NULL, exception: false}
+            r = []
+            5.times do
+              $sys_opts = sys_gc_opts
+              r << system("true", $sys_opts)
+            rescue => e
+              r << "#{e.class}: #{e.message}"
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `catch` with no tag makes one, which nothing else holds while the
+    /// block runs (the block takes no parameter). Once collected, a
+    /// `throw` of a later object made in its cell was caught here.
+    #[test]
+    fn catch_implicit_tag_survives_collection() {
+        run_test_once(
+            r##"
+            catch do
+              GC.start
+              1.times {}
+              objs = Array.new(100_000) { Object.new }
+              objs.each do |o|
+                throw o, :caught_wrong_tag
+              rescue UncaughtThrowError
+              end
+              :normal
+            end
+            "##,
+        );
+    }
+
+    /// `to_enum` with a size block makes the size Proc only once the
+    /// method name's `#to_str` — which collects here — has run.
+    #[test]
+    fn to_enum_size_proc_survives_name_conversion() {
+        run_test_once(
+            r##"
+            class EnumGcName
+              def to_str
+                GC.start
+                $enum_junk = Array.new(3000) { Object.new }
+                "each"
+              end
+            end
+            r = []
+            5.times do
+              e = [1, 2, 3].to_enum(EnumGcName.new) { 42 + 0 }
+              r << e.size
+            end
+            r.uniq
+            "##,
         );
     }
 }

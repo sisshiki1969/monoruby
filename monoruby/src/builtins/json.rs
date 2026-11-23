@@ -348,7 +348,7 @@ impl ParserConfig {
             ));
         };
         let pairs: Vec<(Value, Value)> = hash.iter().collect();
-        for (key, val) in pairs {
+        for &(key, val) in &pairs {
             let Some(key) = key.try_symbol() else {
                 continue;
             };
@@ -362,7 +362,22 @@ impl ParserConfig {
                 "on_load" => config.on_load = val.as_bool().then_some(val),
                 "allow_duplicate_key" => config.on_duplicate_key = OnDuplicateKey::from_option(val),
                 "decimal_class" if val.as_bool() => {
-                    config.decimal = Self::decimal_class(vm, globals, val)?;
+                    // `respond_to?` runs Ruby, which may take `on_load`'s
+                    // proc, or the options still to be read, out of `opts`:
+                    // then nothing but this config or `pairs` holds them,
+                    // so they stay on the temp stack meanwhile, or a
+                    // collection there frees them.
+                    let held: Vec<Value> = config
+                        .on_load
+                        .into_iter()
+                        .chain(pairs.iter().map(|&(_, v)| v))
+                        .collect();
+                    config.decimal = vm.with_temp_scope(|vm| {
+                        for v in held {
+                            vm.temp_push(v);
+                        }
+                        Self::decimal_class(vm, globals, val)
+                    })?;
                 }
                 _ => {}
             }
@@ -488,15 +503,25 @@ fn parser_config_parse(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let config = match globals
+    let stored = globals
         .store
-        .get_ivar(lfp.self_val(), IdentId::get_id(PARSER_CONFIG_IVAR))
-    {
+        .get_ivar(lfp.self_val(), IdentId::get_id(PARSER_CONFIG_IVAR));
+    let config = match stored {
         Some(v) => ParserConfig::from_value(v),
         None => ParserConfig::zeroed(),
     };
-    let source = convert_encoding(vm, globals, lfp.arg(0))?;
-    parse_bytes(vm, globals, &config, source)
+    // The source's `#to_str` runs Ruby, which may initialize this
+    // ParserConfig again and so replace the Array the config was read
+    // from. Its `on_load` proc and `decimal_class` would then be held only
+    // by the copy, so the Array stays on the temp stack. Otherwise a
+    // collection there frees them.
+    vm.with_temp_scope(|vm| {
+        if let Some(stored) = stored {
+            vm.temp_push(stored);
+        }
+        let source = convert_encoding(vm, globals, lfp.arg(0))?;
+        parse_bytes(vm, globals, &config, source)
+    })
 }
 
 ///
@@ -546,6 +571,15 @@ fn parse_bytes(
     // stack), so an `on_load` proc or a `decimal_class` call that
     // collects cannot take it.
     vm.with_temp_scope(|vm| {
+        // So do the config's own objects: once `ParserConfig::new`'s
+        // `respond_to?` has changed the options, nothing else may hold
+        // them.
+        if let Some(on_load) = config.on_load {
+            vm.temp_push(on_load);
+        }
+        if let Some((decimal, _)) = config.decimal {
+            vm.temp_push(decimal);
+        }
         let mut parser = Parser {
             src: &src,
             cur: 0,
@@ -1475,9 +1509,11 @@ impl GenConfig {
         Ok(())
     }
 
-    /// The objects the config holds, which may be copies nothing else
-    /// refers to (`string_config`, `to_proc`).
-    fn values(&self) -> impl Iterator<Item = Value> {
+    /// How many fields hold objects (`object_fields`).
+    const OBJECT_FIELDS: usize = 6;
+
+    /// The fields that hold objects.
+    fn object_fields(&self) -> [Option<Value>; Self::OBJECT_FIELDS] {
         [
             self.indent,
             self.space,
@@ -1486,8 +1522,12 @@ impl GenConfig {
             self.array_nl,
             self.as_json,
         ]
-        .into_iter()
-        .flatten()
+    }
+
+    /// The objects the config holds, which may be copies nothing else
+    /// refers to (`string_config`, `to_proc`).
+    fn values(&self) -> impl Iterator<Item = Value> {
+        self.object_fields().into_iter().flatten()
     }
 
     /// `configure_state`: the options of `opts` (nil, or a Hash) over
@@ -1504,7 +1544,7 @@ impl GenConfig {
             ));
         };
         let pairs: Vec<(Value, Value)> = hash.iter().collect();
-        for (key, val) in pairs {
+        for &(key, val) in &pairs {
             let Some(key) = key.try_symbol() else {
                 continue;
             };
@@ -1528,7 +1568,20 @@ impl GenConfig {
                 "allow_duplicate_key" => self.on_duplicate_key = OnDuplicateKey::from_option(val),
                 "as_json" => {
                     self.as_json = if val.as_bool() {
-                        Some(convert_to_proc(vm, globals, val)?)
+                        // `#to_proc` runs Ruby. Nothing but this config
+                        // holds the copies made so far (`string_config`),
+                        // nor anything but `pairs` the options still to be
+                        // read once that Ruby changes `opts`: they stay on
+                        // the temp stack meanwhile, or a collection there
+                        // frees them.
+                        let held: Vec<Value> =
+                            self.values().chain(pairs.iter().map(|&(_, v)| v)).collect();
+                        Some(vm.with_temp_scope(|vm| {
+                            for v in held {
+                                vm.temp_push(v);
+                            }
+                            convert_to_proc(vm, globals, val)
+                        })?)
                     } else {
                         None
                     }
@@ -1697,16 +1750,22 @@ fn partial_generate(
     let capacity = (config.buffer_initial_length as usize).min(1 << 16);
     // Everything the generation makes and still needs — the config's
     // copies, what `as_json` / `to_s` hand back, transcoded strings —
-    // is kept on the temp stack across the Ruby calls it makes.
+    // is kept on the temp stack across the Ruby calls it makes: what is
+    // made for an Array or a Hash until it is written, and what the
+    // generation needs to the end in the slots `Generator::roots` names.
     vm.with_temp_scope(|vm| {
-        for v in config.values() {
-            vm.temp_push(v);
+        let roots = vm.temp_len();
+        for v in config.object_fields() {
+            vm.temp_push(v.unwrap_or_default());
         }
+        // `vstate`'s.
+        vm.temp_push(Value::nil());
         let mut generator = Generator {
             depth: config.depth,
             config,
             buf: Vec::with_capacity(capacity),
             vstate: None,
+            roots,
         };
         match func {
             Func::Any => generator.generate(vm, globals, obj)?,
@@ -1744,9 +1803,20 @@ struct Generator {
     buf: Vec<u8>,
     depth: i64,
     /// The State a `to_json` this generation calls is handed: made the
-    /// first time one is needed (`vstate_spill`), and kept on the temp
-    /// stack.
+    /// first time one is needed (`vstate_spill`), and held in its slot of
+    /// `roots`.
     vstate: Option<Value>,
+    /// The first of the temp-stack slots that hold what the generation
+    /// needs until it ends, though it may be made while an Array or a
+    /// Hash is written, which lets go of what was pushed meanwhile once
+    /// it is written (`release`): the objects of `config` — the config
+    /// read back from `vstate` once a `to_json` has run, which Ruby may
+    /// then take off the State — one per `GenConfig::object_fields`,
+    /// then `vstate`. They are pushed before anything is written, and
+    /// overwritten as these change. Ruby cannot reach the temp stack, as
+    /// it could reach an Array holding them (through
+    /// `ObjectSpace.each_object`) and empty it.
+    roots: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1802,7 +1872,7 @@ impl Generator {
             return Ok(vstate);
         }
         let vstate = Value::object(state_class()?);
-        vm.temp_push(vstate);
+        vm.temp_set(self.roots + GenConfig::OBJECT_FIELDS, vstate);
         self.config.write(&mut globals.store, vstate)?;
         self.vstate = Some(vstate);
         Ok(vstate)
@@ -1832,7 +1902,16 @@ impl Generator {
             None,
             None,
         )?;
-        self.config = GenConfig::read(&globals.store, vstate);
+        let config = GenConfig::read(&globals.store, vstate);
+        // The `to_json` may have given the State objects of its own,
+        // which the generation goes on with. Ruby it runs later — a
+        // key's `to_s`, `as_json` — may replace them on the State again,
+        // and collect, so they are held in `roots` from here on, in place
+        // of the ones the generation no longer uses.
+        for (i, v) in config.object_fields().into_iter().enumerate() {
+            vm.temp_set(self.roots + i, v.unwrap_or_default());
+        }
+        self.config = config;
         Ok(result)
     }
 
@@ -2231,14 +2310,20 @@ impl Generator {
         Ok(s)
     }
 
-    /// `generate_json_object`.
+    /// `generate_json_object`. The Hash is held while it is written: a
+    /// key's `to_s` or a value's `to_json` may take it off whatever held
+    /// it, and collect (CRuby's `obj` is on the C stack). What is held
+    /// for it is let go once it is written (see `release`).
     fn object(&mut self, vm: &mut Executor, globals: &mut Globals, obj: Value) -> Result<()> {
+        let saved = vm.temp_len();
+        vm.temp_push(obj);
         let depth = self.increase_depth(vm, globals)?;
 
         let hash = obj.as_hash();
         if hash.len() == 0 {
             self.buf.extend_from_slice(b"{}");
             self.depth -= 1;
+            Self::release(vm, saved);
             return Ok(());
         }
 
@@ -2343,17 +2428,30 @@ impl Generator {
             self.append_indent(depth);
         }
         self.buf.push(b'}');
+        Self::release(vm, saved);
         Ok(())
     }
 
-    /// `generate_json_array`: the length is read afresh at each
-    /// element, as `RARRAY_LEN` is.
+    /// Let go of what was pushed for an Array or a Hash since *saved*,
+    /// once it is written. Not in a `with_temp_scope`, which would cost
+    /// frames at every nesting level: an error leaves this to the scope
+    /// `partial_generate` opens, as the generation stops there anyway.
+    fn release(vm: &mut Executor, saved: usize) {
+        vm.temp_clear(saved);
+    }
+
+    /// `generate_json_array`, the Array held while it is written, as a
+    /// Hash is (`object`). The length is read afresh at each element, as
+    /// `RARRAY_LEN` is.
     fn array(&mut self, vm: &mut Executor, globals: &mut Globals, obj: Value) -> Result<()> {
+        let saved = vm.temp_len();
+        vm.temp_push(obj);
         let depth = self.increase_depth(vm, globals)?;
 
         if obj.as_array().len() == 0 {
             self.buf.extend_from_slice(b"[]");
             self.depth -= 1;
+            Self::release(vm, saved);
             return Ok(());
         }
 
@@ -2377,6 +2475,7 @@ impl Generator {
             self.append_indent(depth);
         }
         self.buf.push(b']');
+        Self::release(vm, saved);
         Ok(())
     }
 }
