@@ -3366,13 +3366,14 @@ fn env_to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                     arr.len(),
                 )));
             }
-            // `insert` runs the key's `#hash` / `#eql?`, and the Array the
-            // block answered — the only thing holding the value — is not
-            // referenced from anywhere a collection looks.
-            vm.temp_push(arr.into());
-            vm.temp_at(map_idx)
-                .as_hash()
-                .insert(arr[0], arr[1], vm, globals)?;
+            // `insert` runs the key's `#hash` / `#eql?`, and nothing a
+            // collection looks at holds the pair: the Array the block
+            // answered is referenced from nowhere, and Ruby code there can
+            // take the key and the value out of it anyway. Root the two.
+            let (k, v) = (arr[0], arr[1]);
+            vm.temp_push(k);
+            vm.temp_push(v);
+            vm.temp_at(map_idx).as_hash().insert(k, v, vm, globals)?;
             vm.temp_clear(map_idx + 1);
         }
         Ok(vm.temp_at(map_idx))
@@ -3392,7 +3393,10 @@ fn env_to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
 /// *name* or *value* is not a String and does not respond to `#to_str`,
 /// `ArgumentError` when either holds a NUL or is in an
 /// ASCII-incompatible encoding, and `Errno::EINVAL` when *name* is
-/// empty or contains `'='` — in that order (see [`env_aset`]).
+/// empty or contains `'='` — in that order (see [`env_aset`]). With a
+/// `nil` *value* such a name is deleted as [`env_delete`] deletes it:
+/// nothing happens unless `getenv(3)` finds a variable for it, and then
+/// `unsetenv(3)`'s `Errno::EINVAL` is raised.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/=5b=5d=3d.html]
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/store.html]
@@ -3414,7 +3418,9 @@ fn env_index_assign(
 ///
 /// Removes the environment variable named *name* (`unsetenv(3)`).
 /// Returns the previous value, or the block's return value (if a
-/// block is given and the variable was not set), or `nil`.
+/// block is given and the variable was not set), or `nil`. Raises
+/// `Errno::EINVAL` when `getenv(3)` finds a variable for a name
+/// `unsetenv` rejects (see [`env_delete_name`]).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/ENV/s/delete.html]
 #[monoruby_builtin]
@@ -5034,8 +5040,9 @@ mod tests {
         run_test_error(r##"ENV["foo=bar"] = "x""##);
     }
 
-    /// Per spec: `ENV[invalid_key] = nil` is a silent no-op (does *not*
-    /// raise EINVAL) so library code can clear keys defensively.
+    /// `ENV[invalid_key] = nil` is a silent no-op when `getenv` finds
+    /// nothing for the name, as here (`a` is not set): it raises
+    /// `unsetenv`'s EINVAL only when it does (`env_delete_name_with_equals`).
     #[test]
     fn env_index_assign_invalid_key_with_nil_is_noop() {
         let _g = env_lock();
@@ -8090,9 +8097,11 @@ mod tests {
         );
     }
 
-    /// `ENV.to_h { }` keeps the `[key, value]` Array the block answered
+    /// `ENV.to_h { }` keeps the key and the value the block answered
     /// alive while the key's `#hash` runs — here a collection, then enough
-    /// allocation to reuse whatever it freed.
+    /// allocation to reuse whatever it freed. Both when the pair Array is
+    /// fresh and when the `#hash` empties it, so the value is held by
+    /// nothing else.
     #[test]
     fn env_to_h_block_pair_survives_gc_in_hash() {
         let _g = env_lock();
@@ -8103,6 +8112,7 @@ mod tests {
               def initialize(s) = @s = s
               def hash
                 if @s == "MONORUBY_ENV_TOH"
+                  $pair&.clear
                   GC.start
                   $junk = Array.new(3000) { |i| "junk#{i}" }
                 end
@@ -8110,14 +8120,18 @@ mod tests {
               end
               def eql?(o) = o.is_a?(EnvToHKey) && @s == o.s
             end
+            check = ->(h) do
+              GC.start
+              [
+                h.find { |k, _| k.s == "MONORUBY_ENV_TOH" }&.last,
+                h.count { |_, v| !(v.is_a?(String) && v.start_with?("fresh-")) },
+              ]
+            end
             ENV["MONORUBY_ENV_TOH"] = "1"
-            h = ENV.to_h { |k, v| [EnvToHKey.new(k), "fresh-" + v] }
+            fresh = ENV.to_h { |k, v| [EnvToHKey.new(k), "fresh-" + v] }
+            emptied = ENV.to_h { |k, v| $pair = [EnvToHKey.new(k), "fresh-" + v] }
             ENV.delete("MONORUBY_ENV_TOH")
-            GC.start
-            [
-              h.find { |k, _| k.s == "MONORUBY_ENV_TOH" }&.last,
-              h.count { |_, v| !(v.is_a?(String) && v.start_with?("fresh-")) },
-            ]
+            [check.(fresh), check.(emptied)]
             "##,
         );
     }
