@@ -1941,20 +1941,26 @@ fn zone_field(
 /// built at `+09:00` each describe only the clock they read. An object
 /// with no fields at all (an Integer) *is* its own epoch.
 fn zone_wall_clock_epoch(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i64> {
-    let Some(year) = zone_field(vm, globals, v, &["year"])? else {
-        return value_epoch_i64(vm, globals, v);
-    };
-    let month = zone_field(vm, globals, v, &["mon", "month"])?.unwrap_or(1);
-    let day = zone_field(vm, globals, v, &["mday", "day"])?.unwrap_or(1);
-    let hour = zone_field(vm, globals, v, &["hour"])?.unwrap_or(0);
-    let min = zone_field(vm, globals, v, &["min"])?.unwrap_or(0);
-    let sec = zone_field(vm, globals, v, &["sec"])?.unwrap_or(0);
-    let bad = || MonorubyErr::argumenterr("argument out of range");
-    let naive = NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
-        .ok_or_else(bad)?
-        .and_hms_opt(hour as u32, min as u32, sec as u32)
-        .ok_or_else(bad)?;
-    Ok(naive.and_utc().timestamp())
+    vm.with_temp_scope(|vm| {
+        // `v` is the fresh object `#utc_to_local` answered. Each field
+        // call has it as its receiver, but nothing holds it between them,
+        // while a field's `#to_int` runs and can collect.
+        vm.temp_push(v);
+        let Some(year) = zone_field(vm, globals, v, &["year"])? else {
+            return value_epoch_i64(vm, globals, v);
+        };
+        let month = zone_field(vm, globals, v, &["mon", "month"])?.unwrap_or(1);
+        let day = zone_field(vm, globals, v, &["mday", "day"])?.unwrap_or(1);
+        let hour = zone_field(vm, globals, v, &["hour"])?.unwrap_or(0);
+        let min = zone_field(vm, globals, v, &["min"])?.unwrap_or(0);
+        let sec = zone_field(vm, globals, v, &["sec"])?.unwrap_or(0);
+        let bad = || MonorubyErr::argumenterr("argument out of range");
+        let naive = NaiveDate::from_ymd_opt(year as i32, month as u32, day as u32)
+            .ok_or_else(bad)?
+            .and_hms_opt(hour as u32, min as u32, sec as u32)
+            .ok_or_else(bad)?;
+        Ok(naive.and_utc().timestamp())
+    })
 }
 
 /// A zoned time's derived offset must be within ±24h.
@@ -1984,26 +1990,32 @@ fn time_new_with_timezone(
     {
         return Ok(None);
     }
-    // The Time-like argument is a UTC time with the requested wall clock.
-    let wall = Value::new_time(TimeInner::Utc(naive.and_utc()));
-    let wall_i = naive.and_utc().timestamp();
-    let result = vm.invoke_method_inner(
-        globals,
-        IdentId::get_id("local_to_utc"),
-        tz,
-        &[wall],
-        None,
-        None,
-    )?;
-    let offset = wall_i - value_epoch_i64(vm, globals, result)?;
-    let fixed = zone_offset_fixed(offset)?;
-    let dt = fixed
-        .from_local_datetime(&naive)
-        .single()
-        .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
-    let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed { exact: None }), cls);
-    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
-    Ok(Some(t))
+    vm.with_temp_scope(|vm| {
+        // `tz` can be the fresh object a `.find_timezone` answered, which
+        // nothing else holds while `#to_i` runs on the result (it can
+        // collect) before `tz` is stored as the zone.
+        vm.temp_push(tz);
+        // The Time-like argument is a UTC time with the requested wall clock.
+        let wall = Value::new_time(TimeInner::Utc(naive.and_utc()));
+        let wall_i = naive.and_utc().timestamp();
+        let result = vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("local_to_utc"),
+            tz,
+            &[wall],
+            None,
+            None,
+        )?;
+        let offset = wall_i - value_epoch_i64(vm, globals, result)?;
+        let fixed = zone_offset_fixed(offset)?;
+        let dt = fixed
+            .from_local_datetime(&naive)
+            .single()
+            .ok_or_else(|| MonorubyErr::argumenterr("argument out of range"))?;
+        let t = Value::new_time_with_class(TimeInner::Local(dt, Zone::Fixed { exact: None }), cls);
+        globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
+        Ok(Some(t))
+    })
 }
 
 /// `Time.at(t, in: tz)` with a timezone object. `tz` must respond to
@@ -2015,15 +2027,21 @@ fn time_at_with_timezone(
     tz: Value,
     cls: ClassId,
 ) -> Result<Option<Value>> {
-    let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
-        return Ok(None);
-    };
-    let t = Value::new_time_with_class(
-        TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact: None }),
-        cls,
-    );
-    globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
-    Ok(Some(t))
+    vm.with_temp_scope(|vm| {
+        // `tz` can be the fresh object a `.find_timezone` answered, which
+        // nothing else holds while the fields of `#utc_to_local`'s result
+        // are read (Ruby that can collect) before it is stored as the zone.
+        vm.temp_push(tz);
+        let Some(fixed) = utc_to_local_fixed(vm, globals, dt, tz)? else {
+            return Ok(None);
+        };
+        let t = Value::new_time_with_class(
+            TimeInner::Local(dt.with_timezone(&fixed), Zone::Fixed { exact: None }),
+            cls,
+        );
+        globals.store.set_ivar(t, IdentId::get_id(ZONE_IVAR), tz)?;
+        Ok(Some(t))
+    })
 }
 
 /// Resolve a String zone name to a timezone object via the receiver
@@ -6224,6 +6242,62 @@ mod tests {
             probes = []
             t.define_singleton_method(:respond_to?) { |*a| probes << a; false }
             [t <=> 2, 2 <=> t, probes]
+            "##,
+        );
+    }
+
+    /// The zone object a `.find_timezone` hook answers is fresh, and so is
+    /// what its `#local_to_utc` / `#utc_to_local` returns. Both used to
+    /// wait in Rust locals while the result's `#to_i` and fields (and a
+    /// field's `#to_int`) ran, so a collection there freed the zone the
+    /// new Time then kept, or the object the next field was read from.
+    #[test]
+    fn timezone_objects_survive_collections() {
+        run_test_once(
+            r##"
+            def gc_churn
+              GC.start
+              $junk = Array.new(2000) { [_1] }
+            end
+            class GcZoneYear
+              def initialize(v) = @v = v
+              def to_int
+                gc_churn
+                @v
+              end
+            end
+            class GcZoneWall
+              def initialize(t) = @t = t
+              def year = GcZoneYear.new(@t.year)
+              def mon = @t.mon
+              def mday = @t.mday
+              def hour = @t.hour
+              def min = @t.min
+              def sec = @t.sec
+              def isdst = false
+              def subsec = 0
+              def utc_offset = 0
+              def to_i
+                gc_churn
+                @t.to_i
+              end
+            end
+            class GcZone
+              def initialize(name) = @name = name + "-" + "x" * 30
+              def local_to_utc(t) = GcZoneWall.new(t - 3600)
+              def utc_to_local(t) = GcZoneWall.new(t + 3600)
+              def name = @name
+            end
+            class GcZoneTime < Time
+              def self.find_timezone(name) = GcZone.new(name)
+            end
+            3.times.map do
+              a = GcZoneTime.new(2000, 1, 2, 3, 4, 5, "Foo/Bar")
+              b = GcZoneTime.at(0).utc.getlocal("Foo/Bar")
+              c = Time.at(0, in: GcZone.new("Baz"))
+              [a.utc_offset, a.zone.name, a.hour, b.utc_offset, b.zone.name, b.hour,
+               c.utc_offset, c.zone.name, c.year]
+            end.uniq
             "##,
         );
     }

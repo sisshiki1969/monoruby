@@ -440,6 +440,11 @@ fn negative_p(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<bool
 /// of the last term (negative for an empty sequence — there is no
 /// `Tail` then), `adjusted` says the end was excluded and exactly hit,
 /// `last` is the last term.
+///
+/// Both constructors push `len_1` and `last` onto the temp stack as they
+/// make them, so a caller runs them inside `with_temp_scope`: the
+/// numbers' operators are Ruby that can collect, and the two values are
+/// fresh objects nothing else holds until the caller is done with them.
 struct Tail {
     len_1: Value,
     last: Value,
@@ -459,6 +464,7 @@ impl Tail {
     ) -> Result<Option<Self>> {
         let diff = call(vm, globals, e, IdentId::_SUB, b)?;
         let len_1 = num_idiv(vm, globals, diff, s)?;
+        vm.temp_push(len_1);
         if negative_p(vm, globals, len_1)? {
             return Ok(None);
         }
@@ -468,6 +474,7 @@ impl Tail {
         if adjusted {
             last = call(vm, globals, last, IdentId::_SUB, s)?;
         }
+        vm.temp_push(last);
         Ok(Some(Tail {
             len_1,
             last,
@@ -486,11 +493,13 @@ impl Tail {
     ) -> Result<Option<Self>> {
         let diff = int_op(vm, globals, e, IdentId::_SUB, b)?;
         let len_1 = num_idiv(vm, globals, diff, s)?;
+        vm.temp_push(len_1);
         if negative_p(vm, globals, len_1)? {
             return Ok(None);
         }
         let prod = int_op(vm, globals, s, IdentId::_MUL, len_1)?;
         let last = int_op(vm, globals, b, IdentId::_ADD, prod)?;
+        vm.temp_push(last);
         let adjusted = excl && call(vm, globals, last, IdentId::_EQ, e)?.as_bool();
         Ok(Some(Tail {
             len_1,
@@ -559,10 +568,11 @@ fn size(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     if let (Some(b), Some(e), Some(s)) = (b.try_fixnum(), e.try_fixnum(), s.try_fixnum()) {
         return Ok(Value::integer(fixnum_count(b, e, s, excl)));
     }
-    match Tail::for_size(vm, globals, b, e, s, excl)? {
+    // The scope holds what `Tail::for_size` makes.
+    vm.with_temp_scope(|vm| match Tail::for_size(vm, globals, b, e, s, excl)? {
         Some(tail) => tail.len(vm, globals),
         None => Ok(Value::integer(0)),
-    }
+    })
 }
 
 /// Extract the native (begin, end, step, exclude_end?) tuple. Owning
@@ -680,28 +690,32 @@ fn first(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // What is left is `Enumerator#first(n)` over `#each`: the terms by
     // repeated addition, which for an endless sequence is `rb_int_plus`.
     let endless = e.is_nil();
-    if !endless && !value_is_zero(s) {
-        let len = match Tail::new(vm, globals, b, e, s, excl)? {
-            Some(tail) => tail.len(vm, globals)?,
-            None => return Ok(Value::array_empty()),
-        };
-        if let Some(len) = len.try_fixnum() {
-            n = n.min(len);
-        }
-    }
-    let mut terms = Vec::with_capacity(n as usize);
-    let mut c = b;
-    for i in 0..n {
-        if i != 0 {
-            c = if endless {
-                int_op(vm, globals, c, IdentId::_ADD, s)?
-            } else {
-                call(vm, globals, c, IdentId::_ADD, s)?
+    vm.with_temp_scope(|vm| {
+        if !endless && !value_is_zero(s) {
+            let len = match Tail::new(vm, globals, b, e, s, excl)? {
+                Some(tail) => tail.len(vm, globals)?,
+                None => return Ok(Value::array_empty()),
             };
+            if let Some(len) = len.try_fixnum() {
+                n = n.min(len);
+            }
         }
-        terms.push(c);
-    }
-    Ok(Value::array_from_vec(terms))
+        // Each `+` is the numbers' own and can collect, so the terms made
+        // so far wait in an Array on the temp stack, not in a Rust Vec.
+        vm.temp_array_new(n as usize);
+        let mut c = b;
+        for i in 0..n {
+            if i != 0 {
+                c = if endless {
+                    int_op(vm, globals, c, IdentId::_ADD, s)?
+                } else {
+                    call(vm, globals, c, IdentId::_ADD, s)?
+                };
+            }
+            vm.temp_array_push(c);
+        }
+        Ok(vm.temp_pop())
+    })
 }
 
 // ─── last ──────────────────────────────────────────────────────────
@@ -739,47 +753,61 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         (Some(b), Some(e), Some(s)) if s != 0 => Some((b, e, s)),
         _ => None,
     };
-    // The number of terms and the last of them.
-    let (len, last) = if let Some((b, e, s)) = fixnums {
-        let count = fixnum_count(b, e, s, excl);
-        if count == 0 {
-            return Ok(empty(arg));
-        }
-        (Value::integer(count), fixnum_term(b, count - 1, s))
-    } else {
-        let Some(tail) = Tail::new(vm, globals, b, e, s, excl)? else {
-            return Ok(empty(arg));
+    vm.with_temp_scope(|vm| {
+        // The number of terms and the last of them.
+        let (len, last) = if let Some((b, e, s)) = fixnums {
+            let count = fixnum_count(b, e, s, excl);
+            if count == 0 {
+                return Ok(empty(arg));
+            }
+            (Value::integer(count), fixnum_term(b, count - 1, s))
+        } else {
+            let Some(tail) = Tail::new(vm, globals, b, e, s, excl)? else {
+                return Ok(empty(arg));
+            };
+            (tail.len(vm, globals)?, tail.last)
         };
-        (tail.len(vm, globals)?, tail.last)
-    };
-    let Some(n_arg) = arg else {
-        return Ok(last);
-    };
-    // The count is clamped to the length *before* NUM2LONG, so one
-    // beyond a `long` takes everything rather than raising.
-    let mut nv = if n_arg.is_integer() {
-        n_arg
-    } else {
-        n_arg.coerce_to_int(vm, globals)?
-    };
-    if call(vm, globals, nv, IdentId::_GT, len)?.as_bool() {
-        nv = len;
-    }
-    let n = nv.num2long(vm, globals)?;
-    if n < 0 {
-        return Err(MonorubyErr::argumenterr("negative array size"));
-    }
-    if let Some((b, e, s)) = fixnums {
-        return Ok(fixnum_terms(b, s, fixnum_count(b, e, s, excl) - n, n));
-    }
-    let back = int_op(vm, globals, s, IdentId::_MUL, nv)?;
-    let mut c = int_op(vm, globals, last, IdentId::_SUB, back)?;
-    let mut terms = Vec::with_capacity(n as usize);
-    for _ in 0..n {
-        c = int_op(vm, globals, c, IdentId::_ADD, s)?;
-        terms.push(c);
-    }
-    Ok(Value::array_from_vec(terms))
+        // Either can be a fresh Bignum (or a user's Numeric) that only
+        // these locals hold while `#to_int`, `>` and the numbers' own
+        // operators below run, and those can collect.
+        vm.temp_push(len);
+        vm.temp_push(last);
+        let Some(n_arg) = arg else {
+            return Ok(last);
+        };
+        // The count is clamped to the length *before* NUM2LONG, so one
+        // beyond a `long` takes everything rather than raising.
+        let mut nv = if n_arg.is_integer() {
+            n_arg
+        } else {
+            n_arg.coerce_to_int(vm, globals)?
+        };
+        if call(vm, globals, nv, IdentId::_GT, len)?.as_bool() {
+            nv = len;
+        }
+        let n = nv.num2long(vm, globals)?;
+        if n < 0 {
+            return Err(MonorubyErr::argumenterr("negative array size"));
+        }
+        if let Some((b, e, s)) = fixnums {
+            return Ok(fixnum_terms(b, s, fixnum_count(b, e, s, excl) - n, n));
+        }
+        let back = int_op(vm, globals, s, IdentId::_MUL, nv)?;
+        let mut c = int_op(vm, globals, last, IdentId::_SUB, back)?;
+        // `c` is one step before the first term, so the Array below never
+        // holds it. It is fresh, and the first `+` can collect before `c`
+        // is in a frame: a non-Integer `c` waits while the step's
+        // `respond_to?` decides whether `s.coerce(c)` is called.
+        vm.temp_push(c);
+        // The terms made so far wait in an Array on the temp stack while
+        // the next `+` runs, as in `first`.
+        vm.temp_array_new(n as usize);
+        for _ in 0..n {
+            c = int_op(vm, globals, c, IdentId::_ADD, s)?;
+            vm.temp_array_push(c);
+        }
+        Ok(vm.temp_pop())
+    })
 }
 
 // ─── [] (Array stride-aware index) ─────────────────────────────────
@@ -1098,5 +1126,95 @@ mod tests {
             "arr = [10, 20, 30, 40, 50]; arr[(-100..5).step(2)] rescue $!.message",
             "arr = [10, 20, 30, 40, 50]; arr[(-100..-90).step(2)] rescue $!.message",
         ]);
+    }
+
+    /// `#first(n)`, `#last`, `#last(n)` and `#size` of a Bignum sequence
+    /// walk it with the numbers' own operators, here an `Integer#+` that
+    /// collects. The terms made so far, the last term and the length are
+    /// fresh Bignums, which used to wait in Rust locals (and a Rust Vec)
+    /// across the next operator and were freed there.
+    #[test]
+    fn generic_terms_survive_collecting_plus() {
+        run_test_once(
+            r##"
+            class Integer
+              alias_method :__gc_plus, :+
+              def +(o)
+                if $gc_plus
+                  $gc_plus = false
+                  GC.start
+                  $junk = Array.new(2000) { [_1] }
+                  $gc_plus = true
+                end
+                __gc_plus(o)
+              end
+            end
+            b = 2**70
+            seq = b.step(b.__gc_plus(1000), 7)
+            long = b.step(b.__gc_plus(2**80), 1)
+            res = []
+            $gc_plus = true
+            2.times do
+              res << seq.first(6) << seq.last << seq.last(4) << long.size << long.first(3)
+            end
+            $gc_plus = false
+            res.map { |x| x.is_a?(Array) ? x.map { _1 - b } : x - b }.uniq
+            "##,
+        );
+    }
+
+    /// The length of an all-Fixnum sequence can be a Bignum. `#last(n)`
+    /// held it in a Rust local while `n.to_int` ran, and a collection
+    /// there freed it before the count was clamped to it.
+    #[test]
+    fn last_keeps_bignum_length_across_to_int() {
+        run_test_once(
+            r##"
+            class GcCount
+              def to_int
+                GC.start
+                $junk = Array.new(2000) { [_1] }
+                2
+              end
+            end
+            seq = (-2**62..2**61).step(1)
+            3.times.map { seq.last(GcCount.new) }.uniq
+            "##,
+        );
+    }
+
+    /// `#last(n)` counts up from `last - s*n`, one step before its first
+    /// term, here a fresh heap Float. The first `+` hands it to the step's
+    /// `coerce` only after asking the step's `respond_to?`, and a
+    /// collection there used to free it, since only a Rust local held it.
+    #[test]
+    fn last_keeps_value_before_first_term_across_coerce_probe() {
+        run_test_once(
+            r##"
+            class GcStep < Numeric
+              def initialize(v) = @v = v
+              def respond_to?(m, include_all = false)
+                if $gc_probe
+                  GC.start
+                  $junk = Array.new(2000) { [_1] }
+                end
+                super || @v.respond_to?(m, include_all)
+              end
+              def coerce(o) = [o, @v]
+              def <=>(o) = @v <=> o
+              def ==(o) = @v == o
+              def <(o) = @v < o
+              def >(o) = @v > o
+              def *(o) = @v * o
+              def to_f = @v.to_f
+            end
+            b = Rational(10**100)
+            seq = b.step(b + 10, GcStep.new(1))
+            $gc_probe = true
+            r = 3.times.map { [seq.last(2), seq.last(1)] }
+            $gc_probe = false
+            r.uniq
+            "##,
+        );
     }
 }
