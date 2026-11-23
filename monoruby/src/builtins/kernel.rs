@@ -6736,6 +6736,10 @@ fn class(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 
 /// `Kernel#class` on a receiver of a proven class is that class's real
 /// class, a constant.
+///
+/// Except for an IO: `IO#reopen` moves the receiver to the other stream's
+/// class (`Value::change_class`), and a class proof made before the call
+/// survives it, so an IO's class is read when asked for.
 fn kernel_class_gen(
     state: &mut AbstractState,
     _: &mut AsmIr,
@@ -6753,8 +6757,12 @@ fn kernel_class_gen(
     let Some(module) = recv_class.and_then(|class| store[class.id()].try_get_module()) else {
         return false;
     };
+    let real = module.get_real_class();
+    if real.id() == IO_CLASS || store[IO_CLASS].get_module().is_ancestor_of(real) {
+        return false;
+    }
     if let Some(dst) = callsite.dst {
-        state.def_C(dst, module.get_real_class().as_val());
+        state.def_C(dst, real.as_val());
     }
     true
 }

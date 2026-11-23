@@ -1388,6 +1388,13 @@ fn hash_get_or_key(
 /// frame). `may_fail` puts the error exit behind the call: the helper
 /// returns 0 with the error set.
 ///
+/// The helper must not run Ruby code. Without a frame of its own, the
+/// code after the call keeps every assumption compiled before it (class
+/// and constant versions, ivar types, class proofs), and a basic-operator
+/// redefinition made in the middle of it cannot convert the caller (chain
+/// deopt finds no return address to rewrite). A builtin that may dispatch
+/// to Ruby takes a pure helper and a deopt instead (`hash_include_gen`).
+///
 pub(super) fn inline_helper_call(
     state: &mut AbstractState,
     ir: &mut AsmIr,
@@ -1418,26 +1425,38 @@ pub(super) fn inline_helper_call(
     true
 }
 
-/// `Hash#include?` / `key?` / `has_key?` / `member?`: a key's `#hash` /
-/// `#eql?` may be Ruby code, which may raise.
+/// `Hash#include?` / `key?` / `has_key?` / `member?` as a direct call to
+/// [`hashinclude_pure`].
+///
+/// A helper called from JIT code must not run Ruby (see
+/// [`inline_helper_call`]), and a key's `#hash` / `#eql?` may be Ruby
+/// code. So the helper answers only the keys it can look up without
+/// dispatching and declines the rest: the JIT code deopts, and the
+/// interpreter calls the builtin in a frame of its own. A site that keeps
+/// declining is stamped (`RecompileReason::ImpureHelper`) and takes the
+/// ordinary call from its recompile on.
 fn hash_include_gen(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     _: Option<CachedClass>,
     _: Option<CachedClass>,
 ) -> bool {
-    inline_helper_call(
-        state,
-        ir,
-        store,
-        callid,
-        1,
-        hashinclude as *const () as u64,
-        true,
-    )
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 || state.pc().impure_helper() {
+        return false;
+    }
+    state.load(ir, callsite.args, GP::Rcx);
+    state.load(ir, callsite.recv, GP::Rdx);
+    let using_fpr = state.get_using_fpr(ir);
+    ir.fpr_save(using_fpr);
+    ir.inline(|r#gen, _, _, _| r#gen.emit_call_2args(hashinclude_pure as *const () as u64));
+    ir.fpr_restore(using_fpr);
+    ctx.pure_helper_exit(state, ir);
+    state.def_rax2acc(ir, callsite.dst);
+    true
 }
 
 fn hash_iter_begin_gen(
@@ -1480,20 +1499,28 @@ fn hash_iter_end_gen(
     )
 }
 
-/// [`include`] for the JIT, in the [`hashindex`] ABI.
-extern "C" fn hashinclude(
+/// [`include`] for the JIT, in the [`hashindex`] ABI: the answer wherever
+/// finding it runs no Ruby code, and 0 — with no error set — where it
+/// would. As for [`hashindex_pure`], that is a packed key, a String of
+/// class `String` itself, or any key of an identity-keyed Hash: those are
+/// digested and compared without dispatching `#hash` / `#eql?` (see
+/// `HashRef::get`).
+extern "C" fn hashinclude_pure(
     vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
     key: Value,
 ) -> Option<Value> {
-    match base.as_hash().contains_key(key, vm, globals) {
-        Ok(b) => Some(Value::bool(b)),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
+    let h = base.as_hash();
+    if !(key.is_packed_value()
+        || key.is_plain_rstring_inner().is_some()
+        || h.is_compare_by_identity())
+    {
+        return None;
     }
+    // `contains_key` cannot fail for such a key; should it, decline and
+    // let the interpreter raise it in a frame.
+    h.contains_key(key, vm, globals).ok().map(Value::bool)
 }
 
 /// [`iter_begin`] for the JIT, in the [`hashindex`] ABI.
