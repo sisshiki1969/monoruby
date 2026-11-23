@@ -112,21 +112,6 @@ pub(crate) fn backtrace_limit() -> Option<usize> {
     }
 }
 
-/// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
-///
-/// This is also the name of the arch-specific subdirectory inside the
-/// vendored stdlib snapshot: CRuby keys `rbconfig.rb` and
-/// `rbconfig/sizeof.rb` under `<rubylibdir>/<arch>/`, and
-/// `bin/vendor-ruby-stdlib` preserves that layout, so the value here must
-/// match the directory that was actually vendored.
-///
-/// When a host CRuby was present at build time, `build.rs` bakes its exact
-/// `RUBY_PLATFORM` into `MONORUBY_RUBY_PLATFORM` (crucially including the
-/// macOS Darwin major version, e.g. `arm64-darwin23`). Otherwise we fall
-/// back to a `cfg!`-derived default. Centralising it here keeps the
-/// `$LOAD_PATH` arch-dir prepend, the `require` stub lookup, and the
-/// `RUBY_PLATFORM` constant from drifting apart (previously every site
-/// hard-coded `x86_64-linux`, which was wrong on aarch64 / macOS).
 /// Absolute path to this build's installed library tree
 /// (`~/.monoruby/v<version>`), baked in by `build.rs` as
 /// `MONORUBY_INSTALL_ROOT`. It contains `lib/` (vendored stdlib + stubs),
@@ -154,7 +139,75 @@ pub(crate) fn backtrace_limit() -> Option<usize> {
 /// The `builtins/` marker is what keeps a development build out of this
 /// path: there the executable's parent is `target/`, which has no such
 /// directory, so the baked root stays in force.
-pub(crate) fn install_root() -> PathBuf {
+///
+/// The answer is **canonical** (symlinks resolved) and computed once per
+/// process. A loaded file is known by its canonical directory — `require`
+/// resolves the `$LOAD_PATH` entry (`Globals::probe`), `require_relative`
+/// the requiring file — and several places ask whether such a path lies
+/// under this tree (`is_builtins_path` first of all: it decides which
+/// frames are the interpreter's own). With the root left as written, a
+/// `MONORUBY_INSTALL_ROOT` naming a symlink, or a root baked under a
+/// `$HOME` reached through one (`/tmp` on macOS, a symlinked `/home`),
+/// made every one of those answers "no". A root that cannot be resolved
+/// (it does not exist) is used as written.
+pub(crate) fn install_root() -> &'static std::path::Path {
+    &install_tree().root
+}
+
+/// `<install root>/builtins`, canonical: the Ruby files loaded at startup.
+pub(crate) fn builtins_dir() -> &'static std::path::Path {
+    &install_tree().builtins
+}
+
+/// `<install root>/lib`, canonical: the vendored stdlib. This is the
+/// directory its features are recorded under, which is not
+/// `install_root().join("lib")` when `lib` is itself a symlink (as in a
+/// tree assembled from links) — `$LOAD_PATH` keeps that spelling.
+pub(crate) fn lib_dir() -> &'static std::path::Path {
+    &install_tree().lib
+}
+
+/// `<install root>/stub`, canonical: the stand-ins pinned ahead of
+/// `$LOAD_PATH`.
+pub(crate) fn stub_dir() -> &'static std::path::Path {
+    &install_tree().stub
+}
+
+/// Whether *path* (canonical, as a loaded file's is) is one of monoruby's
+/// own Ruby files: anything under the install root, or under the
+/// directory one of its three Ruby trees resolves to.
+pub(crate) fn is_install_tree_path(path: &std::path::Path) -> bool {
+    let tree = install_tree();
+    [&tree.root, &tree.builtins, &tree.lib, &tree.stub]
+        .into_iter()
+        .any(|dir| path.starts_with(dir))
+}
+
+/// The install root and the three Ruby trees in it, each canonical.
+struct InstallTree {
+    root: PathBuf,
+    builtins: PathBuf,
+    lib: PathBuf,
+    stub: PathBuf,
+}
+
+fn install_tree() -> &'static InstallTree {
+    static TREE: std::sync::OnceLock<InstallTree> = std::sync::OnceLock::new();
+    TREE.get_or_init(|| {
+        let canonical = |path: PathBuf| std::fs::canonicalize(&path).unwrap_or(path);
+        let root = canonical(install_root_as_written());
+        InstallTree {
+            builtins: canonical(root.join("builtins")),
+            lib: canonical(root.join("lib")),
+            stub: canonical(root.join("stub")),
+            root,
+        }
+    })
+}
+
+/// The install root exactly as the environment, the executable's location
+/// or the build spelled it.
+fn install_root_as_written() -> PathBuf {
     if let Some(root) = std::env::var_os("MONORUBY_INSTALL_ROOT")
         && !root.is_empty()
     {
@@ -174,6 +227,21 @@ fn shipped_install_root() -> Option<PathBuf> {
     root.join("builtins").is_dir().then(|| root.to_path_buf())
 }
 
+/// The `<arch>-<os>` platform string monoruby reports as `RUBY_PLATFORM`.
+///
+/// This is also the name of the arch-specific subdirectory inside the
+/// vendored stdlib snapshot: CRuby keys `rbconfig.rb` and
+/// `rbconfig/sizeof.rb` under `<rubylibdir>/<arch>/`, and
+/// `bin/vendor-ruby-stdlib` preserves that layout, so the value here must
+/// match the directory that was actually vendored.
+///
+/// When a host CRuby was present at build time, `build.rs` bakes its exact
+/// `RUBY_PLATFORM` into `MONORUBY_RUBY_PLATFORM` (crucially including the
+/// macOS Darwin major version, e.g. `arm64-darwin23`). Otherwise we fall
+/// back to a `cfg!`-derived default. Centralising it here keeps the
+/// `$LOAD_PATH` arch-dir prepend, the `require` stub lookup, and the
+/// `RUBY_PLATFORM` constant from drifting apart (previously every site
+/// hard-coded `x86_64-linux`, which was wrong on aarch64 / macOS).
 pub(crate) fn ruby_platform() -> &'static str {
     const DEFAULT_PLATFORM: &str = if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
         "arm64-darwin"

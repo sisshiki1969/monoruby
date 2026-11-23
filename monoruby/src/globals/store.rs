@@ -1866,10 +1866,6 @@ impl Store {
     }
 }
 
-thread_local! {
-    static BUILTINS_DIR: std::path::PathBuf = crate::globals::install_root().join("builtins");
-}
-
 /// True for sources shipped in the interpreter's own `builtins/`
 /// bootstrap tree — the core methods monoruby implements in Ruby but
 /// CRuby implements in C. Their frames stand in for C frames
@@ -1879,8 +1875,12 @@ fn is_internal_source(source: &SourceInfoRef) -> bool {
 }
 
 /// Whether *path* is a file of the `builtins/` bootstrap tree.
+///
+/// Both sides are canonical: a builtin is loaded from
+/// `globals::builtins_dir()` (startup.rb) or by `require_relative` from a
+/// file that was, and the install root may be reached through a symlink.
 pub(crate) fn is_builtins_path(path: &std::path::Path) -> bool {
-    BUILTINS_DIR.with(|dir| path.starts_with(dir))
+    path.starts_with(crate::globals::builtins_dir())
 }
 
 /// CRuby-style display path for backtrace strings: sources shipped in
@@ -1890,14 +1890,16 @@ pub(crate) fn is_builtins_path(path: &std::path::Path) -> bool {
 /// else renders as loaded. `Location#absolute_path` is nil for the
 /// internal form.
 pub(crate) fn display_path(source: &SourceInfoRef) -> std::borrow::Cow<'_, str> {
-    let internal = BUILTINS_DIR.with(|dir| {
-        source.path.strip_prefix(dir).ok().map(|rest| {
+    let internal = source
+        .path
+        .strip_prefix(crate::globals::builtins_dir())
+        .ok()
+        .map(|rest| {
             format!(
                 "<internal:{}>",
                 rest.file_stem().unwrap_or_default().to_string_lossy()
             )
-        })
-    });
+        });
     match internal {
         Some(s) => std::borrow::Cow::Owned(s),
         None => source.file_name(),

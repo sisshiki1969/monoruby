@@ -761,7 +761,12 @@ bin/dist --tar                  # a relocatable tree + tar.gz in target/dist/
   (`<out>/{bin,builtins,lib,stub,ext}`); `globals::install_root` finds that
   layout from the executable's own path — the `builtins/` directory is the
   marker — so the tree runs from anywhere under any user with nothing set.
-  Resolution order: `MONORUBY_INSTALL_ROOT` → exe-relative → baked.
+  Resolution order: `MONORUBY_INSTALL_ROOT` → exe-relative → baked; the
+  answer is canonicalized once per process, as are `builtins/`, `lib/`
+  and `stub/` under it (`globals::{builtins_dir,lib_dir,stub_dir}`),
+  because a loaded file's path is canonical and "is this monoruby's own
+  file" is a prefix comparison — compare against those, never against a
+  path spelled by hand.
 - Running `cargo install --path <repo>/monoruby` from **outside** the repo
   picks up the default toolchain (stable) rather than
   `rust-toolchain.toml`'s nightly, and fails on `-Z bindeps`.

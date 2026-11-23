@@ -134,9 +134,8 @@ fn bare_native_stem(cand: &std::path::Path) -> Option<String> {
 /// The stub pin: monoruby's own stand-ins, searched ahead of `$LOAD_PATH`
 /// (see `Globals::search_candidate`).
 fn stub_dirs() -> [PathBuf; 2] {
-    let stub_root = install_root().join("stub");
-    let platform = stub_root.join(ruby_platform());
-    [stub_root, platform]
+    let stub_root = stub_dir();
+    [stub_root.to_path_buf(), stub_root.join(ruby_platform())]
 }
 
 impl Globals {
@@ -670,7 +669,6 @@ impl Globals {
         let (file_body, _resolved) = if let Some(b"so" | b"bundle") =
             canonicalized_path.extension().map(|s| s.as_bytes())
         {
-            let monoruby_lib = install_root().join("lib");
             let relative = self
                 .load_path
                 .as_array()
@@ -681,9 +679,11 @@ impl Globals {
                 })
                 .next()
                 .unwrap_or_else(|| canonicalized_path.file_name().unwrap().as_ref());
-            let mut lib = monoruby_lib.join(relative);
+            // Canonical, as the features of the files they name are
+            // (`Globals::probe`).
+            let mut lib = lib_dir().join(relative);
             lib.set_extension("rb");
-            let mut stub = install_root().join("stub").join(relative);
+            let mut stub = stub_dir().join(relative);
             stub.set_extension("rb");
             // The stand-in is the very file asking for this extension
             // (`stdlib/socket.rb`'s `require "socket.so"`, when monoruby's

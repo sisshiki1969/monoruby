@@ -50,7 +50,9 @@ fn tree(name: &str) -> Option<PathBuf> {
     for name in ["builtins", "lib", "stub"] {
         std::os::unix::fs::symlink(root.join(name), dir.join(name)).unwrap();
     }
-    Some(dir)
+    // The interpreter reports its root resolved, and the temporary
+    // directory is itself behind a symlink on macOS (`/var/folders`).
+    Some(dir.canonicalize().unwrap())
 }
 
 /// Run the tree's own binary with nothing pointing at it: no
@@ -154,6 +156,20 @@ fn a_relocated_tree_finds_its_own_ruby_and_extensions() {
         answer, "[true, true]",
         "$LOAD_PATH should come from the tree and not from the baked root"
     );
+    // The three Ruby trees are symlinks here, so the files loaded from
+    // them resolve to somewhere outside the tree; they are monoruby's own
+    // all the same (#2152): no `__` helper of `builtins/` is listed, and a
+    // builtin's frame is an internal one.
+    assert_eq!(
+        run(
+            &dir,
+            r#"e = ([1].each { raise "x" } rescue $!)
+               p [Kernel.private_instance_methods.grep(/\A__/).size,
+                  e.backtrace.any? { |l| l.start_with?("<internal:array>:") },
+                  e.backtrace.none? { |l| l.include?("/builtins/") }]"#
+        ),
+        "[3, true, true]"
+    );
     // And the extensions come with it — psych is the one rubygems needs.
     assert_eq!(
         run(&dir, r#"require "psych"; p Psych.load("a: 1")"#),
@@ -173,7 +189,12 @@ fn the_environment_still_overrides_the_shipped_tree() {
     let home = dir.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let out = Command::new(dir.join("bin").join("monoruby"))
-        .args(["-e", "p $LOAD_PATH.any? { |d| d.start_with?(ENV['MONORUBY_INSTALL_ROOT']) }"])
+        // (resolved: the baked root may be spelled through a symlink)
+        .args([
+            "-e",
+            "root = File.realpath(ENV['MONORUBY_INSTALL_ROOT']); \
+             p $LOAD_PATH.any? { |d| d.start_with?(root) }",
+        ])
         .env("MONORUBY_INSTALL_ROOT", install_root())
         .env_remove("MONORUBY_EXT_PATH")
         .env("HOME", &home)

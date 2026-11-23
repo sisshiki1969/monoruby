@@ -750,7 +750,7 @@ impl Executor {
         // core without the full stdlib. No effect unless MONORUBY_SKIP_STARTUP
         // is set in the environment.
         if std::env::var_os("MONORUBY_SKIP_STARTUP").is_none() {
-            let path = install_root().join("builtins").join("startup.rb");
+            let path = builtins_dir().join("startup.rb");
             executor.require(globals, &path, false)?;
             // The rubygems boot: `gem_prelude.rb` registers `Gem` as an
             // autoload of "rubygems" (and a `Kernel#gem` stub that boots
@@ -758,7 +758,7 @@ impl Executor {
             // program that reaches for it — a plain script skips its
             // ~8 MB / ~90 ms.
             if !globals.no_gems {
-                let path = install_root().join("builtins").join("gem_prelude.rb");
+                let path = builtins_dir().join("gem_prelude.rb");
                 executor.require(globals, &path, false)?;
             }
             // `Class#new` exists only once class.rb has run; the JIT needs
@@ -1755,8 +1755,8 @@ impl Executor {
                 {
                     // Done before the load (`activate_host_gem`).
                     None
-                } else if canonicalized_path.starts_with(install_root().join("stub"))
-                    && !self.is_loading_path(&install_root().join("lib").join("rubygems.rb"))
+                } else if canonicalized_path.starts_with(stub_dir())
+                    && !self.is_loading_path(&lib_dir().join("rubygems.rb"))
                 {
                     globals.store.get_constant_noautoload(OBJECT_CLASS, gem_id)
                 } else {
@@ -1799,7 +1799,7 @@ impl Executor {
         ];
         for (suffix, feature) in LOAD_HOOKS {
             if path.to_str().is_some_and(|p| p.ends_with(suffix)) {
-                let hook = crate::globals::install_root().join("stub").join(feature);
+                let hook = stub_dir().join(feature);
                 self.require(globals, &hook, false)?;
             }
         }
@@ -1819,9 +1819,7 @@ impl Executor {
         globals: &mut Globals,
         path: &std::path::Path,
     ) -> Option<std::path::PathBuf> {
-        let hook = crate::globals::install_root()
-            .join("stub")
-            .join("monoruby_hooks/host_extension.rb");
+        let hook = stub_dir().join("monoruby_hooks/host_extension.rb");
         if globals.no_gems
             || !CODEGEN.with(|codegen| codegen.borrow().startup_flag)
             || !hook.exists()
