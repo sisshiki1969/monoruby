@@ -2689,32 +2689,38 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // becomes the return value. Frozen buffers raise even when there is
     // nothing to read (CRuby checks before reading).
     let outbuf = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => {
-            // A #to_str-convertible object: the converted String becomes
-            // the buffer (and the return value).
-            let mut b = v.coerce_to_rstring(vm, globals)?.as_val();
-            b.ensure_string_mutable(vm, globals)?;
-            Some(b)
-        }
+        // A #to_str-convertible object: the converted String becomes
+        // the buffer (and the return value).
+        Some(v) if !v.is_nil() => Some(v.coerce_to_rstring(vm, globals)?.as_val()),
         _ => None,
     };
-    // A sized read is byte oriented: refused while `ungetc` left
-    // converted characters pending (`rb_io_check_byte_readable`).
-    if length.is_some() && !lfp.self_val().as_io_inner().is_closed() {
-        lfp.self_val().as_io_inner().check_byte_readable()?;
-    }
-    let buf = if length == Some(0) {
-        // `read(0)` never blocks and returns "" (CRuby) — entering the
-        // blocking region would park on POLLIN waiting for data that a
-        // zero-length read must not consume (the net-http fixture calls
-        // `client.read(0)` for `Content-Length: 0` requests).
-        lfp.self_val().as_io_inner().ensure_readable()?;
-        Vec::new()
-    } else {
-        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-            lfp.self_val().as_io_inner_mut().read(length)
-        })?
-    };
+    // A String `to_str` made is referenced only by `outbuf`, while the
+    // chilled-String warning can write to a Ruby `$stderr` and the read
+    // can park the thread (letting another thread collect) or run signal
+    // handlers: keep it on the temp stack until the read is done.
+    let buf = vm.with_temp_scope(|vm| {
+        if let Some(mut b) = outbuf {
+            vm.temp_push(b);
+            b.ensure_string_mutable(vm, globals)?;
+        }
+        // A sized read is byte oriented: refused while `ungetc` left
+        // converted characters pending (`rb_io_check_byte_readable`).
+        if length.is_some() && !lfp.self_val().as_io_inner().is_closed() {
+            lfp.self_val().as_io_inner().check_byte_readable()?;
+        }
+        if length == Some(0) {
+            // `read(0)` never blocks and returns "" (CRuby) — entering the
+            // blocking region would park on POLLIN waiting for data that a
+            // zero-length read must not consume (the net-http fixture calls
+            // `client.read(0)` for `Content-Length: 0` requests).
+            lfp.self_val().as_io_inner().ensure_readable()?;
+            Ok(Vec::new())
+        } else {
+            blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+                lfp.self_val().as_io_inner_mut().read(length)
+            })
+        }
+    })?;
     // `read_all` goes through the read converter, so its newline
     // decorator; a sized read (`io_fread`) takes the bytes as they are.
     // Characters `ungetc` pushed back are already converted: they go in
@@ -3409,6 +3415,12 @@ fn popen_hash_arg(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/popen.html]
 #[monoruby_builtin]
 fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    vm.with_temp_scope(|vm| popen_body(vm, globals, lfp))
+}
+
+/// [`io_popen`]'s work, inside its temp scope: what this pushes on the
+/// temp stack stays rooted until the call returns.
+fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     // CRuby's `rb_io_s_popen`: `IO.popen([env,] cmd [, mode] [, opts])`.
     // A trailing Hash is the options, then a leading one the environment.
     // Either may be an object that converts with `to_hash`
@@ -3443,7 +3455,18 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let mut exec_opts = RubyMap::default();
     let mut io_opts: Vec<(Value, Value)> = vec![];
     if let Some(h) = opts {
-        for (k, v) in h.as_hash().iter() {
+        // The pairs wait in `exec_opts` and `io_opts` while Ruby runs (a
+        // redirect key's own `#hash` as it goes in, the mode's `to_str`,
+        // `chdir:`'s `to_path`, ...), and that Ruby may delete them from
+        // the caller's Hash, after which a collection would free them: keep
+        // them on the temp stack. They are copied out before the first
+        // insert, so that no Ruby runs while the Hash is walked.
+        let pairs: Vec<(Value, Value)> = h.as_hash().iter().collect();
+        for &(k, v) in &pairs {
+            vm.temp_push(k);
+            vm.temp_push(v);
+        }
+        for (k, v) in pairs {
             if super::spawn::is_exec_option_key(k) {
                 exec_opts.insert(k, v, vm, globals)?;
             } else {
@@ -3510,6 +3533,13 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         let mut inner_opts: Option<Value> = None;
         let accept_shell = if let Some(ary) = cmd_val.try_array_ty() {
             let mut elems: Vec<Value> = ary.iter().copied().collect();
+            // Ruby may empty the caller's Array (a redirect key's `#hash`
+            // while the options merge below) before `parse_exec_args` reads
+            // these, after which a collection would free them: keep them on
+            // the temp stack too.
+            for &v in &elems {
+                vm.temp_push(v);
+            }
             if elems.first().is_some_and(|v| v.try_hash_ty().is_some()) {
                 let inner = elems.remove(0);
                 env_hash.get_or_insert(inner);
@@ -3525,7 +3555,9 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             items.extend(elems);
             false
         } else {
-            items.push(Value::string(cmd_val.coerce_to_str(vm, globals)?));
+            let cmd = Value::string(cmd_val.coerce_to_str(vm, globals)?);
+            vm.temp_push(cmd);
+            items.push(cmd);
             true
         };
         if let Some(env) = env_hash {
@@ -3538,14 +3570,28 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                 .iter()
                 .chain(exec_opts.iter().map(|(k, v)| (*k, *v)))
                 .collect();
+            // As with the outer options, a redirect key's `#hash` may delete
+            // the inner Hash's pairs while they wait here.
+            for &(k, v) in &pairs {
+                vm.temp_push(k);
+                vm.temp_push(v);
+            }
             for (k, v) in pairs {
                 merged.insert(k, v, vm, globals)?;
             }
             exec_opts = merged;
         }
         if !exec_opts.is_empty() {
-            items.push(Value::hash(exec_opts));
+            let h = Value::hash(exec_opts);
+            vm.temp_push(h);
+            items.push(h);
         }
+        // `parse_exec_args` runs Ruby while it walks `items` (`to_path` on
+        // `chdir:`, `to_str` on the environment, `to_int` on `umask:`), and
+        // all of them are rooted by now: the command String and the
+        // exec-options Hash made above, which nothing else refers to, and
+        // what came from the caller's Array are on the temp stack, an outer
+        // environment Hash is in the argument list.
         let spec = super::spawn::parse_exec_args(vm, globals, &items, accept_shell)?;
         let (pid, reader, writer) = super::spawn::do_popen(vm, globals, &spec, readable, writable)?;
         (pid as u32, reader, writer)
@@ -3611,16 +3657,19 @@ fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     }
 
     if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        let res = vm.invoke_block(globals, &data, &[io_val]);
-        // Root the block's return value (and the IO) across the
-        // Process::Status construction below, which re-enters Ruby while
-        // both live only in Rust locals.
+        // The IO lives only in `io_val` while a Ruby `to_proc` of the block
+        // runs, while the block runs (it may drop its parameter) and while
+        // the Process::Status construction below re-enters Ruby; so do the
+        // block's value and the Values its error carries (a raised
+        // exception object) after it. Root them all on the temp stack.
         vm.with_temp_scope(|vm| {
-            if let Ok(v) = res {
-                vm.temp_push(v);
-            }
             vm.temp_push(io_val);
+            let data = vm.get_block_data(globals, bh)?;
+            let res = vm.invoke_block(globals, &data, &[io_val]);
+            match &res {
+                Ok(v) => vm.temp_push(*v),
+                Err(e) => e.for_each_value(|v| vm.temp_push(v)),
+            }
             let mut io_close = io_val;
             // Reaped outside the GVL, as `IO#close` does.
             let detached = io_close
@@ -4290,53 +4339,60 @@ fn io_readlines(
     }
     let self_ = lfp.self_val();
     let complete_utf8 = io_completes_utf8(globals, self_);
-    let mut lines = Vec::new();
     let (ext, intl) = io_encodings(globals, self_);
     let converts = read_converts(ext, intl);
     let wide = wide_lines(globals, sep.as_deref(), ext, intl);
-    // Lines out of the characters `ungetc` left converted come first.
-    while let Some(i) = intl
-        && converts
-        && self_.as_io_inner().char_pending_len() > 0
-        && let Some(mut line) = gets_with_pending(
-            vm,
-            globals,
-            self_,
-            sep.as_deref(),
-            limit,
-            (ext, i),
-            complete_utf8,
-            wide.as_ref(),
-        )?
-    {
-        if chomp {
-            chomp_line(&mut line, sep.as_deref(), limit);
-        }
-        let mut s = Value::string_from_vec(line);
-        s.as_rstring_inner_mut().set_encoding(i);
-        lines.push(s);
-        bump_lineno(globals, self_)?;
-    }
-    while let Some(mut buf) =
-        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-            getline_with(
-                lfp.self_val(),
+    // The lines go into an Array on the temp stack as they are read. Each
+    // read can park the thread, letting another thread collect, or run
+    // signal handlers, and a collection there would free the lines a Rust
+    // `Vec` held.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        // Lines out of the characters `ungetc` left converted come first.
+        while let Some(i) = intl
+            && converts
+            && self_.as_io_inner().char_pending_len() > 0
+            && let Some(mut line) = gets_with_pending(
+                vm,
+                globals,
+                self_,
                 sep.as_deref(),
                 limit,
+                (ext, i),
                 complete_utf8,
                 wide.as_ref(),
-            )
-        })?
-    {
-        let tail = if chomp {
-            chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
-        } else {
-            vec![]
-        };
-        lines.push(read_conv(globals, self_, buf, &tail, ext, intl)?);
-        bump_lineno(globals, self_)?;
-    }
-    Ok(Value::array_from_vec(lines))
+            )?
+        {
+            if chomp {
+                chomp_line(&mut line, sep.as_deref(), limit);
+            }
+            let mut s = Value::string_from_vec(line);
+            s.as_rstring_inner_mut().set_encoding(i);
+            vm.temp_array_push(s);
+            bump_lineno(globals, self_)?;
+        }
+        while let Some(mut buf) =
+            blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+                getline_with(
+                    lfp.self_val(),
+                    sep.as_deref(),
+                    limit,
+                    complete_utf8,
+                    wide.as_ref(),
+                )
+            })?
+        {
+            let tail = if chomp {
+                chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
+            } else {
+                vec![]
+            };
+            let line = read_conv(globals, self_, buf, &tail, ext, intl)?;
+            vm.temp_array_push(line);
+            bump_lineno(globals, self_)?;
+        }
+        Ok(vm.temp_pop())
+    })
 }
 
 ///
@@ -5311,8 +5367,16 @@ fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
-        lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)
+    // A buffer `to_str` made is referenced only by `buffer`, and the read
+    // can park the thread (letting another thread collect) or run signal
+    // handlers: keep it on the temp stack across the read.
+    let buf = vm.with_temp_scope(|vm| {
+        if let Some(b) = buffer {
+            vm.temp_push(b);
+        }
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+            lfp.self_val().as_io_inner_mut().sysread(maxlen as usize)
+        })
     })?;
     if buf.is_empty() {
         if let Some(mut v) = buffer {
@@ -5373,8 +5437,16 @@ fn io_readpartial(
             None => Value::string_from_vec(vec![]),
         });
     }
-    let buf = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |store| {
-        lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize, store)
+    // A buffer `to_str` made is referenced only by `buffer`, and the read
+    // can park the thread (letting another thread collect) or run signal
+    // handlers: keep it on the temp stack across the read.
+    let buf = vm.with_temp_scope(|vm| {
+        if let Some(b) = buffer {
+            vm.temp_push(b);
+        }
+        blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |store| {
+            lfp.self_val().as_io_inner_mut().readpartial(maxlen as usize, store)
+        })
     })?;
     if buf.is_empty() {
         if let Some(mut v) = buffer {
@@ -6956,6 +7028,12 @@ fn io_wait_priority(
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/s/copy_stream.html]
 #[monoruby_builtin]
 fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    vm.with_temp_scope(|vm| copy_stream_body(vm, globals, lfp))
+}
+
+/// [`io_copy_stream`]'s work, inside its temp scope: what this pushes on
+/// the temp stack stays rooted until the copy is over.
+fn copy_stream_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     const CHUNK: usize = 16 * 1024;
 
     let copy_length: Option<u64> = match lfp.try_arg(2) {
@@ -7007,6 +7085,10 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
         Ok(v)
     };
     let src_v = to_io(vm, globals, lfp.arg(0))?;
+    // A `to_io` can make a fresh IO that only `src_v` refers to, and Ruby
+    // runs from here on (the destination's conversions, an object end's
+    // `#write`) while the copy also parks the thread: root it.
+    vm.temp_push(src_v);
     let src = if is_io(src_v) {
         src_v.as_io_inner().ensure_readable()?;
         src_v.as_io_inner().check_byte_readable()?;
@@ -7038,6 +7120,8 @@ fn io_copy_stream(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     };
 
     let dst_v = to_io(vm, globals, lfp.arg(1))?;
+    // Likewise for a destination `to_io` made.
+    vm.temp_push(dst_v);
     let dst = if is_io(dst_v) {
         dst_v.as_io_inner().ensure_writable()?;
         Dst::Io(dst_v)
@@ -12221,6 +12305,283 @@ mod tests {
             io.close
             File.delete(path)
             r
+            "##,
+        );
+    }
+
+    /// `IO#readlines` keeps the lines it has read rooted while it waits for
+    /// the next one: another thread collects each time this one parks. A
+    /// reader that stops showing as parked fails the test after a deadline
+    /// rather than hanging it.
+    #[test]
+    fn io_readlines_lines_survive_gc_while_parked() {
+        run_test_once(
+            r##"
+            def wait_parked(th)
+              deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 30
+              until th.status == "sleep"
+                raise "the reader never parked" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+                Thread.pass
+              end
+            end
+            r, w = IO.pipe
+            main = Thread.current
+            t = Thread.new do
+              20.times do |i|
+                w.puts "line #{i} " + "x" * 50
+                wait_parked(main)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+              end
+            ensure
+              w.close
+            end
+            lines = r.readlines
+            t.join
+            r.close
+            [lines.size, lines.map(&:size).sum, lines.all?(String)]
+            "##,
+        );
+    }
+
+    /// `IO#read`, `#readpartial` and `#sysread` fill and return the String
+    /// a non-String buffer's `to_str` made; it must survive a collection
+    /// another thread runs while the read is parked. A reader that stops
+    /// showing as parked fails the test after a deadline rather than
+    /// hanging it.
+    #[test]
+    fn io_read_outbuf_survives_gc_while_parked() {
+        run_test_once(
+            r##"
+            class Buf
+              def to_str = String.new("original buffer contents, long enough")
+            end
+            def wait_parked(th)
+              deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 30
+              until th.status == "sleep"
+                raise "the reader never parked" if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
+                Thread.pass
+              end
+            end
+            def read_while_collected(meth)
+              r, w = IO.pipe
+              main = Thread.current
+              t = Thread.new do
+                wait_parked(main)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                w.write("hello")
+              ensure
+                w.close
+              end
+              s = r.send(meth, 5, Buf.new)
+              t.join
+              r.close
+              [s, s.class]
+            end
+            [:read, :readpartial, :sysread].map { |m| 3.times.map { read_while_collected(m) }.uniq }
+            "##,
+        );
+    }
+
+    /// `IO#read`'s buffer, when `to_str` returns a chilled literal, is
+    /// warned about through `$stderr.write`; a collection there must not
+    /// free it.
+    #[test]
+    fn io_read_chilled_outbuf_survives_gc_in_warning() {
+        run_test_once(
+            r##"
+            class GCErr
+              attr_reader :n
+              def initialize = @n = 0
+              def write(*a)
+                @n += 1
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                a.sum(&:size)
+              end
+            end
+            class Buf
+              def to_str = "chilled literal buffer contents, long enough"
+            end
+            err = GCErr.new
+            deprecated = Warning[:deprecated]
+            Warning[:deprecated] = true
+            $stderr = err
+            begin
+              res = 3.times.map do
+                r, w = IO.pipe
+                w.write("hello")
+                w.close
+                s = r.read(5, Buf.new)
+                r.close
+                [s, s.class]
+              end
+            ensure
+              $stderr = STDERR
+              Warning[:deprecated] = deprecated
+            end
+            [res.uniq, err.n > 0]
+            "##,
+        );
+    }
+
+    /// `IO.popen` keeps rooted the command String and the exec-options
+    /// Hash it makes (a `chdir:` `to_path` collects while they are
+    /// parsed), the IO it yields (across a collecting `to_proc`, and a
+    /// block that drops its parameter), and the exception the block
+    /// raised (across a collecting `Process::Status#initialize`, which
+    /// CRuby never calls).
+    #[test]
+    fn io_popen_roots_command_options_and_io() {
+        run_test_once(
+            r##"
+            class GCPath
+              def initialize(s) = @s = s
+              def to_path
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                @s
+              end
+            end
+            class GCToProc
+              def to_proc
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                $keep = proc { |io| io.read }
+              end
+            end
+            class Process::Status
+              alias __gc_test_orig_initialize initialize
+              def initialize(*a)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                __gc_test_orig_initialize(*a)
+              end
+            end
+            class MyErr < StandardError; end
+            dir = "/tmp/monoruby_test_popen_gc_#{Process.pid}_#{rand(100000)}"
+            Dir.mkdir(dir)
+            File.write("#{dir}/marker.txt", "marker contents\n")
+            begin
+              r = []
+              r << 3.times.map { IO.popen("cat marker.txt", chdir: GCPath.new(dir)) { |io| io.read } }.uniq
+              r << 3.times.map { IO.popen("echo hi", &GCToProc.new) }.uniq
+              r << 3.times.map { IO.popen("echo hi") { |io| io = nil; GC.start; $junk = Array.new(2_000) { [_1] }; 1 } }.uniq
+              r << 3.times.map { begin; IO.popen("echo hi") { raise MyErr, "boom" + "!" * 30 }; rescue MyErr => e; [e.class, e.message.size]; end }.uniq
+              r
+            ensure
+              File.unlink("#{dir}/marker.txt")
+              Dir.rmdir(dir)
+            end
+            "##,
+        );
+    }
+
+    /// `IO.popen` keeps rooted the option values and command words it took
+    /// out of the caller's Hash and Array, when Ruby that runs before they
+    /// are read deletes them there and collects: the mode's `to_str`
+    /// (`chdir:`), `chdir:`'s `to_path` (`encoding:`), and a redirect key's
+    /// own `#hash` while the options are sorted (`encoding:`) or merged with
+    /// the Array form's (the command words). CRuby never calls that `#hash`
+    /// during the call, so `$armed` is cleared after each one: no trap is
+    /// left for CRuby to spring later.
+    #[test]
+    fn io_popen_roots_option_values() {
+        run_test_once(
+            r##"
+            class GCMode
+              def initialize(h) = @h = h
+              def to_str
+                @h.delete(:chdir)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                "r"
+              end
+            end
+            class GCDir
+              def initialize(h) = @h = h
+              def to_path
+                @h.delete(:encoding)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                "/"
+              end
+            end
+            null = File.open(File::NULL, "w")
+            def null.hash
+              if (f = $armed)
+                $armed = nil
+                f.call
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+              end
+              super
+            end
+            r = []
+            r << 3.times.map {
+              h = {}
+              h[:chdir] = "/" * 40
+              h[:mode] = GCMode.new(h)
+              IO.popen("pwd", h) { |io| io.read }
+            }.uniq
+            r << 3.times.map {
+              h = {}
+              h[:encoding] = "ISO-8859-1" + ""
+              h[:chdir] = GCDir.new(h)
+              IO.popen("pwd", h) { |io| [io.external_encoding.name, io.read] }
+            }.uniq
+            r << 3.times.map {
+              h = {}
+              h[:encoding] = "ISO-8859-1" + ""
+              h[:chdir] = "/"
+              h[null] = null
+              $armed = -> { h.delete(:encoding) }
+              res = IO.popen("pwd", h) { |io| [io.external_encoding.name, io.read] }
+              $armed = nil
+              res
+            }.uniq
+            r << 3.times.map {
+              cmd = ["echo" + "", "hello" + " world" * 5, {null => null}]
+              $armed = -> { cmd.clear }
+              res = IO.popen(cmd, chdir: "/") { |io| io.read }
+              $armed = nil
+              res
+            }.uniq
+            null.close
+            r
+            "##,
+        );
+    }
+
+    /// `IO.copy_stream` keeps rooted the fresh IO a source's `to_io` made,
+    /// while the destination's `#write` collects.
+    #[test]
+    fn io_copy_stream_roots_to_io_endpoint() {
+        run_test_once(
+            r##"
+            path = "/tmp/monoruby_test_copy_stream_gc_#{Process.pid}_#{rand(100000)}"
+            File.write(path, "abcdefghij" * 5000)
+            class ToIOSrc
+              def initialize(p) = @p = p
+              def to_io = File.open(@p)
+              def to_path = @p
+            end
+            class GCDst
+              attr_reader :n
+              def initialize = @n = 0
+              def write(s)
+                GC.start
+                $junk = Array.new(2_000) { [_1] }
+                @n += s.bytesize
+                s.bytesize
+              end
+            end
+            begin
+              3.times.map { d = GCDst.new; IO.copy_stream(ToIOSrc.new(path), d); d.n }
+            ensure
+              File.unlink(path)
+            end
             "##,
         );
     }
