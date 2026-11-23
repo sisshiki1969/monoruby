@@ -598,6 +598,47 @@ impl HashmapInner {
         self.as_mut().aset(k, v, vm, globals)
     }
 
+    ///
+    /// [`Self::aset`] for a key that is stored without running Ruby
+    /// code: `true` once the pair is in, and `false` — with nothing
+    /// stored and nothing called — for any other key.
+    ///
+    /// Stored are a packed value and a String whose class word says
+    /// String. Those digest and compare natively, against each other
+    /// too (`packed_digest` / `string_digest`, `string_key_eq`, and
+    /// `Value::eql`'s arms for the flonum `0.0`); every other key may
+    /// dispatch `#hash` or `#eql?`, a String with a class of its own
+    /// included (its `eql?`).
+    ///
+    /// Only for a map built through this method alone, from empty: it
+    /// compares by `eql?`, holds no key that dispatches, is not being
+    /// iterated and has no tombstones. That is the builder of a Hash
+    /// literal (`runtime::gen_hash`), which keeps the map where the
+    /// collector does not look for as long as this answers `true`.
+    ///
+    #[inline(always)]
+    pub(crate) fn aset_native_key(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<bool> {
+        debug_assert!(!self.is_compare_by_identity());
+        debug_assert!(!self.as_ref().iter_active());
+        if let Some(rv) = k.try_rvalue() {
+            if rv.ty() != ObjTy::STRING || rv.class() != STRING_CLASS {
+                return Ok(false);
+            }
+            if !rv.is_frozen() {
+                self.as_mut().store_fresh::<true>(k, v, vm, globals)?;
+                return Ok(true);
+            }
+        }
+        self.as_mut().store_fresh::<false>(k, v, vm, globals)?;
+        Ok(true)
+    }
+
     pub fn remove(
         &mut self,
         k: Value,
@@ -1480,7 +1521,7 @@ impl<'a> HashRefMut<'a> {
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
-        self.store::<false>(k, v, vm, globals)
+        self.store::<false, false>(k, v, vm, globals)
     }
 
     ///
@@ -1511,14 +1552,29 @@ impl<'a> HashRefMut<'a> {
                     && !self.as_ref().is_compare_by_identity() =>
             {
                 if rv.class() == STRING_CLASS {
-                    self.store::<true>(k, v, vm, globals)
+                    self.store::<true, false>(k, v, vm, globals)
                 } else {
                     let k = k.frozen_hash_key(&globals.store);
                     self.insert(k, v, vm, globals)
                 }
             }
-            _ => self.store::<false>(k, v, vm, globals),
+            _ => self.store::<false, false>(k, v, vm, globals),
         }
+    }
+
+    /// The store of [`HashmapInner::aset_native_key`], which has made
+    /// sure of the key: a packed value or a plain String, unfrozen with
+    /// `COPY`. Kept out of line so that its caller's loop holds only the
+    /// test of the key.
+    #[inline(never)]
+    fn store_fresh<const COPY: bool>(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.store::<COPY, true>(k, v, vm, globals)
     }
 
     /// The store behind [`Self::insert`] and [`Self::aset`]. With `COPY`
@@ -1526,29 +1582,37 @@ impl<'a> HashRefMut<'a> {
     /// an eql?-keyed Hash, and a new entry gets its
     /// [`Value::frozen_hash_key`] in place of the key itself.
     ///
-    /// A const parameter and not an argument: each caller gets the body
-    /// for its own case, as measured — with a flag tested at run time the
+    /// With `FRESH` the Hash is one under construction that nothing has
+    /// iterated or removed from yet (see
+    /// [`HashmapInner::aset_native_key`]), so the tombstone and iteration
+    /// checks are left out.
+    ///
+    /// Const parameters and not arguments: each caller gets the body for
+    /// its own case, as measured — with a flag tested at run time the
     /// copying store cost 28 instructions more.
     #[inline(always)]
-    fn store<const COPY: bool>(
+    fn store<const COPY: bool, const FRESH: bool>(
         &mut self,
         k: Value,
         v: Value,
         vm: &mut Executor,
         globals: &mut Globals,
     ) -> Result<()> {
-        // Stale tombstones must go before an insert: growing the index
-        // table re-inserts every raw bucket, which would resurrect them.
-        // (During iteration the new-key check below raises first, and an
-        // existing-key update touches no bucket positions, so tombstones
-        // can only be stale — no traversal live — when this compacts.)
-        if !self.as_ref().iter_active() {
-            self.compact_if_dirty();
-        }
-        if self.as_ref().iter_active() && !self.as_ref().contains_key(k, vm, globals)? {
-            return Err(MonorubyErr::runtimeerr(
-                "can't add a new key into hash during iteration",
-            ));
+        if !FRESH {
+            // Stale tombstones must go before an insert: growing the index
+            // table re-inserts every raw bucket, which would resurrect
+            // them. (During iteration the new-key check below raises
+            // first, and an existing-key update touches no bucket
+            // positions, so tombstones can only be stale — no traversal
+            // live — when this compacts.)
+            if !self.as_ref().iter_active() {
+                self.compact_if_dirty();
+            }
+            if self.as_ref().iter_active() && !self.as_ref().contains_key(k, vm, globals)? {
+                return Err(MonorubyErr::runtimeerr(
+                    "can't add a new key into hash during iteration",
+                ));
+            }
         }
         if self.is_inline() {
             let len = self.inline_len();
@@ -2264,6 +2328,26 @@ impl Hashmap {
     ) -> Result<()> {
         self.0.as_hashmap_inner_mut().aset(k, v, vm, globals)?;
         self.0.write_barrier_bulk();
+        Ok(())
+    }
+
+    ///
+    /// [`Self::aset`] for each of `pairs`, in order. The write barrier
+    /// runs after every store and not once at the end: a later key's
+    /// `#hash` may collect, and what was stored before it must be
+    /// reachable through a Hash that an earlier collection promoted.
+    ///
+    #[inline]
+    pub(crate) fn aset_pairs(
+        &mut self,
+        pairs: impl Iterator<Item = (Value, Value)>,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        for (k, v) in pairs {
+            self.0.as_hashmap_inner_mut().aset(k, v, vm, globals)?;
+            self.0.write_barrier_bulk();
+        }
         Ok(())
     }
 

@@ -125,6 +125,7 @@ mod gsub_wide_replacement;
 mod hash_builder_string_keys;
 mod hash_compare_by_identity;
 mod hash_each_pair_yield;
+mod hash_literal_gc;
 mod hash_probe_jit;
 mod hash_seed;
 mod hash_string_keys;
