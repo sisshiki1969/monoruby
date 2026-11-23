@@ -256,3 +256,84 @@ fn yield_outside_method_is_a_syntax_error() {
         "#,
     );
 }
+
+/// A `&obj` block (here `&method(:m)`) is turned into a Proc by `#to_proc`,
+/// and the frame that holds the handler keeps that Proc alive: `group_by`,
+/// `uniq` and `Set#classify` invoke it again and again with Ruby run in
+/// between (the key's `#hash`, with a collection in it), which used to
+/// free the Proc and the frame it closes over. The frame also caches it,
+/// so a method that yields twice converts once, as CRuby does.
+#[test]
+fn block_arg_to_proc_survives_gc_between_calls() {
+    run_test_once(
+        r##"
+        class GcKey
+          def initialize(n) = @n = n
+          attr_reader :n
+          def hash = (GC.start; @n.hash)
+          def eql?(o) = o.is_a?(GcKey) && o.n == @n
+        end
+        def key_of(x) = GcKey.new(x % 3)
+        m = method(:key_of)
+        r = nil
+        20.times do
+          r = [
+            (1..9).to_a.group_by(&m).values,
+            (1..9).to_a.uniq(&m),
+            Set.new(1..9).classify(&m).values.map(&:to_a),
+          ]
+        end
+        class Conv
+          attr_reader :calls
+          def initialize = @calls = 0
+          def to_proc = (@calls += 1; proc { |x| GC.start; x * 2 })
+        end
+        def twice = [yield(1), yield(2)]
+        c = Conv.new
+        r << twice(&c) << [1, 2, 3].sum(&c) << c.calls
+        r
+        "##,
+    );
+}
+
+/// A `yield` written inside a block, in a method called with `&obj`, reads
+/// the method frame's handler and converts it with `#to_proc`: that frame
+/// keeps the Proc too, so it and the frame it closes over survive the
+/// block's `#to_ary` auto-splat, which collects before the block's frame
+/// exists. Enumerable's Ruby-written `group_by` / `sort_by` yield that
+/// way, and every yield in the method uses the one Proc, as CRuby does.
+#[test]
+fn block_arg_to_proc_survives_gc_in_a_yield_from_a_block() {
+    run_test_once(
+        r##"
+        class Conv
+          attr_reader :calls
+          def initialize = @calls = 0
+          def to_proc
+            @calls += 1
+            x = "c" * 3
+            proc { |a, b| [a, b, x] }
+          end
+        end
+        class Pair
+          def to_ary = (GC.start; [1, 2])
+        end
+        class Pairs
+          include Enumerable
+          def each = (yield Pair.new; yield Pair.new; self)
+        end
+        def from_block = [1, 2].map { yield Pair.new }
+        r = nil
+        10.times do
+          c = Conv.new
+          r = [
+            from_block(&c),
+            Pairs.new.group_by(&c).keys,
+            Pairs.new.sort_by(&c).size,
+            c.calls,
+          ]
+        end
+        r
+        "##,
+    );
+}

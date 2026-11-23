@@ -699,6 +699,15 @@ impl HashmapInner {
         self.as_mut().clear()
     }
 
+    /// See [`HashRefMut::clear_during_iteration`].
+    pub(crate) fn clear_during_iteration(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.as_mut().clear_during_iteration(vm, globals)
+    }
+
     pub fn shift(
         &mut self,
         vm: &mut Executor,
@@ -833,6 +842,7 @@ impl<'a> HashRef<'a> {
         unsafe { &self.body().boxed }
     }
 
+    #[inline]
     fn content(&self) -> ContentRef<'a> {
         if self.is_inline() {
             ContentRef::Inline(self.inline_pairs())
@@ -947,6 +957,7 @@ impl<'a> HashRef<'a> {
     /// The raw entry-vector length, tombstones included — the exclusive
     /// upper bound for a position-indexed walk (`__entry_count`). Equals
     /// [`Self::len`] whenever no tombstones are outstanding.
+    #[inline]
     pub(crate) fn entry_count(&self) -> usize {
         match self.content() {
             ContentRef::Inline(pairs) => pairs.len(),
@@ -977,6 +988,7 @@ impl<'a> HashRef<'a> {
     /// vector are both position-addressable. Used by the `__key_at` /
     /// `__value_at` intrinsics so Ruby-level iteration can be a `while` loop
     /// over indices instead of an `each` block.
+    #[inline]
     pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
         match self.content() {
             ContentRef::Inline(pairs) => pairs.get(index).copied(),
@@ -1865,6 +1877,42 @@ impl<'a> HashRefMut<'a> {
         Ok(())
     }
 
+    /// Delete every entry while a traversal is live, which is what CRuby's
+    /// `set_i_clear` does then (an `ST_DELETE` per entry from inside a
+    /// foreach). Each live entry is tombstoned where it stands, as
+    /// [`Self::remove`] does during iteration, so the walk reaches none of
+    /// them; no key is hashed or compared, so no Ruby code runs.
+    pub(crate) fn clear_during_iteration(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        debug_assert!(self.as_ref().iter_active());
+        if self.as_ref().is_empty() {
+            return Ok(());
+        }
+        if self.is_inline() {
+            let ident = self.as_ref().is_compare_by_identity();
+            self.promote(ident, vm, globals)?;
+        }
+        for i in 0..self.as_ref().entry_count() {
+            if !self.as_ref().live_at(i) {
+                continue;
+            }
+            match &mut self.boxed_mut().content {
+                HashContent::Map(m) => {
+                    m.tombstone_index(i, None, Value::nil(), vm, globals)?;
+                }
+                HashContent::IdentMap(m) => {
+                    m.tombstone_index(i, None, Value::nil(), vm, globals)?;
+                }
+            }
+            let dead = &self.boxed_mut().dead;
+            dead.set(dead.get() + 1);
+        }
+        Ok(())
+    }
+
     pub fn shift(
         &mut self,
         vm: &mut Executor,
@@ -2197,6 +2245,7 @@ impl Hashmap {
     }
 
     /// Borrow the content.
+    #[inline]
     pub(crate) fn inner(&self) -> HashRef<'_> {
         self.0.as_hashmap_inner()
     }
@@ -2224,11 +2273,13 @@ impl Hashmap {
     }
 
     /// See [`HashRef::entry_at`].
+    #[inline]
     pub(crate) fn entry_at(&self, index: usize) -> Option<(Value, Value)> {
         self.inner().entry_at(index)
     }
 
     /// See [`HashRef::entry_count`].
+    #[inline]
     pub(crate) fn entry_count(&self) -> usize {
         self.inner().entry_count()
     }
@@ -2272,6 +2323,11 @@ impl Hashmap {
 
     pub fn check_iter(&self) -> Result<()> {
         self.inner().check_iter()
+    }
+
+    /// See [`HashRef::iter_active`].
+    pub(crate) fn iter_active(&self) -> bool {
+        self.inner().iter_active()
     }
 
     pub fn iter_guard(&self) -> IterGuard<'_> {
@@ -2381,6 +2437,17 @@ impl Hashmap {
 
     pub fn clear(&mut self) -> Result<()> {
         self.0.as_hashmap_inner_mut().clear()
+    }
+
+    /// See [`HashRefMut::clear_during_iteration`].
+    pub(crate) fn clear_during_iteration(
+        &mut self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.0
+            .as_hashmap_inner_mut()
+            .clear_during_iteration(vm, globals)
     }
 
     pub fn shift(

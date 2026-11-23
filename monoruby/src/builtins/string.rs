@@ -5826,11 +5826,8 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // converted at the call site (`vm_to_proc`), then `rb_str_scan` takes
     // the receiver's length, then converts the pattern (`get_pat_quoted`).
     vm.with_temp_scope(|vm| {
-        // The Proc a `&obj` block's `to_proc` answers is pushed on the
-        // temp stack: nothing else references it, and the pattern's
-        // `to_str` and every yield may collect.
         let data = match lfp.block() {
-            Some(bh) => Some(vm.get_block_data_rooted(globals, bh)?),
+            Some(bh) => Some(vm.get_block_data(globals, bh)?),
             None => None,
         };
         // The length a block must leave the receiver at (`str_mod_check`).

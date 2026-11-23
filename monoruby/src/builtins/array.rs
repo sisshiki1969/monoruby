@@ -678,7 +678,7 @@ fn to_a(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/to_h.html]
 #[monoruby_builtin]
 fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<()> {
+    fn inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, hash_idx: usize) -> Result<()> {
         let self_val = lfp.self_val();
         let block = match lfp.block() {
             Some(bh) => Some(vm.get_block_data(globals, bh)?),
@@ -707,17 +707,27 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                     elem.len()
                 )));
             }
-            vm.temp_hash_aset(globals, elem[0], elem[1])?;
+            // The pair is the block's answer or what an element's
+            // `#to_ary` made, held only here while the key's `#hash` /
+            // `#eql?` run: root the key and the value, or a collection
+            // there frees the value about to be stored.
+            let (k, v) = (elem[0], elem[1]);
+            vm.temp_push(k);
+            vm.temp_push(v);
+            let res = vm.temp_at(hash_idx).as_hash().aset(k, v, vm, globals);
+            vm.temp_clear(hash_idx + 1);
+            res?;
             i += 1;
         }
         Ok(())
     }
 
-    vm.temp_push(Value::hash(RubyMap::default()));
-    let err = inner(vm, globals, lfp);
-    let res = vm.temp_pop();
-    err?;
-    Ok(res)
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(Value::hash(RubyMap::default()));
+        let hash_idx = vm.temp_len() - 1;
+        inner(vm, globals, lfp, hash_idx)?;
+        Ok(vm.temp_at(hash_idx))
+    })
 }
 
 ///
@@ -1402,33 +1412,43 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     } else {
         return Ok(Value::nil());
     };
-    crate::value::exec_recursive_paired(
-        self_val.id(),
-        arg.id(),
-        || {
-            for (i, lhs) in lhs.iter().enumerate() {
-                if let Some(rhs) = rhs.get(i) {
-                    // Compare each pair with the element's own `<=>` and
-                    // return the *raw* result of the first pair that isn't
-                    // exactly the Fixnum `0` — CRuby returns whatever the
-                    // element comparison produced (`nil`, `±1`, or even a
-                    // non-Integer like a String), not a normalized value.
-                    let res =
-                        vm.invoke_method_inner(globals, IdentId::_CMP, *lhs, &[*rhs], None, None)?;
-                    if res.try_fixnum() != Some(0) {
-                        return Ok(res);
+    // `rhs` may be a fresh Array `#to_ary` made, held only here across
+    // every element's `<=>`: root it, or a collection there frees it.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(rhs.into());
+        crate::value::exec_recursive_paired(
+            self_val.id(),
+            arg.id(),
+            || {
+                // By index, as CRuby's `recursive_cmp` does: an element's
+                // `<=>` may resize either Array, so neither is held as an
+                // iterator across the call.
+                let mut i = 0;
+                while let Some(&l) = lhs.get(i) {
+                    if let Some(&r) = rhs.get(i) {
+                        // Compare each pair with the element's own `<=>` and
+                        // return the *raw* result of the first pair that isn't
+                        // exactly the Fixnum `0` — CRuby returns whatever the
+                        // element comparison produced (`nil`, `±1`, or even a
+                        // non-Integer like a String), not a normalized value.
+                        let res =
+                            vm.invoke_method_inner(globals, IdentId::_CMP, l, &[r], None, None)?;
+                        if res.try_fixnum() != Some(0) {
+                            return Ok(res);
+                        }
+                    } else {
+                        return Ok(Value::integer(Ordering::Greater as i64));
                     }
-                } else {
-                    return Ok(Value::integer(Ordering::Greater as i64));
+                    i += 1;
                 }
-            }
-            if rhs.len() > lhs.len() {
-                return Ok(Value::integer(Ordering::Less as i64));
-            }
-            Ok(Value::integer(Ordering::Equal as i64))
-        },
-        Value::integer(Ordering::Equal as i64),
-    )
+                if rhs.len() > lhs.len() {
+                    return Ok(Value::integer(Ordering::Less as i64));
+                }
+                Ok(Value::integer(Ordering::Equal as i64))
+            },
+            Value::integer(Ordering::Equal as i64),
+        )
+    })
 }
 
 ///
@@ -2449,7 +2469,10 @@ fn array_join(
     out: &mut Vec<u8>,
     state: &mut Option<(Encoding, CodeRange)>,
 ) -> Result<()> {
-    for (i, v) in ary.iter().enumerate() {
+    // By index, re-reading `ary` at every step as CRuby's `ary_join_1`
+    // does: the conversions below run Ruby, which may resize it.
+    let mut i = 0;
+    while let Some(&v) = ary.get(i) {
         if i > 0 {
             // Inline-append the separator: no temporary string,
             // just merge `(sep_enc, sep_cr)` into the running
@@ -2461,41 +2484,43 @@ fn array_join(
             out.extend_from_slice(sep);
             *state = Some(new_state);
         }
+        i += 1;
         // If element is already a string, use its raw bytes + encoding
         if let Some(inner) = v.is_rstring_inner() {
             append_string(out, state, inner, &globals.store)?;
             continue;
         }
-        // If element is an array, recursively join
-        if let Some(inner_ary) = v.try_array_ty() {
-            if !visited.insert(inner_ary.id()) {
-                return Err(MonorubyErr::argumenterr("recursive array join"));
-            }
-            array_join(
-                vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
-            )?;
-            visited.remove(&inner_ary.id());
-            continue;
-        }
-        // Conversion order: to_str -> to_ary -> to_s, the first two by
+        // If element is an array, recursively join. Conversion order:
+        // to_str -> to_ary -> to_s, the first two by
         // `rb_check_string_type` / `rb_check_array_type` (an answer of
         // the wrong class other than nil is a TypeError).
-        if let Some(ret) = v.check_string_type(vm, globals)? {
+        let inner_ary = if let Some(inner_ary) = v.try_array_ty() {
+            Some(inner_ary)
+        } else if let Some(ret) = v.check_string_type(vm, globals)? {
             append_string(out, state, ret.as_rstring_inner(), &globals.store)?;
             continue;
-        }
-        if let Some(inner_ary) = v.check_array_type(vm, globals)? {
+        } else {
+            v.check_array_type(vm, globals)?
+        };
+        if let Some(inner_ary) = inner_ary {
             if !visited.insert(inner_ary.id()) {
                 return Err(MonorubyErr::argumenterr("recursive array join"));
             }
-            array_join(
-                vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
-            )?;
+            // The nested Array may be a fresh one an element's `#to_ary`
+            // made, or one the conversions of its elements remove from
+            // `ary`; either way nothing else holds it while those run, so
+            // root it, or a collection frees it mid-walk.
+            vm.with_temp_scope(|vm| {
+                vm.temp_push(inner_ary.into());
+                array_join(
+                    vm, globals, inner_ary, sep, sep_enc, sep_cr, visited, out, state,
+                )
+            })?;
             visited.remove(&inner_ary.id());
             continue;
         }
-        if let Some(fid) = globals.check_method(*v, IdentId::TO_S) {
-            let ret = vm.invoke_func_inner(globals, fid, *v, &[], None, None)?;
+        if let Some(fid) = globals.check_method(v, IdentId::TO_S) {
+            let ret = vm.invoke_func_inner(globals, fid, v, &[], None, None)?;
             if let Some(inner) = ret.is_rstring_inner() {
                 append_string(out, state, inner, &globals.store)?;
                 continue;
@@ -2516,7 +2541,7 @@ fn array_join(
         return Err(MonorubyErr::method_not_found(
             &globals.store,
             IdentId::TO_S,
-            *v,
+            v,
         ));
     }
     Ok(())
@@ -2689,46 +2714,64 @@ fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         Some(bh) => Some(vm.get_block_data(globals, bh)?),
         None => None,
     };
-    let mut i = 0;
-    loop {
-        let v = {
-            let ary = self_val.as_array();
-            if i >= ary.len() {
-                break;
-            }
-            ary[i]
-        };
-        i += 1;
-        let v = match &block_data {
-            Some(data) => vm.invoke_block(globals, data, &[v])?,
-            None => v,
-        };
-        if let (Some(f), Some(x)) = (sum.try_float(), v.try_float()) {
-            let t = f + x;
-            if t.is_finite() {
-                comp += if f.abs() >= x.abs() {
-                    (f - t) + x
-                } else {
-                    (x - t) + f
-                };
-            }
-            sum = Value::float(t);
-        } else {
-            if comp != 0.0
-                && let Some(f) = sum.try_float()
-            {
-                sum = Value::float(f + comp);
-            }
-            comp = 0.0;
-            sum = executor::op::add_values(vm, globals, sum, v, false).ok_or_else(|| vm.take_error())?;
+    // The running total is often a fresh object that only `sum` holds (a
+    // String or Array from `sum("")` / `sum([])`, a Rational, a Bignum, a
+    // heap Float) while the block and `+` run Ruby: keep it on the temp
+    // stack at `sum_idx`, replaced whenever it changes to another heap
+    // object, or a collection there frees it.
+    fn root_sum(vm: &mut Executor, sum_idx: usize, sum: Value) {
+        if !sum.is_packed_value() {
+            vm.temp_clear(sum_idx);
+            vm.temp_push(sum);
         }
     }
-    if comp != 0.0
-        && let Some(f) = sum.try_float()
-    {
-        sum = Value::float(f + comp);
-    }
-    Ok(sum)
+    vm.with_temp_scope(|vm| {
+        let sum_idx = vm.temp_len();
+        vm.temp_push(sum);
+        let mut i = 0;
+        loop {
+            let v = {
+                let ary = self_val.as_array();
+                if i >= ary.len() {
+                    break;
+                }
+                ary[i]
+            };
+            i += 1;
+            let v = match &block_data {
+                Some(data) => vm.invoke_block(globals, data, &[v])?,
+                None => v,
+            };
+            if let (Some(f), Some(x)) = (sum.try_float(), v.try_float()) {
+                let t = f + x;
+                if t.is_finite() {
+                    comp += if f.abs() >= x.abs() {
+                        (f - t) + x
+                    } else {
+                        (x - t) + f
+                    };
+                }
+                sum = Value::float(t);
+            } else {
+                if comp != 0.0
+                    && let Some(f) = sum.try_float()
+                {
+                    sum = Value::float(f + comp);
+                    root_sum(vm, sum_idx, sum);
+                }
+                comp = 0.0;
+                sum = executor::op::add_values(vm, globals, sum, v, false)
+                    .ok_or_else(|| vm.take_error())?;
+            }
+            root_sum(vm, sum_idx, sum);
+        }
+        if comp != 0.0
+            && let Some(f) = sum.try_float()
+        {
+            sum = Value::float(f + comp);
+        }
+        Ok(sum)
+    })
 }
 
 ///
@@ -3199,23 +3242,37 @@ fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
     let Some(bh) = lfp.block() else {
         return array_enumerator(vm, globals, self_val, IdentId::get_id("partition"), pc);
     };
-    let mut res_true = vec![];
-    let mut res_false = vec![];
     let p = vm.get_block_data(globals, bh)?;
-    let mut i = 0;
-    while i < self_val.as_array().len() {
-        let elem = self_val.as_array()[i];
-        if vm.invoke_block(globals, &p, &[elem])?.as_bool() {
-            res_true.push(elem);
-        } else {
-            res_false.push(elem);
-        };
-        i += 1;
-    }
-    Ok(Value::array2(
-        Value::array_from_vec(res_true),
-        Value::array_from_vec(res_false),
-    ))
+    // Every element goes on the temp stack as it is yielded, not into Rust
+    // `Vec`s: one the block removes from the receiver is held by nothing
+    // else, and a collection in a later block call would free it. Which
+    // half it belongs to is kept beside, and the halves are made once the
+    // last block call is over.
+    vm.with_temp_scope(|vm| {
+        let base = vm.temp_len();
+        let mut to_first = vec![];
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let elem = self_val.as_array()[i];
+            to_first.push(vm.invoke_block(globals, &p, &[elem])?.as_bool());
+            vm.temp_push(elem);
+            i += 1;
+        }
+        let elems = vm.temp_values_from(base);
+        let mut first = Vec::with_capacity(elems.len());
+        let mut second = Vec::with_capacity(elems.len());
+        for (elem, to_first) in elems.into_iter().zip(to_first) {
+            if to_first {
+                first.push(elem);
+            } else {
+                second.push(elem);
+            }
+        }
+        Ok(Value::array2(
+            Value::array_from_vec(first),
+            Value::array_from_vec(second),
+        ))
+    })
 }
 
 pub(super) fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
@@ -3435,16 +3492,22 @@ fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut res = vec![];
-        let mut i = 0;
-        while i < self_val.as_array().len() {
-            let elem = self_val.as_array()[i];
-            if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-                res.push(elem);
-            };
-            i += 1;
-        }
-        Ok(Value::array_from_vec(res))
+        // Collected on the temp stack, not in a Rust `Vec`: an element the
+        // block removes from the receiver is held by nothing else, and a
+        // collection in a later block call would free it. The result is
+        // made from them once the last block call is over.
+        vm.with_temp_scope(|vm| {
+            let base = vm.temp_len();
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let elem = self_val.as_array()[i];
+                if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                    vm.temp_push(elem);
+                };
+                i += 1;
+            }
+            Ok(Value::array_from_vec(vm.temp_values_from(base)))
+        })
     } else {
         array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("filter"), pc)
     }
@@ -3575,16 +3638,19 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut res = vec![];
-        let mut i = 0;
-        while i < self_val.as_array().len() {
-            let elem = self_val.as_array()[i];
-            if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-                res.push(elem);
-            };
-            i += 1;
-        }
-        Ok(Value::array_from_vec(res))
+        // Collected on the temp stack, as in `filter`.
+        vm.with_temp_scope(|vm| {
+            let base = vm.temp_len();
+            let mut i = 0;
+            while i < self_val.as_array().len() {
+                let elem = self_val.as_array()[i];
+                if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
+                    vm.temp_push(elem);
+                };
+                i += 1;
+            }
+            Ok(Value::array_from_vec(vm.temp_values_from(base)))
+        })
     } else {
         array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("reject"), pc)
     }
@@ -3786,14 +3852,14 @@ fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr)
     let Some(bh) = lfp.block() else {
         return array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("flat_map"), pc);
     };
-    let elems: Vec<Value> = lfp.self_val().as_array().iter().copied().collect();
+    let self_val = lfp.self_val();
     let data = vm.get_block_data(globals, bh)?;
     // The accumulator has to be a *rooted* Ruby Array, not a Rust `Vec`:
     // every `invoke_block` below is a safepoint, and values held only by
     // an unrooted Vec would be swept out from under us (the gc-stress
     // optcarrot abort).
-    vm.temp_array_new(elems.len());
-    let res = flat_map_inner(vm, globals, &data, elems);
+    vm.temp_array_new(self_val.as_array().len());
+    let res = flat_map_inner(vm, globals, &data, self_val);
     let v = vm.temp_pop();
     res?;
     Ok(v)
@@ -3803,9 +3869,15 @@ fn flat_map_inner(
     vm: &mut Executor,
     globals: &mut Globals,
     data: &ProcData,
-    elems: Vec<Value>,
+    self_val: Value,
 ) -> Result<()> {
-    for x in elems {
+    // The receiver is read by index at every step, as `Array#each` reads
+    // it, and not from a snapshot: an element the block removes would be
+    // held by the snapshot alone, freed by a collection in a later block
+    // call, and then yielded.
+    let mut i = 0;
+    while let Some(&x) = self_val.as_array().get(i) {
+        i += 1;
         let r = vm.invoke_block(globals, data, &[x])?;
         if let Some(a) = r.try_array_ty() {
             vm.temp_array_extend_from_slice(&a);
@@ -4138,30 +4210,42 @@ fn reverse_(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reverse.html]
 #[monoruby_builtin]
 fn transpose(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let ary = lfp.self_val().as_array();
-    if ary.len() == 0 {
+    let self_val = lfp.self_val();
+    let alen = self_val.as_array().len();
+    if alen == 0 {
         return Ok(Value::array_empty());
     }
     // Coerce every row once, up front. CRuby calls #to_ary exactly once
     // per element; doing it inside the inner loop would invoke the mock
-    // (or user-defined `to_ary`) `len * n` times.
-    let rows: Vec<Array> = ary
-        .iter()
-        .map(|v| coerce_to_array_for_transpose(vm, globals, *v))
-        .collect::<Result<_>>()?;
-    let len = rows[0].len();
-    let mut trans = Array::new_empty();
-    for i in 0..len {
-        let mut temp = Array::new_empty();
-        for row in &rows {
-            if row.len() != len {
-                return Err(MonorubyErr::indexerr("Element size differs."));
-            }
-            temp.push(row[i]);
+    // (or user-defined `to_ary`) `len * n` times. A row `#to_ary` made is
+    // held by nothing else while the next one's `#to_ary` runs, so the
+    // rows go into a rooted Array; and the receiver is read by index, as
+    // CRuby's `rb_ary_elt` reads it (nil past the end), since a `#to_ary`
+    // may resize it.
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(alen);
+        let rows_idx = vm.temp_len() - 1;
+        for i in 0..alen {
+            let v = self_val.as_array().get(i).copied().unwrap_or_default();
+            let row = coerce_to_array_for_transpose(vm, globals, v)?;
+            vm.temp_at(rows_idx).as_array().push(row.into());
         }
-        trans.push(temp.into());
-    }
-    Ok(trans.into())
+        let rows = vm.temp_at(rows_idx).as_array();
+        let len = rows[0].as_array().len();
+        let mut trans = Array::new_empty();
+        for i in 0..len {
+            let mut temp = Array::new_empty();
+            for row in rows.iter() {
+                let row = row.as_array();
+                if row.len() != len {
+                    return Err(MonorubyErr::indexerr("Element size differs."));
+                }
+                temp.push(row[i]);
+            }
+            trans.push(temp.into());
+        }
+        Ok(trans.into())
+    })
 }
 
 fn coerce_to_array_for_transpose(
@@ -4697,11 +4781,20 @@ fn try_convert_to_array(
     }
 }
 
+/// Flatten `ary` onto the temp stack, each element pushed in turn on top
+/// of what is there.
+///
+/// The result is collected there rather than in a Rust `Vec`, and `ary` is
+/// read by index at every step, as CRuby's `flatten` reads it: the
+/// `#to_ary` probes run Ruby, which may resize `ary` or remove from it
+/// elements that would then be held only by the result. The Arrays being
+/// walked are kept in `roots`, an Array on the temp stack, instead, so that
+/// they do not land in the result.
 fn flatten_inner(
     vm: &mut Executor,
     globals: &mut Globals,
-    ary: &Array,
-    res: &mut Vec<Value>,
+    ary: Array,
+    mut roots: Array,
     lv: Option<usize>,
     changed: &mut bool,
     seen: &mut Vec<u64>,
@@ -4711,21 +4804,34 @@ fn flatten_inner(
         return Err(MonorubyErr::argumenterr("tried to flatten recursive array"));
     }
     seen.push(id);
-    for v in ary.iter() {
+    let mut i = 0;
+    while let Some(&v) = ary.get(i) {
+        i += 1;
         // At level 0, no flattening occurs — do not call to_ary.
         if let Some(0) = lv {
-            res.push(*v);
+            vm.temp_push(v);
             continue;
         }
-        if let Some(inner) = try_convert_to_array(v, vm, globals)? {
+        if let Some(inner) = try_convert_to_array(&v, vm, globals)? {
             *changed = true;
-            if let Some(lv) = lv {
-                flatten_inner(vm, globals, &inner, res, Some(lv - 1), changed, seen)?;
-            } else {
-                flatten_inner(vm, globals, &inner, res, None, changed, seen)?;
-            }
+            // `inner` may be a fresh Array an element's `#to_ary` made
+            // (ActiveRecord's `Relation#to_ary` answers `records.dup`),
+            // held only here while its own elements are probed: root it,
+            // or a collection there frees it under the walk.
+            roots.push(inner.into());
+            let res = flatten_inner(
+                vm,
+                globals,
+                inner,
+                roots,
+                lv.map(|lv| lv - 1),
+                changed,
+                seen,
+            );
+            roots.pop();
+            res?;
         } else {
-            res.push(*v);
+            vm.temp_push(v);
         }
     }
     seen.pop();
@@ -4753,11 +4859,23 @@ fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     } else {
         None
     };
-    let mut res = vec![];
     let mut changed = false;
     let mut seen = vec![];
-    flatten_inner(vm, globals, &ary, &mut res, lv, &mut changed, &mut seen)?;
-    Ok(Value::array_from_vec(res))
+    vm.with_temp_scope(|vm| {
+        let roots = Value::array_empty();
+        vm.temp_push(roots);
+        let base = vm.temp_len();
+        flatten_inner(
+            vm,
+            globals,
+            ary,
+            roots.as_array(),
+            lv,
+            &mut changed,
+            &mut seen,
+        )?;
+        Ok(Value::array_from_vec(vm.temp_values_from(base)))
+    })
 }
 
 ///
@@ -4781,10 +4899,23 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     } else {
         None
     };
-    let mut res = vec![];
     let mut changed = false;
     let mut seen = vec![];
-    flatten_inner(vm, globals, &ary, &mut res, lv, &mut changed, &mut seen)?;
+    let res = vm.with_temp_scope(|vm| {
+        let roots = Value::array_empty();
+        vm.temp_push(roots);
+        let base = vm.temp_len();
+        flatten_inner(
+            vm,
+            globals,
+            ary,
+            roots.as_array(),
+            lv,
+            &mut changed,
+            &mut seen,
+        )?;
+        Ok(vm.temp_values_from(base))
+    })?;
     ary.replace(res);
     Ok(if changed { ary.into() } else { Value::nil() })
 }
@@ -8743,6 +8874,140 @@ mod tests {
             r << (Array.new(17) { Object.new }.difference(Array.new(17, poison)) rescue $!.message)
             r << [1, 1].intersection << [1, 1, 2].intersection([2, 1, 1])
             r << ([1, 1.0, 1] | [1.0]) << ([1, 2, 2, 3] & [2, 3, 3])
+            r
+            "##,
+        );
+    }
+
+    /// `sum` with a block keeps its running total — a fresh String, Array
+    /// or Rational — rooted across the block, which runs Ruby (here a
+    /// collection), and across `+`.
+    #[test]
+    fn sum_keeps_accumulator_across_block() {
+        run_test_once(
+            r##"
+            r = nil
+            20.times do
+              r = [
+                %w[a b c d e].sum("") { |w| GC.start; w.upcase * 2 },
+                (1..8).to_a.sum(0r) { |x| GC.start; Rational(x, 7) },
+                [1, 2, 3].sum([]) { |x| GC.start; [x.to_s * 2] },
+              ]
+            end
+            r
+            "##,
+        );
+    }
+
+    /// `to_h` keeps the pair the block (or an element's `#to_ary`) made
+    /// rooted while the key's `#hash` runs, here with a collection in it.
+    #[test]
+    fn to_h_keeps_pair_across_key_hash() {
+        run_test_once(
+            r##"
+            class GcKey
+              def initialize(n) = @n = n
+              attr_reader :n
+              def hash = (GC.start; @n.hash)
+              def eql?(o) = o.is_a?(GcKey) && o.n == @n
+            end
+            class GcPair
+              def initialize(n) = @n = n
+              def to_ary = [GcKey.new(@n), "ary#{@n}" * 2]
+            end
+            r = nil
+            20.times do
+              r = [
+                (1..5).to_a.to_h { |x| [GcKey.new(x), "val#{x}" * 2] }.values,
+                (1..3).map { GcPair.new(_1) }.to_h.values,
+              ]
+            end
+            r
+            "##,
+        );
+    }
+
+    /// `flatten`, `flatten!`, `join` and `*` keep a fresh Array an
+    /// element's `#to_ary` answered (as ActiveRecord's `Relation#to_ary`
+    /// answers `records.dup`) rooted while its own elements are probed,
+    /// with a collection inside the probe.
+    #[test]
+    fn flatten_and_join_root_to_ary_results() {
+        run_test_once(
+            r##"
+            class GcElem
+              def initialize(n) = @n = n
+              def to_ary = (GC.start; nil)
+              def to_s = (GC.start; "g#{@n}")
+              def inspect = "g#{@n}"
+            end
+            class GcRows
+              def initialize(n) = @n = n
+              def to_ary = ["s#{@n}" * 2, GcElem.new(@n), "t#{@n}" * 2]
+            end
+            r = nil
+            20.times do
+              a = [GcRows.new(1), GcRows.new(2)]
+              b = [GcRows.new(3), [GcRows.new(4)]]
+              b.flatten!
+              r = [a.flatten, b, a.join(","), a * "-", a.flatten(1)]
+            end
+            r.map { |x| x.is_a?(Array) ? x.map { _1.is_a?(GcElem) ? _1.inspect : _1 } : x }
+            "##,
+        );
+    }
+
+    /// `transpose` keeps every row `#to_ary` made rooted while the next
+    /// row's `#to_ary` runs, and `<=>` keeps the `#to_ary` answer rooted
+    /// across the elements' `<=>`.
+    #[test]
+    fn transpose_and_cmp_root_to_ary_results() {
+        run_test_once(
+            r##"
+            class GcRow
+              def initialize(n) = @n = n
+              def to_ary = (GC.start; ["a#{@n}" * 2, "b#{@n}" * 2])
+            end
+            class GcCmp
+              def <=>(o) = (GC.start; 0)
+            end
+            class GcCmpRow
+              def to_ary = [GcCmp.new, "x" * 3, GcCmp.new, "y" * 3]
+            end
+            r = nil
+            20.times do
+              r = [
+                [GcRow.new(1), GcRow.new(2), GcRow.new(3)].transpose,
+                [GcCmp.new, GcCmp.new, GcCmp.new, GcCmp.new] <=> GcCmpRow.new,
+              ]
+            end
+            r
+            "##,
+        );
+    }
+
+    /// `select`, `reject`, `partition` and `flat_map` hold what they have
+    /// collected in rooted Arrays, and `flat_map` reads the receiver as it
+    /// goes: a block that drops elements from the receiver (and collects)
+    /// must not leave them to be freed.
+    #[test]
+    fn select_family_roots_collected_elements() {
+        run_test_once(
+            r##"
+            fresh = -> { (1..6).map { |i| "e#{i}" * 3 } }
+            r = nil
+            20.times do
+              a = fresh.()
+              k = 0
+              sel = a.select { |x| a[k - 1] = "z" if k > 0; k += 1; GC.start; true }
+              a = fresh.()
+              rej = a.reject { |x| a.shift if a.size > 3; GC.start; false }
+              a = fresh.()
+              par = a.partition { |x| a.shift if a.size > 3; GC.start; true }
+              a = fresh.()
+              fm = a.flat_map { |x| a.pop if a.size > 3; GC.start; [x] }
+              r = [sel, rej, par, fm]
+            end
             r
             "##,
         );
