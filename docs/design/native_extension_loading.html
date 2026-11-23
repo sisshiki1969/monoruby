@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6f20bb35.js";
+            window.path_to_searchindex_js = "../searchindex-1de60ad6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -626,6 +626,21 @@ feature は加算しかしないので、<code>default-features = false</code> �
 <li><code>&lt;実行ファイルのあるディレクトリ&gt;/..</code> に <code>builtins/</code> があればそこ</li>
 <li>焼き込まれた <code>env!("MONORUBY_INSTALL_ROOT")</code></li>
 </ol>
+<p>どれで決まっても、答えは<strong>正規化（シンボリックリンクを解決）して
+プロセスで一度だけ</strong>求める（<code>globals::install_tree</code>）。ロードした
+ファイルのパスは正規化されたディレクトリを持つ（<code>require</code> は
+<code>$LOAD_PATH</code> のエントリを、<code>require_relative</code> は呼び出し元のファイルを
+解決する）ので、「このファイルは monoruby 自身のものか」を訊く比較は
+正規化した側と突き合わせなければ外れる。書かれたままの root だと、
+<code>MONORUBY_INSTALL_ROOT</code> がリンクを指すときや、ホームがリンク越し
+（macOS の <code>/tmp</code>、リンクの <code>/home</code>）のビルドで、<code>builtins/</code> の
+ファイルが一つも内部扱いされなかった（#2152）。root の下の
+<code>builtins</code> / <code>lib</code> / <code>stub</code> がそれぞれリンクの木（下のテストが組む形）
+でも同じことが起きるので、三つは個別にも正規化して持つ
+（<code>builtins_dir</code> / <code>lib_dir</code> / <code>stub_dir</code>）。比較はそれらを使い、
+<code>$LOAD_PATH</code> に載せるのは <code>install_root().join("lib")</code> のまま。
+<code>tests/install_root.rs</code> がリンク越しの root で、
+<code>tests/relocatable_install.rs</code> がリンクの木で確かめる。</p>
 <p>2 の目印が <code>builtins/</code> なのは、それが install root にしか無く、
 <code>~/.cargo/bin/monoruby</code> のような「木を伴わないバイナリ」を
 誤検出しないため。<code>bin/dist</code> はこの形</p>
