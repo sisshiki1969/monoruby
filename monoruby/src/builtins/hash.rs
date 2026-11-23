@@ -3037,15 +3037,15 @@ fn env_getenv(globals: &mut Globals, name: &[u8]) -> Option<Value> {
     Some(env_fresh_string(globals, env_string_from_inner(inner)))
 }
 
-/// `Errno::EINVAL` for a name `setenv(3)` refuses: an empty one, or one
-/// with a `=` in it.
-fn env_invalid_name(store: &Store, name: &[u8]) -> MonorubyErr {
+/// `Errno::EINVAL` for a name `setenv(3)` / `unsetenv(3)` (`func`)
+/// refuses: an empty one, or one with a `=` in it.
+fn env_invalid_name(store: &Store, func: &str, name: &[u8]) -> MonorubyErr {
     let err = std::io::Error::from_raw_os_error(libc::EINVAL);
     MonorubyErr::from_io_err(
         store,
         &err,
         format!(
-            "Invalid argument - setenv({})",
+            "Invalid argument - {func}({})",
             String::from_utf8_lossy(name)
         ),
     )
@@ -3072,7 +3072,7 @@ fn env_aset(vm: &mut Executor, globals: &mut Globals, key: Value, val: Value) ->
         env_check(value, "value")?;
         let (name, bytes) = (env_bytes(&name), env_bytes(&value));
         if !crate::environ::is_settable_name(name) {
-            return Err(env_invalid_name(&globals.store, name));
+            return Err(env_invalid_name(&globals.store, "setenv", name));
         }
         crate::environ::set(name, bytes);
         env_did_change();
@@ -3081,13 +3081,21 @@ fn env_aset(vm: &mut Executor, globals: &mut Globals, key: Value, val: Value) ->
 }
 
 /// CRuby's `env_delete`: unset the variable `key` names and answer the
-/// value it had, `None` when it was not set (a name `unsetenv` rejects
-/// never is).
+/// value it had, `None` when it was not set.
+///
+/// Like CRuby, this asks `getenv(3)` and calls `unsetenv(3)` only when
+/// it found something — and `getenv` can find a variable for a name
+/// `unsetenv` rejects: Darwin's compares only up to a `=` (`"HOME=r"`
+/// finds HOME), glibc's finds `"HOME=r"` in the entry `HOME=r=x`. Then
+/// `unsetenv` fails, and CRuby raises its `EINVAL`.
 fn env_delete_name(vm: &mut Executor, globals: &mut Globals, key: Value) -> Result<Option<Value>> {
     let name = env_name(vm, globals, key)?;
     let name = env_bytes(&name);
     let removed = env_getenv(globals, name);
     if removed.is_some() {
+        if !crate::environ::is_settable_name(name) {
+            return Err(env_invalid_name(&globals.store, "unsetenv", name));
+        }
         crate::environ::unset(name);
         env_did_change();
     }
@@ -3358,9 +3366,14 @@ fn env_to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
                     arr.len(),
                 )));
             }
+            // `insert` runs the key's `#hash` / `#eql?`, and the Array the
+            // block answered — the only thing holding the value — is not
+            // referenced from anywhere a collection looks.
+            vm.temp_push(arr.into());
             vm.temp_at(map_idx)
                 .as_hash()
                 .insert(arr[0], arr[1], vm, globals)?;
+            vm.temp_clear(map_idx + 1);
         }
         Ok(vm.temp_at(map_idx))
     })
@@ -8046,6 +8059,65 @@ mod tests {
             r << ENV.keep_if { |k, v| ENV[a] = "changed"; true }.equal?(ENV)
             r << [ENV.delete(a), ENV.delete(b)]
             r
+            "##,
+        );
+    }
+
+    /// `getenv` can find a variable for a name `unsetenv` rejects —
+    /// Darwin's compares up to the `=` (`"NAME=x"` finds NAME), glibc's
+    /// finds `"NAME=x"` in the entry `NAME=x=y` — and then `ENV.delete`
+    /// and `ENV[name] = nil` raise `unsetenv`'s EINVAL, as on CRuby.
+    /// Live: which of these find something is the platform libc's answer.
+    #[test]
+    fn env_delete_name_with_equals() {
+        let _g = env_lock();
+        run_test_once_live(
+            r##"
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            n = "MONORUBY_ENV_EQ"
+            ENV[n] = "1"
+            r = [
+              t { ENV.delete("#{n}=x") },
+              t { ENV["#{n}=x"] = nil },
+              t { ENV.delete("#{n}=x") { :blk } },
+              ENV[n],
+            ]
+            ENV[n] = "x=y"
+            r << t { ENV.delete("#{n}=x") } << t { ENV.store("#{n}=x", nil) } << ENV[n]
+            ENV.delete(n)
+            r
+            "##,
+        );
+    }
+
+    /// `ENV.to_h { }` keeps the `[key, value]` Array the block answered
+    /// alive while the key's `#hash` runs — here a collection, then enough
+    /// allocation to reuse whatever it freed.
+    #[test]
+    fn env_to_h_block_pair_survives_gc_in_hash() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            class EnvToHKey
+              attr_reader :s
+              def initialize(s) = @s = s
+              def hash
+                if @s == "MONORUBY_ENV_TOH"
+                  GC.start
+                  $junk = Array.new(3000) { |i| "junk#{i}" }
+                end
+                @s.hash
+              end
+              def eql?(o) = o.is_a?(EnvToHKey) && @s == o.s
+            end
+            ENV["MONORUBY_ENV_TOH"] = "1"
+            h = ENV.to_h { |k, v| [EnvToHKey.new(k), "fresh-" + v] }
+            ENV.delete("MONORUBY_ENV_TOH")
+            GC.start
+            [
+              h.find { |k, _| k.s == "MONORUBY_ENV_TOH" }&.last,
+              h.count { |_, v| !(v.is_a?(String) && v.start_with?("fresh-")) },
+            ]
             "##,
         );
     }

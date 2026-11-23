@@ -931,6 +931,7 @@
 245e848f69575fb36810ea7f6796973c	TypeError	(GC.stat(7) rescue $!.class)
 246af9040a3d2f43e9ddf823ee30471c	true	(0x8000_0000_0000_0000 + 39) > (0x8000_0000_0000_0000 + 39 + 0.0)
 2475f3fc8f38ad071f66332d846bc60b	"symbol"	x = case :symbol\n        when Integer then 'integer'\n        when Float
+2485d9ef7820183d14947562a4654306	["fresh-1", 0]	class EnvToHKey\n              attr_reader :s\n              def init
 2492f3c9adb70473764e1334e04095b3	"NIL\\nNIL\\nNIL\\nNIL\\n1\\n"	class NilClass; def to_s = "NIL"; end\n        r, w = IO.pipe\n        w.
 24980ee0ca7ee727c3d08bd9ef96c344	[31.5, 27.0, 1.0625324586456702e+22, 0.0]	def d(n, k)\n          i = 0\n          s = 0.0\n          while i < n\n   
 249eeebcb774e4d0a04f64968012ff7b	81	class Integer; alias __orig :**; def **(o); __orig(o); end; end; 3 ** 4
