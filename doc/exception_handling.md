@@ -293,24 +293,25 @@ hooked-global runtime call, once per invocation of *every* method carrying a
 `begin`..`ensure` or `begin`..`rescue`:
 
 ```text
-:00001 %2 = $(errinfo)
+:00001 %2 = /errinfo
       mov  rdi,rbx / mov rsi,r12 / mov edx,0x6a      before
       movabs rax,<runtime::get_global_var> / call rax
 
       mov  rax,QWORD PTR [rbx+0x198]                 after
 ```
 
-`$!` is a plain `Value` field of the `Executor` and `$(errinfo)`'s hook is
+`$!` is a plain `Value` field of the `Executor` and `/errinfo`'s hook is
 `Some(vm.errinfo())`, so `AsmInst::LoadErrinfo` is the same read — with the
 call's FP save set and GP flush gone with it. The load is equivalent only
 because `rbx` is the *current* `Executor`, which is what `$!` is per (CRuby
 keeps errinfo per execution context, and so does monoruby), so a Fiber or
 Thread reads its own.
 
-Only the internal name is specialized. `$(errinfo)` is what bytecodegen emits
-and is not a name Ruby's parser can produce, so no program can alias it,
-`trace_var` it or otherwise put a hook in the way; user-written `$!` reads keep
-the generic path. The name is pre-interned as
+Only the internal name is specialized. `/errinfo` is what bytecodegen emits
+and is not a `$` name — which the parser, `trace_var` / `untrace_var` and the C
+API's `rb_gv_get` / `rb_gv_set` all require or prepend, and the only kind
+`global_variables` lists — so no program can alias it, `trace_var` it or
+otherwise put a hook in the way; user-written `$!` reads keep the generic path. The name is pre-interned as
 `IdentId::GVAR_ERRINFO_INTERNAL` so the recognition is an integer compare
 rather than a lock and a string hash.
 

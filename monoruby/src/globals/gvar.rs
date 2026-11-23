@@ -315,12 +315,13 @@ impl GvarTable {
                 // Reading a never-assigned ordinary global warns in
                 // verbose mode. Restricted to plain identifier names:
                 // punctuation/dash specials read as nil silently, and
-                // hidden internals (`$__flip_flop_N`, …) and hooked
-                // entries whose getter reported "not present" (`$1`
-                // with no match) must not warn either.
+                // the interpreter's own entries (`/flip_flop_N`, …:
+                // names without the `$`) and hooked entries whose getter
+                // reported "not present" (`$1` with no match) must not
+                // warn either.
                 if !globals.gvars.index.contains_key(&name) {
                     let n = name.get_name();
-                    if !n.starts_with("$__")
+                    if n.starts_with('$')
                         && n[1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
                         && n != "$FILENAME"
                         && verbose_mode(globals)
@@ -512,8 +513,17 @@ impl GvarTable {
 
     /// Every registered global-variable name (Simple, Alias, or
     /// Hooked), for `Kernel#global_variables`.
+    ///
+    /// Only `$` names: the table also holds the interpreter's own
+    /// entries — the `$!` save (`ERRINFO_INTERNAL_GVAR`), the per-site
+    /// state of a flip-flop, `END { }` and `/.../o` — which are named
+    /// without one so that nothing a program can write reaches them.
     pub(crate) fn names(&self) -> Vec<IdentId> {
-        self.index.keys().copied().collect()
+        self.index
+            .keys()
+            .copied()
+            .filter(|name| name.get_name().starts_with('$'))
+            .collect()
     }
 
     /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.
@@ -870,8 +880,9 @@ pub fn init_builtin_gvars(globals: &mut Globals) {
     // process-global gvar table, and it is read-only from Ruby. The VM's
     // rescue-entry path writes the field directly; the bytecodegen
     // save/restore protocol (rescue-exit restore, `defined?` probes)
-    // writes it through the internal `$(errinfo)` hook, whose name cannot
-    // be spelled in Ruby source.
+    // writes it through the internal `/errinfo` hook
+    // (`ERRINFO_INTERNAL_GVAR`), a name outside the `$` namespace that no
+    // program can reach.
     fn get_errinfo(
         vm: &mut Executor,
         _globals: &mut Globals,

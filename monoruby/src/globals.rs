@@ -304,9 +304,19 @@ pub(crate) const GLOBALS_CLASS_OBJECTS: usize =
 
 /// Internal gvar name used by bytecodegen to save/restore `$!`
 /// (`Executor::errinfo`). `$!` itself is read-only from Ruby, so the
-/// generated save/restore code writes through this hooked alias instead;
-/// the parentheses make the name unspellable in Ruby source.
-pub(crate) const ERRINFO_INTERNAL_GVAR: &str = "$(errinfo)";
+/// generated save/restore code writes through this hooked entry instead.
+///
+/// The name has no `$`, which is what keeps it internal, as it does the
+/// parser's per-site state variables (`/flip_flop_N`, `/end_block_N`,
+/// `/regexp_once_N`): everything that takes a global variable's name
+/// from a program — the parser, `trace_var` / `untrace_var`
+/// (`gvar_trace_name`), the C API's `rb_gv_get` / `rb_gv_set` /
+/// `rb_define_*_variable`, the extension ABI (`extension_gvar_name`) —
+/// requires or prepends one, and `global_variables` lists only `$` names
+/// (`GvarTable::names`). It used to be `$(errinfo)`, which no source
+/// could spell but `trace_var` and `rb_gv_set` could reach, and which
+/// `global_variables` listed.
+pub(crate) const ERRINFO_INTERNAL_GVAR: &str = "/errinfo";
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExternalContext {

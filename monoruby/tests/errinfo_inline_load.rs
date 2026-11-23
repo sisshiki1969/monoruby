@@ -3,14 +3,14 @@
 //! hooked-global runtime call.
 //!
 //! ```text
-//! :00001 %2 = $(errinfo)
+//! :00001 %2 = /errinfo
 //!       mov  rdi,rbx / mov rsi,r12 / mov edx,0x6a      before
 //!       movabs rax,<runtime::get_global_var> / call rax
 //!
 //!       mov  rax,QWORD PTR [rbx+0x198]                 after
 //! ```
 //!
-//! `$!` is a plain `Value` field of the `Executor` and `$(errinfo)`'s hook
+//! `$!` is a plain `Value` field of the `Executor` and `/errinfo`'s hook
 //! is `Some(vm.errinfo())`, so the two are the same read — but the call
 //! also carried an FP save set, and it ran once per invocation of *every*
 //! method carrying a `begin`..`ensure` or `begin`..`rescue`.

@@ -4084,7 +4084,7 @@ pub(super) enum AsmInst {
     },
     ///
     /// `rax <- $!`, the fast form of [`Self::LoadGVar`] for
-    /// `$(errinfo)` — the internal name bytecodegen emits for a protected
+    /// `/errinfo` — the internal name bytecodegen emits for a protected
     /// region's entry save, once per invocation of every method carrying
     /// one.
     ///
@@ -4092,8 +4092,9 @@ pub(super) enum AsmInst {
     /// `vm.errinfo()`, so the generic path's runtime call (plus its FP
     /// save set and GP flush) buys nothing. The name is interned as
     /// `IdentId::GVAR_ERRINFO_INTERNAL` and cannot be written, aliased or
-    /// traced from Ruby — it is not a name the parser can produce — so
-    /// there is no hook for a program to install in the way.
+    /// traced from Ruby — it is not a `$` name, which the parser,
+    /// `trace_var` and the C API's `rb_gv_*` all require — so there is no
+    /// hook for a program to install in the way.
     ///
     /// ### out
     /// - rax: the current `$!`
@@ -4101,7 +4102,7 @@ pub(super) enum AsmInst {
     LoadErrinfo,
     ///
     /// `$! <- src`, the store counterpart of [`Self::LoadErrinfo`]: a
-    /// protected region's exit restores `$(errinfo)`, and its hook only
+    /// protected region's exit restores `/errinfo`, and its hook only
     /// writes the `Executor` field.
     ///
     StoreErrinfo {

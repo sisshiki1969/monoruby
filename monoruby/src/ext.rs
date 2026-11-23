@@ -1137,13 +1137,30 @@ unsafe extern "C" fn mr_obj_frozen(_ctx: *mut MrContext, v: MrValue) -> c_int {
     Value::from_u64(v).is_frozen() as c_int
 }
 
+/// The global variable an extension names: a `$` name. The table's
+/// other entries are the interpreter's own (`ERRINFO_INTERNAL_GVAR`),
+/// which nothing outside it reads, writes or hooks.
+fn extension_gvar_name(name: &str) -> Result<IdentId> {
+    if name.starts_with('$') {
+        Ok(IdentId::get_id(name))
+    } else {
+        Err(MonorubyErr::nameerr(format!(
+            "'{name}' is not allowed as a global variable name"
+        )))
+    }
+}
+
 /// `rb_gv_get`: the global `name` (with its `$`), through its hook as a
-/// Ruby read would be (`$/`, `$;`, `$~`, ...).
+/// Ruby read would be (`$/`, `$;`, `$~`, ...). A name without the `$`
+/// is no global variable, and reads as nil.
 unsafe extern "C" fn mr_gvar_get(ctx: *mut MrContext, name: *const c_char) -> MrValue {
     // SAFETY: the table's contract.
     let (vm, globals) = unsafe { parts(ctx) };
     let name = unsafe { cstr(name) };
-    crate::globals::GvarTable::get(vm, globals, IdentId::get_id(name)).id()
+    match extension_gvar_name(name) {
+        Ok(name) => crate::globals::GvarTable::get(vm, globals, name).id(),
+        Err(_) => Value::nil().id(),
+    }
 }
 
 /// `rb_gv_set`: assign the global `name`, running its setter's checks;
@@ -1153,7 +1170,9 @@ unsafe extern "C" fn mr_gvar_set(ctx: *mut MrContext, name: *const c_char, v: Mr
     let (vm, globals) = unsafe { parts(ctx) };
     let name = unsafe { cstr(name) };
     let Some(v) = val(v) else { return -1 };
-    match crate::globals::GvarTable::set(vm, globals, IdentId::get_id(name), v) {
+    match extension_gvar_name(name)
+        .and_then(|name| crate::globals::GvarTable::set(vm, globals, name, v))
+    {
         Ok(()) => 0,
         Err(e) => {
             set_err(vm, e);
@@ -1177,8 +1196,15 @@ unsafe extern "C" fn mr_gvar_hook(
         set_err(vm, MonorubyErr::argumenterr("gvar_hook was given MR_NO_SYM"));
         return;
     }
+    let name = match extension_gvar_name(&IdentId::from(name).get_name()) {
+        Ok(name) => name,
+        Err(e) => {
+            set_err(vm, e);
+            return;
+        }
+    };
     globals.define_native_gvar(
-        IdentId::from(name),
+        name,
         NativeGvar {
             data,
             getter,
@@ -3275,6 +3301,17 @@ mod tests {
             assert_eq!(mr_gvar_set(ctx, c"$$".as_ptr(), Value::i32(5).id()), -1);
             failed(ctx);
             assert_eq!(mr_gvar_set(ctx, c"$capi_abi_gv".as_ptr(), MR_UNDEF), -1);
+            // Only `$` names are global variables: the interpreter's own
+            // entries of the table (`/errinfo`, the `$!` save) are not
+            // read, written or hooked from here.
+            parts(ctx).0.set_errinfo(long);
+            assert_eq!(mr_gvar_get(ctx, c"/errinfo".as_ptr()), Value::nil().id());
+            assert_eq!(mr_gvar_set(ctx, c"/errinfo".as_ptr(), Value::i32(5).id()), -1);
+            failed(ctx);
+            let internal = IdentId::get_id("/errinfo").get() as MrSym;
+            mr_gvar_hook(ctx, internal, std::ptr::null_mut(), None, None);
+            failed(ctx);
+            assert_eq!(mr_gvar_get(ctx, c"$!".as_ptr()), long.id());
         }
     }
 
