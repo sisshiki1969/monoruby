@@ -574,6 +574,26 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// Does *callid* hand the builtin *func_id* a number of positional
+    /// arguments it accepts (the bounds `runtime::args` enforces)? An
+    /// inline generator stands in for the builtin's body and checks no
+    /// count of its own, so where the builtin would raise ArgumentError
+    /// it must not fire: the ordinary call raises (`[].empty?(1)`,
+    /// `obj.class(1)`). A site with a splat, keywords or a block argument
+    /// is left to the generators, which decline those.
+    ///
+    fn inline_arity_ok(&self, func_id: FuncId, callid: CallSiteId) -> bool {
+        let callsite = &self.store[callid];
+        if !callsite.is_simple() {
+            return true;
+        }
+        let info = &self.store[func_id];
+        let given = callsite.pos_num;
+        given >= info.min_positional_args()
+            && (given <= info.max_positional_args() || info.is_explicit_rest())
+    }
+
+    ///
     /// The side exit for an inline generator's guard on the class of its
     /// site's *argument* (`Hash#[]`'s key, say): a counter-gated
     /// `BecamePolymorphic` recompile of the enclosing unit rather than a
@@ -1132,6 +1152,7 @@ impl<'a> JitContext<'a> {
         }
 
         if callsite.block_fid.is_none()
+            && self.inline_arity_ok(func_id, callid)
             && let Some(info) = self.store.inline_info.get_inline(func_id)
         {
             match info {

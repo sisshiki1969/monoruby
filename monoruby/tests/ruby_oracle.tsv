@@ -300,6 +300,7 @@
 0b006d8d0b7c3b6cbbde169c66a256f9	"hello\\n"	require "socket"\n            s = TCPServer.new("127.0.0.1", 0)\n    
 0b02d3e203d76b6ec36d970414527996	[[2.5, 4.0, 4.5, 6.0], 1.1805916207174113e+21, 1.5]	def probe(x) = x + 1.5\n            vals = [1, 2.5, 3, 4.5]\n        
 0b0604dcfa5aa2a90ccb9b55c158b24e	101	def get_binding\n              x = 100\n              binding\n       
+0b0f4f989d21349de33d95005108058c	[[true, 2], [true, 2], [true, 999]]	class BihFoo; def bar = 1; end\n        BIH_C = 1\n        class BihKey\n 
 0b26a87ee5c24531531b5106bb440366	[[200, 100, 0], true, true, true, true, false, true, false, true, true, true]	seq = Ractor.make_shareable("GGTATT" * 100)\n        rs = [1, 2, 3].map 
 0b272bc1eee3862ebd5afe122f6530ac	[0, 50, "custom", true, false, false]	def check(x) = x.is_a?(Integer)\n            def fro(x) = x.frozen?\n
 0b360a7151ca4646f547e0ecffd6cf13	[true, true, true, true, true, ArgumentError, ArgumentError, TypeError, TypeError, Hash, false]	(ENV["MONO_T_ZZ"]="hi"; a=ENV["MONO_T_ZZ"].frozen?; b=ENV.method(:has_key?)==ENV
@@ -3087,6 +3088,7 @@
 7f72dab92b884e3e9e386afba34e01d5	[EOFError, "", 0, 257, 3, [Errno::EPIPE, "Broken pipe"], "newline decorator with binary mode", "newline decorator with binary mode"]	r = []\n            path = "/tmp/monoruby_pread_eof_#{$$}"\n         
 7f747f780d48143c0ab242713c240386	["Foo", "Bar", "Foo"]	$a = []\n            class Foo\n                CONST = 'Foo'\n       
 7f859e89e1379a7cf00760b56af97285	"あ"	class HiroChar\n                  def to_int; 0x3042; end\n      
+7f91d36561ba98ec6b811980cbf5ee8c	[IO, File]	def bih_reopen(io, other)\n          c0 = io.class\n          io.reopen(o
 7f983c97ff2d7632ca2566839b2d0aa5	true	rng = Random.new(42)\n        a = rng.rand(1.5)\n        a.is_a?(Float) &
 7f9de09761ed4f31f66268b4a5af3f11	[[0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57], 80, [19, 38, 19], [38, 19]]	class C\n          attr_reader :log\n          def initialize = @log = []
 7f9f876eb22b2bc16a64bd780036a90b	:ok	using Math; :ok
@@ -5312,6 +5314,7 @@ d8ec5385ee072765ba7b565e51313657	[777, 777]	class Integer\n          def sub_imp
 d8f147478a0d2e314a65bdef053bb15f	[[MatchData, "o", "hell", " world", 4, 5, ["o"]], nil, ["o", 7, "hello w"], nil, [2, "hé"], ["b", "aBc"], nil, true, "\\\\[", "\\\\.", ".", "y", "t"]	s = "hello world"\n        r = []\n        s.sub("o", "0"); r << [$~.clas
 d8f7673bc84dc4314710c6f19ad37ceb	["UTF-16LE", "UTF-16LE", true, "UTF-8", "EUC-JP", "UTF-8", "US-ASCII", "UTF-8", Encoding::CompatibilityError, "UTF-8", "UTF-8", "UTF-8", "UTF-16LE", "UTF-16LE", "UTF-16LE", Encoding::CompatibilityError]	u16 = "a".encode("UTF-16LE"); j = "\\u3042"\n            [[u16].join(
 d8fb88ad23d8c193bfeb4977788bff5e	["US-ASCII", "US-ASCII"]	class EncName\n          def to_str = "US-ASCII"\n        end\n        [\n 
+d8fc4de785856888d913a7f7c8674fa2	[ArgumentError, ArgumentError, ArgumentError, ArgumentError, ArgumentError, ArgumentError, ArgumentError, ArgumentError]	def bih_arity(a, h, o)\n          [\n            (a.empty?(1) rescue $!.c
 d90a418bdc4ad75f3cd57917b2ada785	[["anonymous", :foo], ["anonymous", :bar], ["NameError", "method 'bar' for module '#<Module:0x>' is private"], ["anonymous", :foo], ["Comparable", :between?], ["Comparable", :clamp], ["Comparable", :clamp], ["Kernel", :to_s], ["Kernel", :puts], ["NameError", "method 'puts' for module 'Kernel' is private"], ["Kernel", :to_s], ["NameError", "method 'puts' for class '#<Class:0x>' is private"], ["NameError", "undefined method 'to_s' for class 'BasicObject'"], Kernel, ["Kernel", :to_s], ["Module", :to_s], Module]	t = ->(&b) {\n    begin\n      r = b.call\n      UnboundMethod === r ? [r.owner.
 d9300c97f073adabeb7a50ccd6acbd23	0..300	a=1\n            b = for a in 0..300 do\n            end\n            
 d937a0a05e129d6461564c4b72d2b8e9	[2, -1, [[:req, :a], [:req, :b]], true, 30]	class C\n              def f(a, b); a + b; end\n              def g(*
