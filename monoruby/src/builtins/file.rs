@@ -2683,17 +2683,13 @@ fn file_mkfifo(
     Ok(Value::integer(0))
 }
 
-/// Given a `SystemTime` (or fallible alternative), invoke `Time.at(secs, usec)`
-/// to materialize a Ruby Time value. Errors propagate as Ruby exceptions.
-fn system_time_to_value(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    t: std::time::SystemTime,
-) -> Result<Value> {
+/// The local Ruby Time for a `SystemTime`. Errors propagate as Ruby
+/// exceptions.
+fn system_time_to_value(t: std::time::SystemTime) -> Result<Value> {
     let (secs, nsec) = system_time_parts(t);
     // To the nanosecond, as the stat(2) fields are (`File.mtime(path) ==
     // File.stat(path).mtime`).
-    time_from_secs_nsec(vm, globals, secs, nsec)
+    time_from_secs_nsec(secs, nsec)
 }
 
 /// *t* as seconds since the epoch and nanoseconds (`0..1_000_000_000`).
@@ -2725,7 +2721,7 @@ fn file_time_attr(
     let t = f(&metadata).map_err(|e| {
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_time", &path)
     })?;
-    system_time_to_value(vm, globals, t)
+    system_time_to_value(t)
 }
 
 ///
@@ -2785,7 +2781,7 @@ fn file_ctime(
     let nsec = metadata.ctime_nsec();
     let t = std::time::UNIX_EPOCH
         + std::time::Duration::new(secs.max(0) as u64, (nsec.max(0)) as u32);
-    system_time_to_value(vm, globals, t)
+    system_time_to_value(t)
 }
 
 ///
@@ -2809,7 +2805,7 @@ fn file_birthtime(
         MonorubyErr::errno_with_path(&globals.store, &e, "rb_file_s_stat", &path)
     })?;
     match metadata.created() {
-        Ok(t) => system_time_to_value(vm, globals, t),
+        Ok(t) => system_time_to_value(t),
         // A filesystem that does not record the birth time (statx btime
         // unsupported) raises NotImplementedError, like CRuby.
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
@@ -2827,35 +2823,24 @@ fn file_birthtime(
     }
 }
 
-/// Build a `Time` value from a (seconds, nanoseconds) pair via
-/// `Time.at(secs, nsec, :nanosecond)`.
-fn time_from_secs_nsec(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    secs: i64,
-    nsec: i64,
-) -> Result<Value> {
-    let time_class = globals
-        .store
-        .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Time"))
-        .ok_or_else(|| MonorubyErr::runtimeerr("Time class not defined"))?;
-    let at = IdentId::get_id("at");
-    let unit = Value::symbol(IdentId::get_id("nanosecond"));
-    vm.invoke_method_inner(
-        globals,
-        at,
-        time_class,
-        &[Value::integer(secs), Value::integer(nsec), unit],
-        None,
-        None,
-    )
+/// The local `Time` for a (seconds, nanoseconds) pair: what
+/// `Time.at(secs, nsec, :nanosecond)` answers, built without sending
+/// `Time.at` (see `time::time_nano_new`), as CRuby's stat code builds it
+/// with `rb_time_nano_new`.
+fn time_from_secs_nsec(secs: i64, nsec: i64) -> Result<Value> {
+    crate::builtins::time::time_nano_new(secs, nsec)
 }
 
 /// Populate a `File::Stat` instance's ivars from a `std::fs::Metadata`
 /// (which wraps a `struct stat`). The Ruby accessors in
 /// `builtins/file_stat.rb` read these fields.
+///
+/// This must not run Ruby: `build_stat` and `file_instance_stat` hold the
+/// `File::Stat` they have just made only in a local until they return it,
+/// so a collection here would free it. It used to send `Time.at` for each
+/// timestamp, and with `Time.at` redefined in Ruby (ActiveSupport's
+/// `at_with_coercion`) a collection inside it freed the object.
 fn fill_stat_ivars(
-    vm: &mut Executor,
     globals: &mut Globals,
     mut obj: Value,
     metadata: &std::fs::Metadata,
@@ -2876,12 +2861,14 @@ fn fill_stat_ivars(
     for (name, val) in pairs {
         obj.set_instance_var(&mut globals.store, name, Value::integer(*val))?;
     }
-    let atime = time_from_secs_nsec(vm, globals, metadata.atime(), metadata.atime_nsec())?;
-    let mtime = time_from_secs_nsec(vm, globals, metadata.mtime(), metadata.mtime_nsec())?;
-    let ctime = time_from_secs_nsec(vm, globals, metadata.ctime(), metadata.ctime_nsec())?;
-    obj.set_instance_var(&mut globals.store, "/__atime", atime)?;
-    obj.set_instance_var(&mut globals.store, "/__mtime", mtime)?;
-    obj.set_instance_var(&mut globals.store, "/__ctime", ctime)?;
+    for (name, secs, nsec) in [
+        ("/__atime", metadata.atime(), metadata.atime_nsec()),
+        ("/__mtime", metadata.mtime(), metadata.mtime_nsec()),
+        ("/__ctime", metadata.ctime(), metadata.ctime_nsec()),
+    ] {
+        let time = time_from_secs_nsec(secs, nsec)?;
+        obj.set_instance_var(&mut globals.store, name, time)?;
+    }
     // The birth time, when the file system records one (`statx(2)`'s
     // `stx_btime`, which `Metadata::created` reads): kept as seconds and
     // nanoseconds, and made a Time only if `#birthtime` asks. Left unset
@@ -2923,7 +2910,7 @@ fn build_stat(
         .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
         .as_class();
     let obj = Value::object(stat_class.id());
-    fill_stat_ivars(vm, globals, obj, &metadata)?;
+    fill_stat_ivars(globals, obj, &metadata)?;
     Ok(obj)
 }
 
@@ -2977,7 +2964,7 @@ fn file_instance_stat(
         .get_qualified_constant(globals, OBJECT_CLASS, &["File", "Stat"])?
         .as_class();
     let obj = Value::object(stat_class.id());
-    fill_stat_ivars(vm, globals, obj, &metadata)?;
+    fill_stat_ivars(globals, obj, &metadata)?;
     Ok(obj)
 }
 
@@ -3029,7 +3016,7 @@ fn stat_initialize(
     let path_str = path.to_string_lossy().to_string();
     let metadata = std::fs::metadata(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_stat_new", &path_str))?;
-    fill_stat_ivars(vm, globals, lfp.self_val(), &metadata)?;
+    fill_stat_ivars(globals, lfp.self_val(), &metadata)?;
     Ok(Value::nil())
 }
 
@@ -4518,6 +4505,45 @@ mod tests {
               ensure
                 f.close
               end
+            ensure
+              File.unlink(path) rescue nil
+            end
+            "#,
+        );
+    }
+
+    /// The timestamps of `File.stat`, `File.lstat`, `File#stat`,
+    /// `File#lstat`, `File::Stat.new` and `File.atime` / `File.mtime` are
+    /// made without sending `Time.at`, as CRuby makes them. Sending it ran
+    /// a Ruby-level `Time.at` (ActiveSupport's `at_with_coercion`) in the
+    /// middle of filling a `File::Stat` in, and a collection there freed
+    /// the new object (a "Dead object" panic) or the Times already made
+    /// (`File::Stat.new`'s atime / mtime then read another Time's cell).
+    #[test]
+    fn file_stat_survives_gc_in_time_at() {
+        run_test_once(
+            r#"
+            $at_calls = 0
+            class << Time
+              alias_method :__stat_gc_orig_at, :at
+              def at(*args, **kw)
+                $at_calls += 1
+                GC.start
+                __stat_gc_orig_at(*args, **kw)
+              end
+            end
+            path = "/tmp/monoruby_test_stat_gc_#{Process.pid}_#{rand(100000)}"
+            begin
+              File.write(path, "rubinius")
+              File.utime(1000, 2000, path)
+              stats = 3.times.flat_map do
+                [File.stat(path), File.lstat(path), File.open(path) { _1.stat },
+                 File.open(path) { _1.lstat }, File::Stat.new(path)]
+              end
+              [
+                stats.map { |s| [s.class, s.size, s.atime.to_i, s.mtime.to_i, s.atime.equal?(s.mtime)] }.uniq,
+                File.atime(path).to_i, File.mtime(path).to_i, $at_calls,
+              ]
             ensure
               File.unlink(path) rescue nil
             end
