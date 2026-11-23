@@ -264,6 +264,7 @@ mod system_exit_status;
 mod time_interval;
 mod time_timezone;
 mod to_c_enum_size_integer_complex_pow_stdout_lazy;
+mod to_hash_conversion;
 mod tr_wide_replacement;
 mod type_error_names;
 mod unnamed_class_layout_instance_exec;

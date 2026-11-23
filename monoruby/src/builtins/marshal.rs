@@ -2793,16 +2793,6 @@ fn marshal_dump_value(
                     Some(ObjTy::HASH) if obj.is_kind_of(&globals.store, SET_CLASS) => {
                         marshal_dump_set(buf, obj, vm, globals, symbols, objects, limit)?;
                     }
-                    Some(ObjTy::HASH)
-                        if globals
-                            .store
-                            .get_ivar(obj, IdentId::get_id("/__env"))
-                            .is_some() =>
-                    {
-                        return Err(MonorubyErr::typeerr(
-                            "no _dump_data is defined for class Object",
-                        ));
-                    }
                     Some(ObjTy::HASH) => {
                         // Snapshot the pairs to avoid holding a borrow into
                         // the live hash across re-entrant user code.
@@ -2867,6 +2857,18 @@ fn marshal_dump_value(
                         // `extend`ed modules become 'e' wrappers.
                         // A singleton class carrying methods or ivars of its
                         // own cannot be dumped.
+                        // `ENV`: in CRuby a T_DATA of class Object with
+                        // no `_dump_data`, which is refused before its
+                        // singleton class is looked at (#2013).
+                        if globals
+                            .store
+                            .get_ivar(obj, IdentId::get_id("/__env"))
+                            .is_some()
+                        {
+                            return Err(MonorubyErr::typeerr(
+                                "no _dump_data is defined for class Object",
+                            ));
+                        }
                         marshal_check_singleton(globals, obj)?;
                         let class_name = obj.get_real_class_name(&globals.store);
                         // An object CRuby backs with a C struct that has

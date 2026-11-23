@@ -3373,6 +3373,34 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     })
 }
 
+/// `rb_check_hash_type` for the `idx`th argument of `IO.popen`: the
+/// argument itself when it is a Hash, what its `to_hash` answers when it
+/// has one, `None` otherwise.
+///
+/// A converted Hash replaces the argument in the rest Array, which keeps
+/// it alive for the rest of the call.
+fn popen_hash_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    idx: usize,
+) -> Result<Option<Value>> {
+    let mut rest = lfp.arg(0).as_array();
+    let arg = rest[idx];
+    if arg.try_hash_ty().is_some() {
+        return Ok(Some(arg));
+    }
+    if arg.is_rstring().is_some() || arg.try_array_ty().is_some() {
+        return Ok(None);
+    }
+    let Some(hash) = arg.check_hash_type(vm, globals)? else {
+        return Ok(None);
+    };
+    let hash: Value = hash.into();
+    rest.set_index(idx as i64, hash)?;
+    Ok(Some(hash))
+}
+
 /// ### IO.popen
 ///
 /// - IO.popen(command) -> IO
@@ -3383,14 +3411,22 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn io_popen(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // CRuby's `rb_io_s_popen`: `IO.popen([env,] cmd [, mode] [, opts])`.
     // A trailing Hash is the options, then a leading one the environment.
+    // Either may be an object that converts with `to_hash`
+    // (`rb_check_hash_type`, #2139), as `ENV` itself does.
     let mut args: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
     let mut opts: Option<Value> = None;
-    if args.len() > 1 && args.last().unwrap().try_hash_ty().is_some() {
-        opts = args.pop();
+    if args.len() > 1
+        && let Some(h) = popen_hash_arg(vm, globals, lfp, args.len() - 1)?
+    {
+        args.pop();
+        opts = Some(h);
     }
     let mut env_hash: Option<Value> = None;
-    if args.len() > 1 && args[0].try_hash_ty().is_some() {
-        env_hash = Some(args.remove(0));
+    if args.len() > 1
+        && let Some(h) = popen_hash_arg(vm, globals, lfp, 0)?
+    {
+        args.remove(0);
+        env_hash = Some(h);
     }
     if !(1..=2).contains(&args.len()) {
         let ex = opts.is_some() as usize;
