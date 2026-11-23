@@ -443,109 +443,153 @@ fn hash_bracket(
     let class_id = lfp.self_val().as_class_id();
     let args = lfp.arg(0).as_array();
     let len = args.len();
-    let mut result = match len {
-        0 => Value::hash(RubyMap::default()),
-        1 => {
-            let arg = args[0];
-            if arg.try_hash_ty().is_some() {
-                // Single hash argument: return a fresh hash with copied entries
-                // (do NOT carry over default value/proc or compare_by_identity).
-                let mut map = HashmapInner::default();
-                for (k, v) in arg.as_hash().iter() {
-                    map.aset(k, v, vm, globals)?;
-                }
-                Value::hash_from_inner(map)
-            } else if let Some(ary) = arg.try_array_ty() {
-                // Single array argument: try to convert [[k,v], ...] to hash
-                hash_from_array_pairs(ary.iter().copied(), vm, globals)?
-            } else {
-                // Try to_hash first
-                let to_hash_id = IdentId::get_id("to_hash");
-                if let Some(coerced) = crate::coerce::check_funcall(vm, globals, arg, to_hash_id)?
-                    && coerced.try_hash_ty().is_some()
-                {
-                    let mut map = HashmapInner::default();
-                    for (k, v) in coerced.as_hash().iter() {
-                        map.aset(k, v, vm, globals)?;
-                    }
-                    Value::hash_from_inner(map)
-                } else if let Some(coerced) =
-                    crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)?
-                    && let Some(ary) = coerced.try_array_ty()
-                {
-                    hash_from_array_pairs(ary.iter().copied(), vm, globals)?
+    // The result is built in a Hash on the temp stack, not in a bare
+    // `HashmapInner`: `aset` stores the frozen copy of an unfrozen String
+    // key, which nothing else references, and the next key's `hash` /
+    // `eql?` or the next element's `to_ary` may run a collection.
+    vm.with_temp_scope(|vm| {
+        let mut result = Value::hash_from_inner(HashmapInner::default());
+        vm.temp_push(result);
+        let mut map = result.as_hash();
+        match len {
+            0 => {}
+            1 => {
+                let arg = args[0];
+                if arg.try_hash_ty().is_some() {
+                    // Single hash argument: return a fresh hash with copied entries
+                    // (do NOT carry over default value/proc or compare_by_identity).
+                    aset_pairs(map, arg.as_hash(), vm, globals)?;
+                } else if let Some(ary) = arg.try_array_ty() {
+                    // Single array argument: try to convert [[k,v], ...] to hash
+                    hash_from_array_pairs(map, ary, vm, globals)?;
                 } else {
+                    // Try to_hash first. What `to_hash` / `to_ary` answers is
+                    // referenced from nowhere else, so it goes on the temp
+                    // stack while its entries are copied.
+                    let to_hash_id = IdentId::get_id("to_hash");
+                    if let Some(coerced) =
+                        crate::coerce::check_funcall(vm, globals, arg, to_hash_id)?
+                        && coerced.try_hash_ty().is_some()
+                    {
+                        vm.temp_push(coerced);
+                        aset_pairs(map, coerced.as_hash(), vm, globals)?;
+                    } else if let Some(coerced) =
+                        crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)?
+                        && let Some(ary) = coerced.try_array_ty()
+                    {
+                        vm.temp_push(coerced);
+                        hash_from_array_pairs(map, ary, vm, globals)?;
+                    } else {
+                        return Err(MonorubyErr::argumenterr(
+                            "odd number of arguments for Hash".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                if len % 2 != 0 {
                     return Err(MonorubyErr::argumenterr(
                         "odd number of arguments for Hash".to_string(),
                     ));
                 }
+                for i in (0..len).step_by(2) {
+                    map.aset(args[i], args[i + 1], vm, globals)?;
+                }
             }
         }
-        _ => {
-            if len % 2 != 0 {
-                return Err(MonorubyErr::argumenterr(
-                    "odd number of arguments for Hash".to_string(),
-                ));
-            }
-            let mut map = HashmapInner::default();
-            for i in (0..len).step_by(2) {
-                map.aset(args[i], args[i + 1], vm, globals)?;
-            }
-            Value::hash_from_inner(map)
+        // Tag the result with the calling class so `MyHash[...]` returns a
+        // `MyHash`. Do NOT call `#initialize` on the subclass (matches CRuby).
+        if class_id != HASH_CLASS {
+            result.change_class_fresh(class_id);
         }
-    };
-    // Tag the result with the calling class so `MyHash[...]` returns a
-    // `MyHash`. Do NOT call `#initialize` on the subclass (matches CRuby).
-    if class_id != HASH_CLASS {
-        result.change_class_fresh(class_id);
-    }
-    Ok(result)
+        Ok(result)
+    })
 }
 
-/// Helper to convert an iterator of values (expected to be [k,v] pairs) into a Hash.
+/// Store every pair of `src` into `dst` with `aset`, in order. Both must
+/// be rooted. Each pair waits on the temp stack (in two slots kept for
+/// the walk) while it is stored: the key's `hash` / `eql?` may take it out
+/// of `src`, and a collection would then free what is about to be stored.
+fn aset_pairs(
+    mut dst: Hashmap,
+    src: Hashmap,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<()> {
+    vm.with_temp_scope(|vm| {
+        let slot = vm.temp_len();
+        vm.temp_push(Value::nil());
+        vm.temp_push(Value::nil());
+        for (k, v) in src.iter() {
+            vm.temp_set(slot, k);
+            vm.temp_set(slot + 1, v);
+            dst.aset(k, v, vm, globals)?;
+        }
+        Ok(())
+    })
+}
+
+/// Store the elements of `ary` (expected to be [k,v] pairs) into `map`.
 ///
 /// `[k, v]` pairs become entries; `[k]` becomes `k => nil` (matching CRuby).
 /// Anything else raises `ArgumentError` with the index of the offending element.
+/// `map` and `ary` must be rooted: the elements' `to_ary` and the keys'
+/// `hash` / `eql?` run Ruby.
 fn hash_from_array_pairs(
-    iter: impl Iterator<Item = Value>,
+    mut map: Hashmap,
+    ary: Array,
     vm: &mut Executor,
     globals: &mut Globals,
-) -> Result<Value> {
-    let mut map = HashmapInner::default();
-    for (idx, elem) in iter.enumerate() {
-        let Some(pair) = elem.check_array_type(vm, globals)? else {
-            // CRuby formats `nil`/`true`/`false` literally and uses class
-            // name for everything else.
-            let label = if elem.is_nil() {
-                "nil".to_string()
-            } else if elem.id() == crate::value::TRUE_VALUE {
-                "true".to_string()
-            } else if elem.id() == crate::value::FALSE_VALUE {
-                "false".to_string()
-            } else {
-                elem.get_real_class_name(globals)
-            };
-            return Err(MonorubyErr::argumenterr(format!(
-                "wrong element type {} at {} (expected array)",
-                label, idx
-            )));
-        };
-        match pair.len() {
-            1 => {
-                map.aset(pair[0], Value::nil(), vm, globals)?;
-            }
-            2 => {
-                map.aset(pair[0], pair[1], vm, globals)?;
-            }
-            n => {
+) -> Result<()> {
+    // By index, with the length read again each time (as CRuby's
+    // `rb_hash_s_create` walks it): a `to_ary` may change the Array.
+    vm.with_temp_scope(|vm| {
+        // Two slots, kept for the walk, hold the pair being stored.
+        let slot = vm.temp_len();
+        vm.temp_push(Value::nil());
+        vm.temp_push(Value::nil());
+        let mut idx = 0;
+        while idx < ary.len() {
+            let elem = ary[idx];
+            let Some(pair) = elem.check_array_type(vm, globals)? else {
+                // CRuby formats `nil`/`true`/`false` literally and uses
+                // class name for everything else.
+                let label = if elem.is_nil() {
+                    "nil".to_string()
+                } else if elem.id() == crate::value::TRUE_VALUE {
+                    "true".to_string()
+                } else if elem.id() == crate::value::FALSE_VALUE {
+                    "false".to_string()
+                } else {
+                    elem.get_real_class_name(globals)
+                };
                 return Err(MonorubyErr::argumenterr(format!(
-                    "invalid number of elements ({} for 1..2)",
-                    n
+                    "wrong element type {} at {} (expected array)",
+                    label, idx
                 )));
-            }
+            };
+            let (k, v) = match pair.len() {
+                1 => (pair[0], Value::nil()),
+                2 => (pair[0], pair[1]),
+                n => {
+                    return Err(MonorubyErr::argumenterr(format!(
+                        "invalid number of elements ({} for 1..2)",
+                        n
+                    )));
+                }
+            };
+            // The key and the value wait on the temp stack while `aset`
+            // runs the key's `hash` / `eql?`: the pair may be one that
+            // `to_ary` made, referenced from nowhere else, or that Ruby
+            // code may empty, and a collection would then free what is
+            // about to be stored.
+            vm.temp_set(slot, k);
+            vm.temp_set(slot + 1, v);
+            map.aset(k, v, vm, globals)?;
+            idx += 1;
         }
-    }
-    Ok(Value::hash_from_inner(map))
+        Ok(())
+    })
 }
 
 ///
@@ -908,16 +952,32 @@ fn hash_subset(
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<bool> {
-    for (k, sub_value) in sub.iter() {
-        if let Some(sup_value) = sup.get(k, vm, globals)?
-            && vm.eq_values_bool(globals, sub_value, sup_value)?
-        {
-            continue;
-        } else {
-            return Ok(false);
+    // One of the two may be what the operand's `to_hash` answered, which
+    // nothing else references: keep both on the temp stack, or a
+    // collection in a key's `hash` / `eql?` or a value's `==` frees the
+    // Hash being walked.
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(sub.as_val());
+        vm.temp_push(sup.as_val());
+        let slot = vm.temp_len();
+        vm.temp_push(Value::nil());
+        vm.temp_push(Value::nil());
+        for (k, sub_value) in sub.iter() {
+            // The pair, too, in two slots kept for the walk: the key's
+            // `hash` / `eql?` may take it out of `sub`, and `sub_value` is
+            // compared after.
+            vm.temp_set(slot, k);
+            vm.temp_set(slot + 1, sub_value);
+            if let Some(sup_value) = sup.get(k, vm, globals)?
+                && vm.eq_values_bool(globals, sub_value, sup_value)?
+            {
+                continue;
+            } else {
+                return Ok(false);
+            }
         }
-    }
-    Ok(true)
+        Ok(true)
+    })
 }
 
 ///
@@ -2367,18 +2427,33 @@ fn select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
         }
         Some(block) => block,
     };
-    let data = vm.get_block_data(globals, bh)?;
     let src = lfp.self_val().as_hash();
     let mut inner = HashmapInner::default();
     if src.is_compare_by_identity() {
         inner.compare_by_identity(vm, globals)?;
     }
-    for (k, v) in src.iter() {
-        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-            inner.insert(k, v, vm, globals)?;
+    // CRuby walks a copy of the receiver (`hash_dup_with_compare_by_id`),
+    // so what the block does to the receiver changes neither what is
+    // yielded nor the walk itself. The copy here is the receiver's pairs,
+    // taken up front and kept on the temp stack: once the block replaces or
+    // deletes the receiver's entry, they are referenced from nowhere else,
+    // and a collection in a later block call would free them. So is a Proc
+    // that a `&obj` block's `to_proc` answers, since the keys' `hash` /
+    // `eql?` run between the yields. The result can stay a bare
+    // `HashmapInner` until the walk ends: `insert` stores the pairs as they
+    // are, so all it holds is on the temp stack already.
+    vm.with_temp_scope(|vm| {
+        let data = vm.get_block_data_rooted(globals, bh)?;
+        let base = vm.temp_len();
+        let n = vm.temp_push_pairs(src);
+        for i in 0..n {
+            let (k, v) = vm.temp_pair(base, i);
+            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
+                inner.insert(k, v, vm, globals)?;
+            }
         }
-    }
-    Ok(Value::hash_from_inner(inner))
+        Ok(Value::hash_from_inner(inner))
+    })
 }
 
 ///
@@ -2553,13 +2628,21 @@ fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -
     if lfp.self_val().as_hash().is_compare_by_identity() {
         inner.compare_by_identity(vm, globals)?;
     }
-    let p = vm.get_block_data(globals, bh)?;
-    for (k, v) in lfp.self_val().as_hash().iter() {
-        if !vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
-            inner.insert(k, v, vm, globals)?;
+    // A rooted copy of the pairs is walked into a bare `HashmapInner`, and
+    // a Proc that a `&obj` block's `to_proc` answers is rooted, as in
+    // `select`.
+    vm.with_temp_scope(|vm| {
+        let p = vm.get_block_data_rooted(globals, bh)?;
+        let base = vm.temp_len();
+        let n = vm.temp_push_pairs(lfp.self_val().as_hash());
+        for i in 0..n {
+            let (k, v) = vm.temp_pair(base, i);
+            if !vm.invoke_block(globals, &p, &[k, v])?.as_bool() {
+                inner.insert(k, v, vm, globals)?;
+            }
         }
-    }
-    Ok(Value::hash_from_inner(inner))
+        Ok(Value::hash_from_inner(inner))
+    })
 }
 
 ///
@@ -2731,11 +2814,28 @@ fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
-    let mut map = HashmapInner::default();
-    for (k, v) in hash.iter() {
-        map.aset(v, k, vm, globals)?;
-    }
-    Ok(Value::hash_from_inner(map))
+    // The result is built on the temp stack, not in a bare `HashmapInner`:
+    // `aset` stores the frozen copy of an unfrozen String value turned
+    // key, which nothing else references, and the next key's `hash` /
+    // `eql?` may run a collection.
+    vm.with_temp_scope(|vm| {
+        let res = Value::hash_from_inner(HashmapInner::default());
+        vm.temp_push(res);
+        let mut map = res.as_hash();
+        let slot = vm.temp_len();
+        vm.temp_push(Value::nil());
+        vm.temp_push(Value::nil());
+        for (k, v) in hash.iter() {
+            // The pair waits on the temp stack (in two slots kept for the
+            // walk) while it is stored: the new key's `hash` / `eql?` may
+            // take it out of the receiver, and a collection would then
+            // free it.
+            vm.temp_set(slot, k);
+            vm.temp_set(slot + 1, v);
+            map.aset(v, k, vm, globals)?;
+        }
+        Ok(res)
+    })
 }
 
 ///
@@ -2783,30 +2883,47 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // dispatches inside get/insert (contrast `merge!`, where `h` is the
     // frame-rooted receiver).
     vm.with_temp_scope(|vm| {
-    vm.temp_push(h.into());
-    if let Some(block) = lfp.block() {
-        let data = vm.get_block_data(globals, block)?;
-        for arg in lfp.arg(0).as_array().iter() {
-            let other_val = arg.coerce_to_hash(vm, globals)?;
-            for (k, other_v) in other_val.iter() {
-                if let Some(self_v) = h.get(k, vm, globals)? {
-                    let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                    h.aset(k, v, vm, globals)?;
-                } else {
-                    h.aset(k, other_v, vm, globals)?;
+        vm.temp_push(h.into());
+        if let Some(block) = lfp.block() {
+            // A Proc that a `&obj` block's `to_proc` answers is rooted, too:
+            // the operands' `to_hash` and the keys' `hash` / `eql?` run
+            // before and between the yields.
+            let data = vm.get_block_data_rooted(globals, block)?;
+            // Three slots, kept for the walk, hold the pair being merged
+            // and the block's answer for it.
+            let slot = vm.temp_len();
+            for _ in 0..3 {
+                vm.temp_push(Value::nil());
+            }
+            for arg in lfp.arg(0).as_array().iter() {
+                let other_val = arg.coerce_to_hash(vm, globals)?;
+                // What a non-Hash operand's `to_hash` answered is referenced
+                // from nowhere else: root it while it is walked.
+                vm.temp_push(other_val.as_val());
+                for (k, other_v) in other_val.iter() {
+                    // The pair, too, until it is stored: the key's `hash` /
+                    // `eql?` and the block may take it out of `other_val`.
+                    vm.temp_set(slot, k);
+                    vm.temp_set(slot + 1, other_v);
+                    if let Some(self_v) = h.get(k, vm, globals)? {
+                        let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
+                        // The block's answer, too, until `aset` (which runs
+                        // the key's `hash` / `eql?`) has stored it.
+                        vm.temp_set(slot + 2, v);
+                        h.aset(k, v, vm, globals)?;
+                    } else {
+                        h.aset(k, other_v, vm, globals)?;
+                    }
                 }
             }
-        }
-    } else {
-        for arg in lfp.arg(0).as_array().iter() {
-            let other_val = arg.coerce_to_hash(vm, globals)?;
-            for (k, v) in other_val.iter() {
-                h.aset(k, v, vm, globals)?;
+        } else {
+            for arg in lfp.arg(0).as_array().iter() {
+                let other_val = arg.coerce_to_hash(vm, globals)?;
+                vm.temp_push(other_val.as_val());
+                aset_pairs(h, other_val, vm, globals)?;
             }
         }
-    }
-
-    Ok(h.into())
+        Ok(h.into())
     })
 }
 
@@ -2822,30 +2939,47 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 #[monoruby_builtin]
 fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
-    if let Some(block) = lfp.block() {
-        let data = vm.get_block_data(globals, block)?;
-        for arg in lfp.arg(0).as_array().iter() {
-            let other_val = arg.coerce_to_hash(vm, globals)?;
-            let other = other_val;
-            for (k, other_v) in other.iter() {
-                if let Some(self_v) = h.get(k, vm, globals)? {
-                    let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                    h.aset(k, v, vm, globals)?;
-                } else {
-                    h.aset(k, other_v, vm, globals)?;
+    // What a non-Hash operand's `to_hash` answers is referenced from
+    // nowhere else, and so is the block's answer until `aset` has stored
+    // it: both go on the temp stack, or a collection in the block or in a
+    // key's `hash` / `eql?` frees them.
+    vm.with_temp_scope(|vm| {
+        if let Some(block) = lfp.block() {
+            // As in `merge`, a Proc that a `&obj` block's `to_proc`
+            // answers is rooted.
+            let data = vm.get_block_data_rooted(globals, block)?;
+            // Three slots, kept for the walk, hold the pair being merged and
+            // the block's answer for it.
+            let slot = vm.temp_len();
+            for _ in 0..3 {
+                vm.temp_push(Value::nil());
+            }
+            for arg in lfp.arg(0).as_array().iter() {
+                let other = arg.coerce_to_hash(vm, globals)?;
+                vm.temp_push(other.as_val());
+                for (k, other_v) in other.iter() {
+                    // The pair, too, until it is stored: the key's `hash` /
+                    // `eql?` and the block may take it out of `other`.
+                    vm.temp_set(slot, k);
+                    vm.temp_set(slot + 1, other_v);
+                    if let Some(self_v) = h.get(k, vm, globals)? {
+                        let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
+                        vm.temp_set(slot + 2, v);
+                        h.aset(k, v, vm, globals)?;
+                    } else {
+                        h.aset(k, other_v, vm, globals)?;
+                    }
                 }
             }
-        }
-    } else {
-        for arg in lfp.arg(0).as_array().iter() {
-            let other_val = arg.coerce_to_hash(vm, globals)?;
-            let other = other_val;
-            for (k, v) in other.iter() {
-                h.aset(k, v, vm, globals)?;
+        } else {
+            for arg in lfp.arg(0).as_array().iter() {
+                let other = arg.coerce_to_hash(vm, globals)?;
+                vm.temp_push(other.as_val());
+                aset_pairs(h, other, vm, globals)?;
             }
         }
-    }
-    Ok(lfp.self_val())
+        Ok(lfp.self_val())
+    })
 }
 
 ///
@@ -2886,12 +3020,19 @@ fn compare_by_identity_(
 fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     let keys = lfp.arg(0).as_array();
-    let mut res = vec![];
-    for k in keys.iter() {
-        let v = hash.index(vm, globals, *k)?;
-        res.push(v);
-    }
-    Ok(Value::array_from_vec(res))
+    // The values accumulate in a rooted Array: one the default proc made
+    // without storing it is referenced from nowhere else, and the next
+    // key's default proc may run a collection.
+    vm.with_temp_scope(|vm| {
+        let res = Value::array_with_capacity(keys.len());
+        vm.temp_push(res);
+        let mut res = res.as_array();
+        for k in keys.iter() {
+            let v = hash.index(vm, globals, *k)?;
+            res.push(v);
+        }
+        Ok(res.as_val())
+    })
 }
 
 /// ### Hash#to_h
@@ -3989,37 +4130,54 @@ fn env_merge_bang(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let block_data = if let Some(bh) = lfp.block() {
-        Some(vm.get_block_data(globals, bh)?)
-    } else {
-        None
-    };
-    for arg in lfp.arg(0).as_array().iter() {
-        let other = arg.coerce_to_hash(vm, globals)?;
-        let pairs: Vec<(Value, Value)> = other.iter().collect();
-        for (k, mut v) in pairs {
-            if let Some(ref data) = block_data {
-                // `env_update_block_i`: the current value is looked up
-                // as `ENV[name]` would, so the name is checked first —
-                // whatever the new value is.
-                let name = env_name(vm, globals, k)?;
-                if let Some(old) = env_getenv(globals, env_bytes(&name)) {
-                    v = vm.with_temp_scope(|vm| {
-                        vm.temp_push(name);
-                        vm.temp_push(old);
-                        vm.invoke_block(globals, data, &[k, old, v])
+    // A Proc that a `&obj` block's `to_proc` answers is referenced only
+    // from `block_data`, and the operands' `to_hash`, the names' and
+    // values' `to_str` and the block itself run before and between the
+    // yields: it is rooted for the whole call.
+    vm.with_temp_scope(|vm| {
+        let block_data = match lfp.block() {
+            Some(bh) => Some(vm.get_block_data_rooted(globals, bh)?),
+            None => None,
+        };
+        for arg in lfp.arg(0).as_array().iter() {
+            let other = arg.coerce_to_hash(vm, globals)?;
+            let pairs: Vec<(Value, Value)> = other.iter().collect();
+            // The pairs wait on the temp stack until they are stored: what
+            // a non-Hash's `to_hash` answered is referenced from nowhere
+            // else, and the names' and values' `to_str` and the block run
+            // Ruby that may empty a Hash the caller holds. A collection
+            // there would free a pair this walk has yet to store or yield.
+            vm.with_temp_scope(|vm| {
+                for &(k, v) in &pairs {
+                    vm.temp_push(k);
+                    vm.temp_push(v);
+                }
+                for (k, mut v) in pairs {
+                    if let Some(ref data) = block_data {
+                        // `env_update_block_i`: the current value is looked
+                        // up as `ENV[name]` would, so the name is checked
+                        // first — whatever the new value is.
+                        let name = env_name(vm, globals, k)?;
+                        if let Some(old) = env_getenv(globals, env_bytes(&name)) {
+                            v = vm.with_temp_scope(|vm| {
+                                vm.temp_push(name);
+                                vm.temp_push(old);
+                                vm.invoke_block(globals, data, &[k, old, v])
+                            })?;
+                        }
+                    }
+                    // The block's answer is only on the Rust stack while
+                    // the name is converted.
+                    vm.with_temp_scope(|vm| {
+                        vm.temp_push(v);
+                        env_aset(vm, globals, k, v)
                     })?;
                 }
-            }
-            // The block's answer is only on the Rust stack while the
-            // name is converted.
-            vm.with_temp_scope(|vm| {
-                vm.temp_push(v);
-                env_aset(vm, globals, k, v)
+                Ok(())
             })?;
         }
-    }
-    Ok(lfp.self_val())
+        Ok(lfp.self_val())
+    })
 }
 
 ///
@@ -4028,7 +4186,8 @@ fn env_merge_bang(
 /// - replace(other_hash) -> ENV
 ///
 /// Replaces the contents of ENV with *other_hash*. Pairs are stored in
-/// order as `ENV[name] = value` does ([`env_aset`]); an invalid one
+/// order as `ENV[name] = value` does ([`env_aset`]), except that each
+/// name is converted and checked before its value is; an invalid one
 /// stops the walk with the earlier pairs applied and nothing removed
 /// yet, as in CRuby. Only after every pair is in are the variables the
 /// Hash did not name removed. Returns ENV.
@@ -4047,14 +4206,28 @@ fn env_replace(
     let mut stale: Vec<&[u8]> = live.iter().map(|(name, _)| name).collect();
     let other = lfp.arg(0).coerce_to_hash(vm, globals)?;
     let pairs: Vec<(Value, Value)> = other.iter().collect();
-    for (k, v) in pairs {
-        env_aset(vm, globals, k, v)?;
-        // `rb_ary_delete(keys, key)`: a key that is not a String has
-        // raised in `env_aset`, or was deleted there with a nil value.
-        if let Some(name) = k.is_rstring_inner() {
-            stale.retain(|s| *s != name.as_bytes());
+    // The pairs wait on the temp stack until they are stored, as in
+    // `env_merge_bang`: the Hash may be a `to_hash` answer nothing else
+    // references, or one the names' and values' `to_str` empty, and a
+    // collection there would free a pair not stored yet.
+    vm.with_temp_scope(|vm| {
+        for &(k, v) in &pairs {
+            vm.temp_push(k);
+            vm.temp_push(v);
         }
-    }
+        for (k, v) in pairs {
+            // `env_replace_i`: the name is converted and checked before
+            // the value is looked at, and it is the converted name that
+            // `keylist_delete` takes off the stale list — so a key that
+            // answers `to_str` keeps the variable it names. `env_aset`
+            // roots the name while it converts the value.
+            let name = env_name(vm, globals, k)?;
+            env_aset(vm, globals, name, v)?;
+            let name = env_bytes(&name);
+            stale.retain(|s| *s != name);
+        }
+        Ok(())
+    })?;
     for name in stale {
         env_delete_bytes(name);
     }
@@ -4114,8 +4287,12 @@ fn env_slice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             let name = env_name(vm, globals, *k)?;
             if let Some(v) = env_getenv(globals, env_bytes(&name)) {
                 // The result is keyed by the *given* name, which — as any
-                // `Hash#[]=` does — is stored as a frozen copy.
+                // `Hash#[]=` does — is stored as a frozen copy. The fresh
+                // value waits on the temp stack meanwhile: a key that is
+                // not a String runs its own `hash` / `eql?` there.
+                vm.temp_push(v);
                 vm.temp_at(idx).as_hash().aset(*k, v, vm, globals)?;
+                vm.temp_clear(idx + 1);
             }
         }
         Ok(vm.temp_at(idx))
@@ -8256,6 +8433,575 @@ mod tests {
               system(ENV, "true"), IO.popen(ENV, "echo hi", &:read),
               ("%{PATH}" % ENV rescue $!.class),
             ]
+            "##,
+        );
+    }
+
+    /// `Hash#merge` / `#merge!` / `#update` keep the block's answer and a
+    /// non-Hash operand's `to_hash` answer rooted. The block's answer
+    /// waited in a Rust local while `aset` ran the key's `hash`, and the
+    /// converted Hash was walked while the block and the keys' `hash` ran;
+    /// a collection there freed them ("Dead object", or a merge that
+    /// silently stopped early).
+    #[test]
+    fn hash_merge_survives_gc_in_callbacks() {
+        run_test_once(
+            r##"
+            class K
+              attr_reader :i
+              def initialize(i) = @i = i
+              def hash = (GC.start; @i.hash)
+              def eql?(o) = o.is_a?(K) && o.i == @i
+              def inspect = "K#{@i}"
+            end
+            class O
+              def to_hash = {"a#{1}" => "x" * 30, "b#{2}" => "y" * 30, "c#{3}" => "z" * 30}
+            end
+            class OK
+              def to_hash
+                h = {}
+                3.times { |i| h[K.new(i)] = "o#{i}" * 10 }
+                h
+              end
+            end
+            a = {}
+            b = {}
+            3.times { |i| a[K.new(i)] = "a#{i}"; b[K.new(i)] = "b#{i}" }
+            r = []
+            5.times do
+              r << a.merge(b) { |_, x, y| x + y * 10 }
+              h = a.dup
+              h.update(b) { |_, x, y| x + y * 10 }
+              r << h
+              r << {"a1" => 1, "b2" => 2, "c3" => 3}.merge(O.new) { |_, _, y| GC.start; y.size }
+              h = {"a1" => 1, "b2" => 2, "c3" => 3}
+              h.merge!(O.new) { |_, _, y| GC.start; y.size }
+              r << h
+              r << {}.merge(OK.new)
+              h = {}
+              h.update(OK.new)
+              r << h
+            end
+            r.map { |h| h.map { |k, v| [k.inspect, v] } }.uniq
+            "##,
+        );
+    }
+
+    /// `Hash#values_at` gathers the values in a rooted Array: a value the
+    /// default proc made without storing it was held only in a Rust Vec,
+    /// and the next key's default proc collected it (its cell then held a
+    /// later value).
+    #[test]
+    fn hash_values_at_survives_gc_in_default_proc() {
+        run_test_once(
+            r##"
+            h = Hash.new { |_, k| GC.start; "v#{k}" * 10 }
+            r = nil
+            5.times { r = h.values_at(1, 2, 3, 4) }
+            [r, h.size]
+            "##,
+        );
+    }
+
+    /// `Hash.[]` builds its result in a rooted Hash. It used a bare
+    /// `HashmapInner`, where the frozen copy of an unfrozen String key is
+    /// referenced from nowhere else, and it walked what `to_hash` /
+    /// `to_ary` answered without rooting it, while the keys' `hash` and the
+    /// elements' `to_ary` ran a collection.
+    #[test]
+    fn hash_bracket_survives_gc_in_callbacks() {
+        run_test_once(
+            r##"
+            class K
+              attr_reader :i
+              def initialize(i) = @i = i
+              def hash = (GC.start; @i.hash)
+              def eql?(o) = o.is_a?(K) && o.i == @i
+              def inspect = "K#{@i}"
+            end
+            class TH
+              def initialize(i) = @i = i
+              def to_hash
+                h = {}
+                h["key-#{@i}"] = "a" * 10
+                h[K.new(1)] = "b" * 10
+                h["other-#{@i}"] = "c" * 10
+                h[K.new(2)] = "d" * 10
+                h
+              end
+            end
+            class TA
+              def initialize(i) = @i = i
+              def to_ary = [["key-#{@i}", "a" * 10], [K.new(1), "b" * 10], ["other-#{@i}", "c" * 10], [K.new(2), "d" * 10]]
+            end
+            class P
+              def initialize(i) = @i = i
+              def to_ary = (GC.start; ["k#{@i}", "v#{@i}" * 10])
+            end
+            class MyHash < Hash; end
+            r = []
+            5.times do |i|
+              r << Hash["k#{i}", "a", K.new(1), "b", "o#{i}", "c", K.new(2), "d"]
+              r << Hash[TH.new(i)]
+              r << Hash[TA.new(i)]
+              r << Hash[[P.new(1), P.new(2), P.new(3)]]
+              ci = {}.compare_by_identity
+              ci[+"x#{i}"] = 1
+              ci[K.new(5)] = 2
+              ci[+"y#{i}"] = 3
+              ci[K.new(6)] = 4
+              r << Hash[ci]
+              m = MyHash[TA.new(i)]
+              r << [m.class.name, m.size]
+            end
+            r.map { |h| h.is_a?(Hash) ? h.map { |k, v| [k.inspect, v] } : h }
+            "##,
+        );
+    }
+
+    /// `Hash#invert` builds its result in a rooted Hash: the frozen copy
+    /// of an unfrozen String value turned key was referenced only from a
+    /// bare `HashmapInner` while the next key's `hash` ran a collection.
+    #[test]
+    fn hash_invert_survives_gc_in_key_hash() {
+        run_test_once(
+            r##"
+            class K
+              attr_reader :i
+              def initialize(i) = @i = i
+              def hash = (GC.start; @i.hash)
+              def eql?(o) = o.is_a?(K) && o.i == @i
+              def inspect = "K#{@i}"
+            end
+            r = nil
+            5.times { r = {a: "x#{1}", b: "y#{2}", c: K.new(3), d: K.new(4)}.invert }
+            [r.map { |k, v| [k.inspect, v] }, r.keys.map(&:frozen?)]
+            "##,
+        );
+    }
+
+    /// `Hash#select` / `#filter` / `#reject` walk a rooted copy of the
+    /// receiver's pairs into a rooted result, as CRuby walks a copy of the
+    /// receiver. They walked the receiver itself and built the result in a
+    /// bare `HashmapInner`: a pair the block replaced or deleted was
+    /// referenced from nowhere else, and a collection in a later block call
+    /// freed it; a deletion also skipped the next pair, and growth past the
+    /// inline form yielded garbage.
+    #[test]
+    fn hash_select_reject_survive_gc_in_block() {
+        run_test_once(
+            r##"
+            r = []
+            5.times do
+              h = {}
+              6.times { |i| h["k#{i}"] = "v#{i}" * 20 }
+              r << h.select { |k, v| h[k] = v.upcase; GC.start; true }
+              h = {}
+              6.times { |i| h["k#{i}"] = "v#{i}" * 20 }
+              r << h.reject { |k, v| h[k] = v.upcase; GC.start; false }
+              h = {}
+              6.times { |i| h["k#{i}"] = "v#{i}" * 20 }
+              r << h.select { |k, v| h.delete(k); GC.start; true }
+              h = {}
+              6.times { |i| h["k#{i}"] = "v#{i}" * 20 }
+              r << h.reject { |k, v| h.clear; GC.start; false }
+              h = {}.compare_by_identity
+              6.times { |i| h["k#{i}"] = "v#{i}" * 20 }
+              s = h.filter { |k, v| h[k] = v.upcase; GC.start; k != "k3" }
+              r << [s.values, s.compare_by_identity?]
+            end
+            h = {a: 1, b: 2}
+            r << h.select { |k, v| 20.times { |i| h[:"x#{i}"] = i } if k == :a; true }
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `Hash#<` / `#<=` / `#>` / `#>=` keep what the operand's `to_hash`
+    /// answered rooted while the values' `==` runs: a collection there
+    /// freed the Hash being walked.
+    #[test]
+    fn hash_subset_survives_gc_in_value_eq() {
+        run_test_once(
+            r##"
+            class V
+              attr_reader :s
+              def initialize(s) = @s = s
+              def ==(o) = (GC.start; o.is_a?(V) && o.s == @s)
+            end
+            class O2
+              def to_hash = {"a#{1}" => V.new("x" * 30), "b#{2}" => V.new("y" * 30), "c#{3}" => V.new("z"), "e" => 1}
+            end
+            class O3
+              def to_hash = {"a#{1}" => V.new("x" * 30), "b#{2}" => V.new("y" * 30)}
+            end
+            h = {"a1" => V.new("x" * 30), "b2" => V.new("y" * 30), "c3" => V.new("z")}
+            5.times.map { [h < O2.new, h <= O2.new, h > O3.new, h >= O3.new] }.uniq
+            "##,
+        );
+    }
+
+    /// `ENV.update` / `ENV.replace` keep the pairs of what the operand's
+    /// `to_hash` answered rooted while the block and the names' `to_str`
+    /// run: a collection there freed them.
+    #[test]
+    fn env_update_replace_survive_gc_in_callbacks() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            names = %w[MONORUBY_GC_A1 MONORUBY_GC_B2 MONORUBY_GC_C3]
+            class O
+              def to_hash = {"MONORUBY_GC_A#{1}" => "x" * 30, "MONORUBY_GC_B#{2}" => "y" * 30, "MONORUBY_GC_C#{3}" => "z" * 30}
+            end
+            class S
+              def initialize(s) = @s = s
+              def to_str = (GC.start; @s)
+            end
+            class O4
+              def initialize(saved) = @saved = saved
+              def to_hash = @saved.merge(S.new("MONORUBY_GC_A1") => "p" * 10 + "1", S.new("MONORUBY_GC_B2") => "q" * 10 + "2")
+            end
+            names.each { |n| ENV[n] = "0" }
+            5.times { ENV.update(O.new) { |k, old, new| GC.start; new } }
+            r = names.map { |n| ENV[n] }
+            saved = ENV.to_h
+            5.times { ENV.replace(O4.new(saved)) }
+            r << ENV["MONORUBY_GC_A1"] << ENV["MONORUBY_GC_B2"]
+            ENV.replace(saved)
+            names.each { |n| ENV.delete(n) }
+            r
+            "##,
+        );
+    }
+
+    /// `ENV.slice` keeps the value it read on the temp stack while it
+    /// stores it under the given name: a name that is not a String runs
+    /// its own `hash` there, and a collection freed the fresh value.
+    #[test]
+    fn env_slice_survives_gc_in_key_hash() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            class SK
+              def initialize(s) = @s = s
+              def to_str = @s
+              def hash = (GC.start; $junk = Array.new(3000) { |i| "junk#{i}" }; @s.hash)
+              def eql?(o) = o.is_a?(SK) && o.to_str == @s
+            end
+            ENV["MONORUBY_GCE_S"] = "slice-" + "value"
+            r = []
+            5.times do
+              s = ENV.slice(SK.new("MONORUBY_GCE_S"), "MONORUBY_GCE_NONE")
+              r << [s.size, s.values, s.values.map(&:frozen?)]
+            end
+            ENV.delete("MONORUBY_GCE_S")
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `ENV.update` / `ENV.replace` keep every pair of the operand on the
+    /// temp stack until it is stored. The pairs were copied into a Rust
+    /// Vec, and a collection in a name's `to_str` or in the block freed
+    /// those that nothing else held: all of a `to_hash` answer's, and
+    /// those of a Hash that Ruby code emptied meanwhile.
+    #[test]
+    fn env_update_replace_survive_gc_when_operand_is_emptied() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            def junk = ($junk = Array.new(3000) { |i| "junk#{i}" })
+            # A name whose `to_str` collects.
+            class G
+              def initialize(s) = @s = s
+              def to_str = (GC.start; junk; @s)
+            end
+            # A name whose `to_str` empties the Hash it is in (once), and
+            # collects.
+            class EK
+              attr_accessor :h
+              def initialize(s) = @s = s
+              def to_str = (@h&.clear; @h = nil; GC.start; junk; @s)
+            end
+            class TH
+              def initialize(&b) = @b = b
+              def to_hash = @b.call
+            end
+            # Made in a frame that is gone: the Hash alone holds its values.
+            def mk3(k) = {"MONORUBY_GCE_M" + "4" => "new-" + "4", k => "new-" + "3"}.tap { k.h = _1 }
+            def mk7(saved, k) = saved.merge("MONORUBY_GCE_" + "R2" => "w" + "2", k => "v" + "1").tap { k.h = _1 }
+            r = []
+            # A `to_hash` answer while the names' `to_str` collect.
+            ENV.update(TH.new { {G.new("MONORUBY_GCE_U1") => "v" + "1", "MONORUBY_GCE_" + "U2" => "w" + "2"} })
+            r << [ENV["MONORUBY_GCE_U1"], ENV["MONORUBY_GCE_U2"]]
+            ENV.update(TH.new { {G.new("MONORUBY_GCE_U1") => "x" + "1", "MONORUBY_GCE_" + "U2" => "y" + "2"} }) { |_, o, n| o + n }
+            r << [ENV["MONORUBY_GCE_U1"], ENV["MONORUBY_GCE_U2"]]
+            # The last name's `to_str` empties the Hash before the block
+            # runs, or before ENV.replace converts the value.
+            ENV["MONORUBY_GCE_M3"] = "old3"
+            ENV.update(mk3(EK.new("MONORUBY_GCE_M3"))) { |_, o, n| o + n }
+            r << [ENV["MONORUBY_GCE_M3"], ENV["MONORUBY_GCE_M4"]]
+            saved = ENV.to_h
+            ENV.replace(mk7(saved, EK.new("MONORUBY_GCE_R1")))
+            r << [ENV["MONORUBY_GCE_R1"], ENV["MONORUBY_GCE_R2"], ENV.size == saved.size + 2]
+            ENV.replace(saved)
+            # The block empties the Hash at its first pair. CRuby walks the
+            # Hash itself and never reaches the second pair; monoruby walks
+            # a copy of the pairs and stores it. Either way, nothing freed
+            # is read (no variable is set from a reused cell).
+            ENV["MONORUBY_GCE_M1"] = "old1"
+            ENV["MONORUBY_GCE_M2"] = "old2"
+            h = {"MONORUBY_GCE_M" + "1" => "new-" + "1", "MONORUBY_GCE_M" + "2" => "new-" + "2"}
+            ENV.update(h) { |_, o, n| h.clear; GC.start; junk; n }
+            r << [ENV["MONORUBY_GCE_M1"], ["old2", "new-2"].include?(ENV["MONORUBY_GCE_M2"])]
+            r << ENV.keys.grep(/junk/).size
+            %w[U1 U2 M1 M2 M3 M4 R1 R2].each { ENV.delete("MONORUBY_GCE_#{_1}") }
+            r
+            "##,
+        );
+    }
+
+    /// `ENV.replace` converts and checks each name before its value, as
+    /// `env_replace_i` does, and takes the converted name off the list of
+    /// variables to remove: a name that answers `to_str` kept the variable
+    /// set only to see it removed at the end, and a bad name was reported
+    /// after the value's `to_str` had run.
+    #[test]
+    fn env_replace_converts_each_name_first() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            def t; [:ok, yield]; rescue Exception => e; [e.class, e.message]; end
+            saved = ENV.to_h
+            log = []
+            o = Object.new
+            o.define_singleton_method(:to_str) { log << :key; "MONORUBY_ENV_RPX" }
+            v = Object.new
+            v.define_singleton_method(:to_str) { log << :val; "new" }
+            r = []
+            ENV["MONORUBY_ENV_RPX"] = "old"
+            r << t { ENV.replace(saved.merge(o => "new")); ENV["MONORUBY_ENV_RPX"] }
+            ENV["MONORUBY_ENV_RPX"] = "old"
+            r << t { ENV.replace(saved.merge(o => v)); ENV["MONORUBY_ENV_RPX"] }
+            r << log.dup
+            [["A\0B", v], ["", v], ["A=B", v], ["MONORUBY_ENV_RPY", "a\0b"], [o, "a\0b"], [o, nil]].each do |k, x|
+              log.clear
+              r << [t { ENV.replace(saved.merge(k => x)).equal?(ENV) }, log.dup, ENV["MONORUBY_ENV_RPX"]]
+            end
+            ENV.replace(saved)
+            r << ENV.key?("MONORUBY_ENV_RPX") << ENV.key?("MONORUBY_ENV_RPY")
+            "##,
+        );
+    }
+
+    /// `Hash#merge` / `#merge!` / `#update` keep the pair being merged on
+    /// the temp stack until it is stored. A key's `hash` (or the `to_int`
+    /// of what it answers) that empties the operand left the pair
+    /// referenced only from Rust locals, and a collection there freed the
+    /// value about to be stored or yielded, or the key itself.
+    #[test]
+    fn hash_merge_survives_gc_when_key_hash_empties_operand() {
+        run_test_once(
+            r##"
+            # `hash` empties the Hash its key was taken from, once, and
+            # collects.
+            class K
+              attr_accessor :o
+              def hash = (o&.clear; self.o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+              def eql?(x) = equal?(x)
+              def inspect = "K"
+            end
+            # `hash` answers an object whose `to_int` does that.
+            class HV
+              def initialize(o) = @o = o
+              def to_int = (@o&.clear; @o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+            end
+            class K2
+              attr_accessor :o
+              def hash = HV.new(o).tap { self.o = nil }
+              def eql?(x) = equal?(x)
+              def inspect = "K2"
+            end
+            class TH
+              def initialize(h) = @h = h
+              def to_hash = @h
+            end
+            # The value is referenced only from the Hash made here.
+            def mk(k) = {k => "v" * 20}.tap { k.o = _1 }
+            # The key is, too: it is made in a frame that is gone.
+            $v = "v" * 20
+            def mk2 = (k = K2.new; {k => $v}.tap { k.o = _1 })
+            def mka = (k = K.new; {[k] => $v}.tap { k.o = _1 })
+            5.times.map do
+              k1 = K.new
+              k2 = K.new
+              [
+                {}.merge(mk(K.new)), {}.merge!(mk(K.new)),
+                {}.merge(mk(K.new)) { |_, x, y| [x, y] },
+                {}.update(mk(K.new)) { |_, x, y| [x, y] },
+                {k1 => 0}.merge(mk(k1)) { |_, x, y| [x, y] },
+                {k2 => 0}.update(mk(k2)) { |_, x, y| [x, y] },
+                {}.merge(TH.new(mk(K.new))), {}.update(TH.new(mk(K.new))),
+                {}.merge(mk2), {}.update(mka), {}.merge(mka) { |_, x, y| [x, y] },
+              ].map(&:inspect)
+            end.uniq
+            "##,
+        );
+    }
+
+    /// `Hash#invert` keeps the pair being stored on the temp stack: the
+    /// new key's `hash` (or the `to_int` of what it answers) that empties
+    /// the receiver left it referenced only from Rust locals, and a
+    /// collection there freed the old key or the new one.
+    #[test]
+    fn hash_invert_survives_gc_when_key_hash_empties_receiver() {
+        run_test_once(
+            r##"
+            class K
+              attr_accessor :o
+              def hash = (o&.clear; self.o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+              def eql?(x) = equal?(x)
+              def inspect = "K"
+            end
+            class HV
+              def initialize(o) = @o = o
+              def to_int = (@o&.clear; @o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+            end
+            class K2
+              attr_accessor :o
+              def hash = HV.new(o).tap { self.o = nil }
+              def eql?(x) = equal?(x)
+              def inspect = "K2"
+            end
+            def mk(k) = {"key" * 10 => k}.tap { k.o = _1 }
+            $v = "v" * 20
+            def mk2 = (k = K2.new; {$v => k}.tap { k.o = _1 })
+            def mka = (k = K.new; {$v => [k]}.tap { k.o = _1 })
+            5.times.map { [mk(K.new).invert, mk2.invert, mka.invert].map(&:inspect) }.uniq
+            "##,
+        );
+    }
+
+    /// `Hash.[]` keeps the pair being stored on the temp stack, whether it
+    /// comes from a Hash, a `to_hash` answer, an Array element or a
+    /// `to_ary` answer: a key's `hash` (or the `to_int` of what it
+    /// answers) that empties that container left the pair referenced
+    /// only from Rust locals, and a collection there freed it.
+    #[test]
+    fn hash_bracket_survives_gc_when_key_hash_empties_source() {
+        run_test_once(
+            r##"
+            class K
+              attr_accessor :o
+              def hash = (o&.clear; self.o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+              def eql?(x) = equal?(x)
+              def inspect = "K"
+            end
+            class HV
+              def initialize(o) = @o = o
+              def to_int = (@o&.clear; @o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+            end
+            class K2
+              attr_accessor :o
+              def hash = HV.new(o).tap { self.o = nil }
+              def eql?(x) = equal?(x)
+              def inspect = "K2"
+            end
+            class TH
+              def initialize(h) = @h = h
+              def to_hash = @h
+            end
+            class TA
+              def initialize(a) = @a = a
+              def to_ary = @a
+            end
+            def mk(k) = {k => "v" * 20}.tap { k.o = _1 }
+            def mkp(k) = [k, "v" * 20].tap { k.o = _1 }
+            $v = "v" * 20
+            def mk2 = (k = K2.new; {k => $v}.tap { k.o = _1 })
+            def mka = (k = K.new; {[k] => $v}.tap { k.o = _1 })
+            def mkp2 = (k = K2.new; [k, $v].tap { k.o = _1 })
+            5.times.map do
+              [
+                Hash[mk(K.new)], Hash[TH.new(mk(K.new))], Hash[[mkp(K.new)]],
+                Hash[TA.new([mkp(K.new)])], Hash[[TA.new(mkp(K.new))]],
+                Hash[mk2], Hash[TH.new(mka)], Hash[[mkp2]],
+              ].map(&:inspect)
+            end.uniq
+            "##,
+        );
+    }
+
+    /// `Hash#<` / `#<=` / `#>` / `#>=` keep the pair being looked up on
+    /// the temp stack: a key's `hash` that empties the Hash being walked
+    /// left its value referenced only from a Rust local, and a collection
+    /// there freed it before it was compared.
+    #[test]
+    fn hash_subset_survives_gc_when_key_hash_empties_operand() {
+        run_test_once(
+            r##"
+            class K
+              attr_accessor :o
+              def hash = (o&.clear; self.o = nil; GC.start; $junk = Array.new(200) { [_1] }; 1)
+              def eql?(x) = equal?(x)
+              def inspect = "K"
+            end
+            class TH
+              def initialize(h) = @h = h
+              def to_hash = @h
+            end
+            def mk(k) = {k => "v" * 20}.tap { k.o = _1 }
+            5.times.map do
+              k = K.new
+              sup = {k => "v" * 20, x: 1}
+              [mk(k) <= sup, mk(k) < sup, sup >= mk(k), sup > mk(k), mk(k) <= TH.new(sup)]
+            end.uniq
+            "##,
+        );
+    }
+
+    /// `Hash#merge` / `#merge!` / `#update`, `#select`, `#reject` and
+    /// `ENV.update` keep the Proc that a `&obj` block's `to_proc` answered
+    /// on the temp stack. It was referenced only from a Rust `ProcData`,
+    /// so a collection in an operand's `to_hash` or a key's `hash`, before
+    /// or between the yields, freed it and the frame its block closes
+    /// over, and the next yield ran on freed memory.
+    #[test]
+    fn to_proc_block_survives_gc_in_merge_select_reject() {
+        let _g = env_lock();
+        run_test_once(
+            r##"
+            class K
+              attr_reader :i
+              def initialize(i) = @i = i
+              def hash = (GC.start; $junk = Array.new(3000) { |j| "junk#{j}" }; @i.hash)
+              def eql?(o) = o.is_a?(K) && o.i == @i
+            end
+            class TP
+              def initialize(t) = @t = t
+              def to_proc
+                tag = @t * 3
+                proc { |*a| "#{tag}/#{a.size}" unless tag.start_with?("r") }
+              end
+            end
+            class TH
+              def initialize(h) = @h = h
+              def to_hash = (GC.start; $junk = Array.new(3000) { |j| "junk#{j}" }; @h)
+            end
+            a = {K.new(1) => 1, K.new(2) => 2}
+            b = {K.new(1) => 10, K.new(2) => 20}
+            r = []
+            3.times do |i|
+              r << a.merge(b, &TP.new("m#{i}")).values
+              r << a.dup.merge!(b, &TP.new("b#{i}")).values
+              r << {"k" => 1}.update(TH.new({"k" => 2}), &TP.new("u#{i}"))
+              r << a.select(&TP.new("s#{i}")).values
+              r << a.reject(&TP.new("r#{i}")).values
+              ENV["MONORUBY_GC_TO_PROC"] = "old"
+              ENV.update(TH.new({"MONORUBY_GC_TO_PROC" => "new"}), &TP.new("e#{i}"))
+              r << ENV.delete("MONORUBY_GC_TO_PROC")
+            end
+            r
             "##,
         );
     }

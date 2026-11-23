@@ -1127,32 +1127,41 @@ fn string_shl_gen(
 fn rem(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let arg = lfp.arg(0);
     let self_ = lfp.self_val();
-    let arguments = if arg.try_hash_ty().is_some() {
-        // A single Hash argument is the named-reference source; we
-        // pass it through `format_by_args` (which understands both
-        // `%{name}` and `%<name>spec`) by wrapping it in a single-
-        // element argument list. Older `format_by_hash` only supported
-        // `%{name}`, so this also unifies the two code paths.
-        vec![arg]
-    } else if let Some(ary) = arg.try_array_ty() {
-        ary.to_vec()
-    } else if let Some(ary) = arg.check_array_type(vm, globals)? {
-        // `rb_check_array_type`: an operand that converts by `to_ary`
-        // is the argument list (`"%f" % obj` ↔ `"%f" % obj.to_ary`);
-        // one that does not, or answers nil, is a single argument.
-        ary.to_vec()
-    } else {
-        vec![arg]
-    };
-    // The formatter runs in `&str` space; `FormatCtx` carries the
-    // negotiated result encoding and, when raw bytes must survive the
-    // round trip, puts the whole run into the byte↔U+00XX surrogate
-    // view that `FormatCtx::finish` decodes again.
-    let fmt_inner = self_.as_rstring_inner();
-    let ctx = crate::executor::format::negotiate_format(&globals.store, fmt_inner, &arguments)?;
-    let fmt_view = ctx.view_owned(fmt_inner)?;
-    let format_str = vm.format_by_args(globals, &fmt_view, &arguments, ctx)?;
-    Ok(ctx.finish(&format_str))
+    vm.with_temp_scope(|vm| {
+        let arguments = if arg.try_hash_ty().is_some() {
+            // A single Hash argument is the named-reference source; we
+            // pass it through `format_by_args` (which understands both
+            // `%{name}` and `%<name>spec`) by wrapping it in a single-
+            // element argument list. Older `format_by_hash` only supported
+            // `%{name}`, so this also unifies the two code paths.
+            vec![arg]
+        } else if let Some(ary) = arg.try_array_ty() {
+            ary.to_vec()
+        } else if let Some(ary) = arg.check_array_type(vm, globals)? {
+            // `rb_check_array_type`: an operand that converts by `to_ary`
+            // is the argument list (`"%f" % obj` ↔ `"%f" % obj.to_ary`);
+            // one that does not, or answers nil, is a single argument.
+            ary.to_vec()
+        } else {
+            vec![arg]
+        };
+        // The arguments are copied out of an Array that `to_ary` made,
+        // referenced from nowhere else, or that the formatter's `to_s` /
+        // `inspect` / `to_int` may empty: they stay on the temp stack, or a
+        // collection there frees the ones not formatted yet.
+        for &a in &arguments {
+            vm.temp_push(a);
+        }
+        // The formatter runs in `&str` space; `FormatCtx` carries the
+        // negotiated result encoding and, when raw bytes must survive the
+        // round trip, puts the whole run into the byte↔U+00XX surrogate
+        // view that `FormatCtx::finish` decodes again.
+        let fmt_inner = self_.as_rstring_inner();
+        let ctx = crate::executor::format::negotiate_format(&globals.store, fmt_inner, &arguments)?;
+        let fmt_view = ctx.view_owned(fmt_inner)?;
+        let format_str = vm.format_by_args(globals, &fmt_view, &arguments, ctx)?;
+        Ok(ctx.finish(&format_str))
+    })
 }
 
 ///
@@ -1789,6 +1798,46 @@ fn index_assign(
         return Ok(arg_val);
     }
 
+    // Where the replacement goes is settled before the replacement is
+    // converted, in CRuby's order: `rb_str_aset` converts the index with
+    // `NUM2LONG`, and `rb_str_update` checks the length before its
+    // `StringValue`. Those conversions run `to_int`, and no Ruby may run
+    // once the replacement is in hand: a String that `to_str` answered is
+    // referenced from nowhere else, so a collection would free the bytes
+    // about to be spliced in.
+    enum Target {
+        /// `s[idx] = val` / `s[idx, len] = val`, the length checked.
+        Index(i64, Option<usize>),
+        /// `s[range] = val`: the converted bounds and `exclude_end`.
+        Range(Option<i64>, Option<i64>, bool),
+    }
+    let target = if let Some(info) = arg0_val.is_range() {
+        let start_raw = match info.start().is_nil() {
+            true => None,
+            false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+        };
+        let end_raw = match info.end().is_nil() {
+            true => None,
+            false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+        };
+        Target::Range(start_raw, end_raw, info.exclude_end())
+    } else {
+        let idx = match arg0_val.try_fixnum() {
+            Some(idx) => idx,
+            None => arg0_val.coerce_to_int_i64(vm, globals)?,
+        };
+        let len = match arg1_opt {
+            Some(a1) => match a1.coerce_to_int_i64(vm, globals)? {
+                len if len < 0 => {
+                    return Err(MonorubyErr::indexerr(format!("negative length {len}")));
+                }
+                len => Some(len as usize),
+            },
+            None => None,
+        };
+        Target::Index(idx, len)
+    };
+
     let subst_val = replacement_string(vm, globals, arg_val)?;
     let subst_inner = subst_val.as_rstring_inner();
     let self_ = lfp.self_val();
@@ -1815,54 +1864,33 @@ fn index_assign(
     if !recv_is_utf8 || !subst_is_utf8 {
         let inner = self_.as_rstring_inner();
         let char_len = inner.char_length();
-        if let Some(idx) = arg0_val.try_fixnum().or_else(|| {
-            if arg0_val.is_range().is_none() && arg0_val.is_regex().is_none() {
-                arg0_val.coerce_to_int_i64(vm, globals).ok()
-            } else {
-                None
+        let (start, len) = match target {
+            Target::Index(idx, len) => {
+                let start = if idx == char_len as i64 {
+                    char_len
+                } else {
+                    match conv_index(idx, char_len) {
+                        Some(i) => i,
+                        None => return Err(MonorubyErr::indexerr("index out of range")),
+                    }
+                };
+                let len = match len {
+                    Some(len) => len,
+                    None if start == char_len => 0,
+                    None => 1,
+                };
+                (start, len)
             }
-        }) {
-            let start = if idx == char_len as i64 {
-                char_len
-            } else {
-                match conv_index(idx, char_len) {
-                    Some(i) => i,
-                    None => return Err(MonorubyErr::indexerr("index out of range")),
-                }
-            };
-            let len = if let Some(a1) = arg1_opt {
-                match a1.coerce_to_int_i64(vm, globals)? {
-                    i if i < 0 => return Err(MonorubyErr::indexerr("negative length")),
-                    i => i as usize,
-                }
-            } else if start == char_len {
-                0
-            } else {
-                1
-            };
-            let r = inner.get_range(start, len);
-            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
-            return Ok(arg_val);
-        }
-        if let Some(info) = arg0_val.is_range() {
-            let start_raw = match info.start().is_nil() {
-                true => None,
-                false => Some(info.start().coerce_to_int_i64(vm, globals)?),
-            };
-            let end_raw = match info.end().is_nil() {
-                true => None,
-                false => Some(info.end().coerce_to_int_i64(vm, globals)?),
-            };
-            let exclude_end = info.exclude_end();
-            let (start_char, count) =
+            Target::Range(start_raw, end_raw, exclude_end) => {
                 match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
                     Some(v) => v,
                     None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
-                };
-            let r = inner.get_range(start_char, count);
-            replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
-            return Ok(arg_val);
-        }
+                }
+            }
+        };
+        let r = inner.get_range(start, len);
+        replace_byte_range(globals, self_, r.start, r.end, subst_inner)?;
+        return Ok(arg_val);
     }
     let subst = subst_inner.to_str()?;
     // The result's encoding is the one `rb_enc_check` negotiated — the
@@ -1873,64 +1901,48 @@ fn index_assign(
         .unwrap_or_else(|| recv_inner.encoding());
     let mut lhs = self_.expect_string(globals)?;
     let len = lhs.chars().count();
-    if let Some(arg0) = arg0_val.try_fixnum() {
-        index_assign_by_int(&mut lhs, arg0, arg1_opt, vm, globals, &subst, len)?;
-        *lfp.self_val().as_rstring_inner_mut() =
-            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
-        Ok(arg_val)
-    } else if let Some(info) = arg0_val.is_range() {
-        let char_len = len;
-        let start_raw = match info.start().is_nil() {
-            true => None,
-            false => Some(info.start().coerce_to_int_i64(vm, globals)?),
-        };
-        let end_raw = match info.end().is_nil() {
-            true => None,
-            false => Some(info.end().coerce_to_int_i64(vm, globals)?),
-        };
-        let exclude_end = info.exclude_end();
-        // CRuby: a positive Range begin past `length` raises, but
-        // begin == length is allowed (appends).
-        let (start_char, count) =
-            match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
-                Some(v) => v,
-                None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
-            };
-        let byte_start = lhs
-            .char_indices()
-            .nth(start_char)
-            .map(|(i, _)| i)
-            .unwrap_or(lhs.len());
-        let byte_end = if count == 0 {
-            byte_start
-        } else {
-            lhs.char_indices()
-                .nth(start_char + count)
+    match target {
+        Target::Index(idx, len_arg) => {
+            index_assign_by_int(&mut lhs, idx, len_arg, &subst, len)?;
+        }
+        Target::Range(start_raw, end_raw, exclude_end) => {
+            let char_len = len;
+            // CRuby: a positive Range begin past `length` raises, but
+            // begin == length is allowed (appends).
+            let (start_char, count) =
+                match assign_range_beg_count(start_raw, end_raw, exclude_end, char_len) {
+                    Some(v) => v,
+                    None => return Err(assign_range_error(start_raw, end_raw, exclude_end)),
+                };
+            let byte_start = lhs
+                .char_indices()
+                .nth(start_char)
                 .map(|(i, _)| i)
-                .unwrap_or(lhs.len())
-        };
-        lhs.replace_range(byte_start..byte_end, &subst);
-        *lfp.self_val().as_rstring_inner_mut() =
-            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
-        Ok(arg_val)
-    } else {
-        let idx = arg0_val.coerce_to_int_i64(vm, globals)?;
-        index_assign_by_int(&mut lhs, idx, arg1_opt, vm, globals, &subst, len)?;
-        *lfp.self_val().as_rstring_inner_mut() =
-            RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
-        Ok(arg_val)
+                .unwrap_or(lhs.len());
+            let byte_end = if count == 0 {
+                byte_start
+            } else {
+                lhs.char_indices()
+                    .nth(start_char + count)
+                    .map(|(i, _)| i)
+                    .unwrap_or(lhs.len())
+            };
+            lhs.replace_range(byte_start..byte_end, &subst);
+        }
     }
+    *lfp.self_val().as_rstring_inner_mut() =
+        RStringInner::from_encoding_scanned(lhs.as_bytes(), result_enc);
+    Ok(arg_val)
 }
 
-/// Integer-index assignment (`s[idx] = val` / `s[idx, len] = val`).
+/// Integer-index assignment (`s[idx] = val` / `s[idx, len] = val`), the
+/// length already converted and checked not to be negative.
 /// Allows the special case `""[0] = "..."` and `s[length] = "..."`
 /// (append) per CRuby.
 fn index_assign_by_int(
     lhs: &mut String,
     idx: i64,
-    len_arg: Option<Value>,
-    vm: &mut Executor,
-    globals: &mut Globals,
+    len_arg: Option<usize>,
     subst: &str,
     char_len: usize,
 ) -> Result<()> {
@@ -1948,16 +1960,11 @@ fn index_assign_by_int(
         .nth(start)
         .map(|(i, _)| i)
         .unwrap_or(lhs.len());
-    let len = if let Some(arg1) = len_arg {
-        match arg1.coerce_to_int_i64(vm, globals)? {
-            i if i < 0 => return Err(MonorubyErr::indexerr("negative length")),
-            i => i as usize,
-        }
-    } else if len_arg.is_none() && start == char_len {
+    let len = match len_arg {
+        Some(len) => len,
         // Single-arg form with index == length: append (length 0).
-        0
-    } else {
-        1
+        None if start == char_len => 0,
+        None => 1,
     };
     let byte_end = lhs
         .char_indices()
@@ -5811,6 +5818,46 @@ fn char_aligned_scan(inner: &RStringInner, needle: &RStringInner) -> Option<Vec<
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/scan.html]
 #[monoruby_builtin]
 fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    // The Ruby that runs here (a `&obj` block's `to_proc`, a pattern's
+    // `to_str`) all runs before the receiver's snapshot is taken: the
+    // snapshot of a short receiver is a fresh copy rooted only by the
+    // haystack slot, which a match in that Ruby code takes over, and a
+    // collection there would free it. The order is CRuby's: `&obj` is
+    // converted at the call site (`vm_to_proc`), then `rb_str_scan` takes
+    // the receiver's length, then converts the pattern (`get_pat_quoted`).
+    vm.with_temp_scope(|vm| {
+        // The Proc a `&obj` block's `to_proc` answers is pushed on the
+        // temp stack: nothing else references it, and the pattern's
+        // `to_str` and every yield may collect.
+        let data = match lfp.block() {
+            Some(bh) => Some(vm.get_block_data_rooted(globals, bh)?),
+            None => None,
+        };
+        // The length a block must leave the receiver at (`str_mod_check`).
+        let recv_len = lfp.self_val().as_rstring_inner().len();
+        let mut pattern = lfp.arg(0);
+        if pattern.is_regex().is_none() && pattern.is_rstring().is_none() {
+            // `get_pat_quoted`: anything else is turned into a String by
+            // its `to_str`, and is a String pattern from there on. The
+            // receiver is read as that `to_str` left it, as CRuby reads it.
+            pattern = pattern.coerce_to_pattern_string(vm, globals)?;
+            vm.temp_push(pattern);
+        }
+        scan_pattern(vm, globals, lfp, pattern, recv_len, data.as_ref())
+    })
+}
+
+/// [`scan`] once its block is resolved (`data`) and its pattern is a
+/// Regexp or a String (`arg0`, rooted); `recv_len` is the receiver's
+/// length before the pattern was converted.
+fn scan_pattern(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    arg0: Value,
+    recv_len: usize,
+    data: Option<&ProcData>,
+) -> Result<Value> {
     let self_ = lfp.self_val();
     // Take a stable frozen snapshot of the receiver up front, so every
     // match can be a zero-copy shared (CoW) view even if a block mutates
@@ -5819,15 +5866,17 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // broken in its own encoding is refused before the receiver is:
     // a broken pattern over a broken receiver raises `RegexpError`,
     // not the receiver's `ArgumentError`.
-    check_string_pattern_valid(lfp.arg(0))?;
+    check_string_pattern_valid(arg0)?;
     mustnot_broken(&self_.as_rstring_inner())?;
     // The encoding check comes before the view: a UTF-16 receiver
     // meets an ASCII regexp as an encoding clash, not as bytes that
     // are no UTF-8.
-    check_pattern_encoding_compat(&self_.as_rstring_inner(), lfp.arg(0), globals)?;
+    check_pattern_encoding_compat(&self_.as_rstring_inner(), arg0, globals)?;
+    // No Ruby runs from here until the first yield (`scan` has converted
+    // the block and the pattern), by which time the snapshot is on the
+    // temp stack.
     let subject_val = string_snapshot(self_);
     vm.set_match_haystack(subject_val);
-    let arg0 = lfp.arg(0);
     // A String pattern over a receiver monoruby walks itself is a
     // literal search that has to align to characters — in Shift_JIS the
     // trail byte of `"\x81A"` is not the letter `A` (#1458). The regex
@@ -5836,34 +5885,36 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         && let Some(hits) = char_aligned_scan(&self_.as_rstring_inner(), &needle)
     {
         let enc = self_.as_rstring_inner().encoding();
-        let found: Vec<Value> = hits
-            .iter()
-            .map(|&(start, end)| {
-                Value::string_from_inner(RStringInner::from_encoding(
-                    &self_.as_rstring_inner().as_bytes()[start..end],
-                    enc,
-                ))
-            })
-            .collect();
-        match lfp.block() {
+        // A match is a copy of its bytes, cut from the snapshot (the
+        // receiver's bytes as they were). With a block each one is made
+        // right before its yield: made earlier, it would wait in a Rust
+        // local, and a collection in the block would free it.
+        let cut = |(start, end): (usize, usize)| {
+            Value::string_from_inner(RStringInner::from_encoding(
+                &subject_val.as_rstring_inner().as_bytes()[start..end],
+                enc,
+            ))
+        };
+        match data {
             None => {
                 if let Some(&(start, end)) = hits.last() {
                     vm.save_capture_span(subject_val, start, end);
                 } else {
                     vm.clear_capture_special_variables();
                 }
-                return Ok(Value::array_from_vec(found));
+                return Ok(Value::array_from_iter(hits.iter().map(|&hit| cut(hit))));
             }
-            Some(block) => {
-                let data = vm.get_block_data(globals, block)?;
+            Some(data) => {
                 // The snapshot is rooted for the whole walk: the block
                 // may GC, and every yielded chunk was cut from it.
                 vm.temp_push(subject_val);
                 let res = (|| -> Result<()> {
-                    for (i, v) in found.iter().enumerate() {
-                        let (start, end) = hits[i];
+                    for &(start, end) in &hits {
                         vm.save_capture_span(subject_val, start, end);
-                        vm.invoke_block(globals, &data, &[*v])?;
+                        vm.invoke_block(globals, data, &[cut((start, end))])?;
+                        // `str_mod_check`, as the regex walk runs it
+                        // (`scan_block_loop`).
+                        check_string_not_modified(self_, recv_len)?;
                     }
                     Ok(())
                 })();
@@ -5881,19 +5932,13 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
     }
     let owned_re;
-    let coerced_re;
     let re: &RegexpInner = if let Some(inner) = arg0.is_rstring_inner() {
         owned_re = RegexpInner::from_escaped(&inner.regex_view()?)?;
         &owned_re
-    } else if arg0.is_regex().is_some() {
-        arg0.as_regexp_inner()
     } else {
-        // `get_pat_quoted`'s `to_str` coercion.
-        let coerced = arg0.coerce_to_pattern_str(vm, globals)?;
-        coerced_re = RegexpInner::from_escaped(&coerced)?;
-        &coerced_re
+        arg0.as_regexp_inner()
     };
-    match lfp.block() {
+    match data {
         None => {
             // SAFETY of the borrow: `subject_val` is frozen, so its buffer
             // is never reallocated; `string_substring(subject_val, …)`
@@ -5902,8 +5947,8 @@ fn scan(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             let vec = re.scan(vm, subject_val, &subject, MatchOrigin::of(arg0))?;
             Ok(Value::array_from_vec(vec))
         }
-        Some(block) => {
-            scan_with_block(vm, globals, re, self_, subject_val, block, arg0)?;
+        Some(data) => {
+            scan_with_block(vm, globals, re, self_, recv_len, subject_val, data, arg0)?;
             Ok(lfp.self_val())
         }
     }
@@ -5914,12 +5959,12 @@ fn scan_with_block(
     globals: &mut Globals,
     re: &RegexpInner,
     recv: Value,
+    recv_len: usize,
     subject: Value,
-    block: BlockHandler,
+    data: &ProcData,
     pattern: Value,
 ) -> Result<()> {
     let regexp_pattern = pattern.is_regex().is_some();
-    let data = vm.get_block_data(globals, block)?;
     vm.clear_capture_special_variables();
     // Root the snapshot across block invocations (which may GC) so the
     // borrowed `given` and the shared match views stay alive even if the
@@ -5935,8 +5980,9 @@ fn scan_with_block(
         globals,
         re,
         recv,
+        recv_len,
         subject,
-        &data,
+        data,
         regexp_pattern,
         origin,
     );
@@ -5949,6 +5995,7 @@ fn scan_block_loop(
     globals: &mut Globals,
     re: &RegexpInner,
     recv: Value,
+    recv_len: usize,
     subject_val: Value,
     data: &ProcData,
     regexp_pattern: bool,
@@ -5956,9 +6003,9 @@ fn scan_block_loop(
 ) -> Result<()> {
     // `subject_val` is frozen (stable buffer) and temp-rooted by the
     // caller, so this borrow stays valid across `invoke_block`. Matching
-    // runs on the snapshot; the *live* receiver `recv` is checked for a
-    // length change after each block call to raise "string modified"
-    // like CRuby.
+    // runs on the snapshot; the *live* receiver `recv` is checked after
+    // each block call for a length other than `recv_len`, to raise
+    // "string modified" like CRuby.
     let inner = subject_val.as_rstring_inner();
     let view;
     let subject = match re.native_subject(inner, &globals.store, regexp_pattern)? {
@@ -5968,7 +6015,6 @@ fn scan_block_loop(
             Subject::of(&view, inner)
         }
     };
-    let recv_len = recv.as_rstring_inner().len();
     // Manual walk (as in the no-block `RegexpInner::scan` and
     // `replace_repeat`) so zero-width matches the CRuby scan yields —
     // between two non-empty matches, and at end-of-string after a
@@ -20877,6 +20923,319 @@ mod tests {
              # it its own encoding.
              [a.hash == a.dup.force_encoding("UTF8-MAC").hash,
               [a, a.dup.force_encoding("UTF8-MAC")].uniq.size]]
+            "##,
+        );
+    }
+
+    /// `String#%` keeps an operand's `to_ary` answer rooted while the
+    /// formatter runs the arguments' `to_s`: its elements were held only
+    /// in a Rust Vec, and a collection in an earlier `to_s` freed the
+    /// later ones.
+    #[test]
+    fn format_operator_survives_gc_in_to_s() {
+        run_test_once(
+            r##"
+            class T
+              def to_s = (GC.start; "t" * 5)
+            end
+            class O
+              def to_ary = ["a#{1}" * 10, T.new, "c#{3}" * 10, T.new, "e#{5}" * 10]
+            end
+            r = nil
+            5.times { r = "%s|%s|%s|%s|%s" % O.new }
+            r
+            "##,
+        );
+    }
+
+    /// `String#%` keeps the arguments it copied out of an Array operand
+    /// (or a `to_ary` answer) on the temp stack: an argument's `to_s` that
+    /// empties the Array left the later ones referenced only from a Rust
+    /// Vec, and a collection there freed them. CRuby crashes on this code
+    /// (`rb_str_format_m` reads the arguments from the Array's own
+    /// buffer), so it checks the result itself.
+    #[test]
+    fn format_operator_survives_gc_when_to_s_empties_operand() {
+        run_test_no_result_check(
+            r##"
+            class T
+              def initialize(a) = @a = a
+              def to_s = (@a.clear; GC.start; $junk = Array.new(200) { [_1] }; "t")
+            end
+            class O
+              def initialize(a) = @a = a
+              def to_ary = @a
+            end
+            want = "t #{"x" * 20} #{"y" * 20}"
+            5.times do
+              a = []
+              a << T.new(a) << "x" * 20 << "y" * 20
+              got = "%s %s %s" % a
+              raise "got #{got.inspect}, want #{want.inspect}" unless got == want
+              a = []
+              a << T.new(a) << "x" * 20 << "y" * 20
+              got = "%s %s %s" % O.new(a)
+              raise "got #{got.inspect}, want #{want.inspect}" unless got == want
+            end
+            "##,
+        );
+    }
+
+    /// `String#scan` with a String pattern over a receiver walked by
+    /// character (Shift_JIS, EUC-JP) makes each match right before its
+    /// yield. All of them were made up front and held in a Rust Vec, and a
+    /// collection in the block freed the ones not yielded yet.
+    #[test]
+    fn scan_char_aligned_survives_gc_in_block() {
+        run_test_once(
+            r##"
+            r = []
+            [("ab" * 30).encode("Shift_JIS"), ("ab" * 30).encode("EUC-JP")].each do |s|
+              5.times do
+                m = []
+                s.scan("b") { |x| GC.start; m << x.bytes }
+                r << [m.size, m.uniq]
+              end
+              r << [s.scan("b").size, s.scan("b").map { _1.encoding.name }.uniq, $~[0]]
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `String#scan` converts a pattern that answers `to_str` before it
+    /// takes the receiver's snapshot. The snapshot of a short receiver is
+    /// a fresh copy rooted only by the haystack slot, so a `to_str` that
+    /// matched something (taking the slot over) and collected freed it,
+    /// and the scan then read the freed String.
+    #[test]
+    fn scan_survives_gc_in_pattern_to_str() {
+        run_test_once(
+            r##"
+            class P
+              def to_str = ("x" =~ /x/; GC.start; "b")
+            end
+            class Q
+              def to_str = ("qqqqqqqq".scan(/q/); GC.start; $junk = Array.new(3000) { |i| "junk#{i}" }; "b")
+            end
+            r = []
+            [P, Q].each do |c|
+              5.times { r << (+"abab").scan(c.new) }
+              5.times { a = []; (+"abab").scan(c.new) { a << _1 }; r << a }
+            end
+            r.uniq
+            "##,
+        );
+    }
+
+    /// `String#scan` turns a pattern that answers `to_str` into a String
+    /// pattern first, as `get_pat_quoted` does: the receiver is read as
+    /// that `to_str` left it, a block that changes the receiver's length
+    /// from what it was on entry raises "string modified", and the answer
+    /// is searched as a String pattern is (aligned to the receiver's
+    /// characters, a broken one refused, encodings checked).
+    #[test]
+    fn scan_converts_the_pattern_first() {
+        run_test_once(
+            r##"
+            def t; [:ok, yield]; rescue Exception => e; [e.class, e.message]; end
+            class TS
+              def initialize(s, &b) = (@s = s; @b = b)
+              def to_str = (@b&.call; @s)
+            end
+            sj = "\x81Aa\x81A".dup.force_encoding("Shift_JIS")
+            r = []
+            s = +"abab"
+            r << t { [s.scan(TS.new("b") { s << "bbb" }), s] }
+            s = +"abab"
+            r << t { a = []; s.scan(TS.new("b") { s << "bbb" }) { a << _1 }; [a, s] }
+            s = +"abab"
+            r << t { a = []; s.scan(TS.new("b") { s.replace("bbbb") }) { a << _1 }; [a, s] }
+            s = +"abab"
+            r << t { [s.scan(TS.new("b") { s.clear }), s] }
+            r << t { x = sj.scan(TS.new("A")); [x, $~] }
+            r << t { sj.scan(TS.new("\xff".b)) }
+            r << t { "abc".scan(TS.new("\xff".dup.force_encoding("UTF-8"))) }
+            r << t { "a\xffb\xffa".b.scan(TS.new("\xff".b)) }
+            r << t { "abc".scan(TS.new("a".encode("UTF-16LE"))) }
+            r << t { "a\xffb".dup.force_encoding("UTF-8").scan(1) }
+            r
+            "##,
+        );
+    }
+
+    /// `String#scan` converts a `&obj` block before it takes the
+    /// receiver's snapshot, and keeps the Proc that `to_proc` answers on
+    /// the temp stack. `to_proc` used to run after the snapshot was taken:
+    /// one that matched something (taking the haystack slot, the only root
+    /// of a short receiver's snapshot) and collected freed the snapshot.
+    /// Converted first, the Proc is referenced from nowhere else while the
+    /// pattern's `to_str` runs, and a collection there would free it.
+    #[test]
+    fn scan_survives_gc_in_block_to_proc() {
+        run_test_once(
+            r##"
+            class TP
+              def to_proc = ("x" =~ /x/; GC.start; proc { |m| $r << m })
+            end
+            class TQ
+              def initialize(t) = @t = t
+              def to_proc
+                tag = @t * 3
+                proc { |m| $r << [m, tag] }
+              end
+            end
+            class P
+              def to_str = ("x" =~ /x/; GC.start; $junk = Array.new(3000) { |i| "junk#{i}" }; "b")
+            end
+            $r = []
+            5.times { (+"abab").scan(/b/, &TP.new) }
+            5.times { (+"abab").scan("b", &TP.new) }
+            5.times { ("ab" * 2).encode("Shift_JIS").scan("b", &TP.new) }
+            5.times { |i| (+"abab").scan(P.new, &TQ.new("q#{i}")) }
+            5.times { |i| ("ab" * 2).encode("EUC-JP").scan(P.new, &TQ.new("e#{i}")) }
+            [$r.size, $r.map { |m| m.is_a?(Array) ? [m[0].bytes, m[1]] : m.bytes }.uniq]
+            "##,
+        );
+    }
+
+    /// `String#scan` converts a `&obj` block first, as CRuby converts it at
+    /// the call site: before the receiver's length is taken (a `to_proc`
+    /// that changes the receiver is no "string modified"), before the
+    /// pattern's `to_str`, and before the receiver is checked.
+    #[test]
+    fn scan_converts_the_block_first() {
+        run_test_once(
+            r##"
+            def t; $log = []; [yield, $log]; rescue Exception => e; [e.class, $log]; end
+            s = +"abab"
+            grow = Object.new
+            grow.define_singleton_method(:to_proc) { $log << :to_proc; s << "XX"; proc { |m| $log << m } }
+            pat = Object.new
+            pat.define_singleton_method(:to_str) { $log << :to_str; "b" }
+            bad = Object.new
+            bad.define_singleton_method(:to_proc) { $log << :to_proc; raise "no proc" }
+            r = []
+            r << t { s.scan(/b/, &grow).equal?(s) }
+            s = +"abab"
+            r << t { s.scan("b", &grow).equal?(s) }
+            s = (+"abab").encode("EUC-JP")
+            r << t { s.scan("b", &grow).equal?(s) }
+            s = +"abab"
+            r << t { s.scan(pat, &grow).equal?(s) }
+            r << t { "abab".scan(pat, &bad) }
+            r << t { "abab".scan(pat, &Object.new) }
+            r << t { "a\xffb".dup.force_encoding("UTF-8").scan(/b/, &bad) }
+            r
+            "##,
+        );
+    }
+
+    /// `String#scan`'s walk by character (a String pattern over Shift_JIS,
+    /// EUC-JP, UTF-16 or UTF-32) raises "string modified" once a block has
+    /// changed the receiver's length, as the regex walk does; it used to
+    /// yield every match regardless.
+    #[test]
+    fn scan_char_aligned_raises_string_modified() {
+        run_test_once(
+            r##"
+            def t; [:ok, yield]; rescue Exception => e; [e.class, e.message]; end
+            class TS
+              def initialize(s, &b) = (@s = s; @b = b)
+              def to_str = (@b&.call; @s)
+            end
+            r = []
+            ["Shift_JIS", "EUC-JP", "UTF-16LE", "UTF-32BE"].each do |enc|
+              b = "b".encode(enc)
+              s = ("ab" * 3).encode(enc); a = []
+              r << t { s.scan(b) { a << _1; s << "x".encode(enc) }; s.size } + [a.size]
+              s = ("ab" * 3).encode(enc); a = []
+              r << t { s.scan(b) { a << _1; s.chop! }; s.size } + [a.size]
+              s = ("ab" * 3).encode(enc); a = []
+              r << t { s.scan(TS.new(b) { s << "bb".encode(enc) }) { a << _1 }; s.size } + [a.size]
+              s = ("ab" * 3).encode(enc); a = []
+              r << t { s.scan(b) { a << _1; s[0] = "c".encode(enc) }; s.size } + [a.size]
+            end
+            r
+            "##,
+        );
+    }
+
+    /// `String#[]=` converts the index and the length before the
+    /// replacement, as CRuby does. A String that the replacement's
+    /// `to_str` answered was held only in a Rust local while the index's
+    /// `to_int` ran, and a collection there spliced freed bytes into the
+    /// receiver.
+    #[test]
+    fn index_assign_survives_gc_in_to_int() {
+        run_test_once(
+            r##"
+            class V
+              def to_str = "replacement-#{1}" * 4
+            end
+            class I
+              def to_int = (GC.start; 1)
+            end
+            r = []
+            5.times do
+              s = +"hello world"
+              s[I.new] = V.new
+              r << s
+              s = +"hello world"
+              s[1, I.new] = V.new
+              r << s
+              s = "hello world".encode("EUC-JP")
+              s[I.new] = V.new
+              r << s
+              s = "hello world".encode("EUC-JP")
+              s[I.new, I.new] = V.new
+              r << s
+            end
+            r.map { |s| [s, s.encoding.name] }.uniq
+            "##,
+        );
+    }
+
+    /// `String#[]=` converts in CRuby's order: the index and the length
+    /// (`to_int`, a negative length raising at once), then the replacement
+    /// (`to_str`). So a `to_int` that changes the replacement or the
+    /// receiver is seen (the replacement's bytes used to be read through
+    /// a borrow taken before it, and were garbage once it had grown), and
+    /// a bad index raises before a bad replacement. No case logs both an
+    /// index and a length `to_int`: CRuby converts the two as arguments of
+    /// one C call (`rb_str_aset_m`), so their order is the C compiler's.
+    #[test]
+    fn index_assign_converts_the_position_first() {
+        run_test_once(
+            r##"
+            $log = []
+            class LI
+              include Comparable
+              attr_reader :i
+              def initialize(i) = @i = i
+              def to_int = ($log << [:to_int, @i]; @i)
+              def <=>(o) = @i <=> o.i
+            end
+            class LV
+              def initialize(s) = @s = s
+              def to_str = ($log << [:to_str, @s]; @s)
+            end
+            t = ->(&b) do
+              $log = []
+              [(b.call rescue [$!.class, $!.message]), $log]
+            end
+            [
+              t.() { s = +"hello"; s[LI.new(1)] = LV.new("X"); s },
+              t.() { s = +"hello"; s[1, LI.new(2)] = LV.new("X"); s },
+              t.() { s = +"hello"; s[LI.new(1)..LI.new(2)] = LV.new("X"); s },
+              t.() { s = "abcd".encode("EUC-JP"); s[LI.new(1), 2] = LV.new("X"); s },
+              t.() { s = +"hello"; s[1, LI.new(-1)] = LV.new("X"); s },
+              t.() { s = +"hello"; s[10, -1] = "X"; s },
+              t.() { s = +"hello"; s[Object.new] = 42; s },
+              t.() { s = "\xff\xfe".b; s[Object.new] = "x"; s },
+              t.() { r = +"abc"; i = Object.new; i.define_singleton_method(:to_int) { r << "x" * 100; 1 }; s = +"hello"; s[i] = r; s },
+              t.() { s = +"hello"; i = Object.new; i.define_singleton_method(:to_int) { s << "!!"; 1 }; s[i] = "X"; s },
+            ]
             "##,
         );
     }
