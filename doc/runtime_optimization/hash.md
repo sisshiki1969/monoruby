@@ -121,6 +121,17 @@ value+0 / hash+8 / key+16）ため、`entries_layout()` は本物の `Vec` を�
 置けるが、この bump 確保の対象ではなく、`gen_hash` の実行時呼び出しを経て
 inline 表現に落ち着く。
 
+`gen_hash`（`codegen/runtime.rs`、VM と JIT の両方が呼ぶ）は、Rust のスタック上の
+`HashmapInner` にペアを入れ、最後に Hash にする。Rust のスタックは GC が見ないので、
+これが成り立つのは Ruby のコードが動かない間だけである（リテラル自身のキーと値は
+フレームのスロットにあるが、unfrozen な String キーの凍結コピーはこのマップしか
+持っていない）。そこでキーごとに `HashmapInner::aset_native_key` で入れる。packed な
+値とクラスが `String` そのものの String は、`#hash` も `#eql?` も呼ばずに入る。
+それ以外のキーは何も入れずに `false` を返し、`gen_hash_rooted` がそこまでのマップを
+Hash にして temp stack に置いたうえで、残りのペアを `Hashmap::aset_pairs` で入れる
+（#2153）。前者の経路は構築中のマップ専用なので、tombstone と走査中の検査を省いた
+`store` の `FRESH` 版を使う。
+
 `Hash#each` / `each_key` / `each_value` はこれらのプリミティブの上に Ruby で
 書かれている（`builtins/hash.rb`）ので、ホットな呼び出しサイトではメソッドと
 ブロックの両方がインライン展開される（§1.6）。

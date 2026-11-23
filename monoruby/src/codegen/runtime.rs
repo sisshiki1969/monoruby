@@ -1081,7 +1081,7 @@ pub(super) extern "C" fn gen_hash(
     len: usize,
 ) -> Option<Value> {
     match gen_hash_inner(vm, globals, src, len) {
-        Ok(map) => Some(Value::hash_from_inner(map)),
+        Ok(hash) => Some(hash),
         Err(err) => {
             vm.set_error(err);
             None
@@ -1094,7 +1094,7 @@ fn gen_hash_inner(
     globals: &mut Globals,
     src: *const Value,
     len: usize,
-) -> Result<crate::value::rvalue::HashmapInner> {
+) -> Result<Value> {
     // Build the HashmapInner directly (not a RubyMap first) so a small
     // literal with packed keys lands in the inline representation without
     // ever touching the heap. A literal past the inline capacity is
@@ -1102,16 +1102,61 @@ fn gen_hash_inner(
     // the inline→boxed growth ladder costs a representation switch plus
     // a rehash per doubling (an 8-pair literal was ~2.4x CRuby+YJIT).
     let mut map = crate::value::rvalue::HashmapInner::with_capacity(len);
-    if len > 0 {
-        let mut iter = unsafe { std::slice::from_raw_parts(src.sub(len * 2 - 1), len * 2) }
-            .iter()
-            .copied()
-            .rev();
-        while let Ok(chunk) = iter.next_chunk::<2>() {
-            map.aset(chunk[0], chunk[1], vm, globals)?;
+    for i in 0..len {
+        // SAFETY: the bytecode compiler guarantees `len * 2` consecutive
+        // value slots ending at `src`.
+        let (k, v) = unsafe { hash_literal_pair(src, i) };
+        // `map` lives on the Rust stack, which the collector does not
+        // scan. That is sound only while no Ruby code can run: the
+        // literal's own keys and values sit in the frame's slots, but the
+        // frozen copy stored for an unfrozen String key is held by `map`
+        // alone. Packed keys and plain Strings are stored without a call,
+        // so a literal of nothing else is built right here. The first key
+        // that would dispatch `#hash` / `#eql?` is declined, and from it
+        // on the literal is built as the Hash it is going to be, rooted
+        // (#2153).
+        if !map.aset_native_key(k, v, vm, globals)? {
+            return gen_hash_rooted(vm, globals, map, src, i, len);
         }
     }
-    Ok(map)
+    Ok(Value::hash_from_inner(map))
+}
+
+/// The `i`-th key and value of a Hash literal whose slots end at `src`:
+/// the pairs descend from it, key first.
+///
+/// # Safety
+/// `src` must be the first of at least `(i + 1) * 2` consecutive value
+/// slots, descending.
+#[inline(always)]
+unsafe fn hash_literal_pair(src: *const Value, i: usize) -> (Value, Value) {
+    unsafe { (*src.sub(i * 2), *src.sub(i * 2 + 1)) }
+}
+
+/// The rest of a Hash literal, from the first pair whose key may run
+/// Ruby code (the `from`-th of `len`): `map`, the pairs before it,
+/// becomes the Hash right away and stays on the temp stack while the
+/// others go in, so that a collection inside a key's `#hash` / `#eql?`
+/// finds every pair stored so far — the frozen copies of String keys
+/// included, which nothing else holds.
+#[inline(never)]
+fn gen_hash_rooted(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    map: crate::value::rvalue::HashmapInner,
+    src: *const Value,
+    from: usize,
+    len: usize,
+) -> Result<Value> {
+    let hash = Value::hash_from_inner(map);
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(hash);
+        // SAFETY: as in `gen_hash_inner`; `from..len` is within the
+        // literal's `len` pairs.
+        let pairs = (from..len).map(|i| unsafe { hash_literal_pair(src, i) });
+        hash.as_hash().aset_pairs(pairs, vm, globals)?;
+        Ok(hash)
+    })
 }
 
 ///
