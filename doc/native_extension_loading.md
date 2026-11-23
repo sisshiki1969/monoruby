@@ -458,6 +458,22 @@ install root の絶対パスはバイナリに焼き込まれている
 2. `<実行ファイルのあるディレクトリ>/..` に `builtins/` があればそこ
 3. 焼き込まれた `env!("MONORUBY_INSTALL_ROOT")`
 
+どれで決まっても、答えは**正規化（シンボリックリンクを解決）して
+プロセスで一度だけ**求める（`globals::install_tree`）。ロードした
+ファイルのパスは正規化されたディレクトリを持つ（`require` は
+`$LOAD_PATH` のエントリを、`require_relative` は呼び出し元のファイルを
+解決する）ので、「このファイルは monoruby 自身のものか」を訊く比較は
+正規化した側と突き合わせなければ外れる。書かれたままの root だと、
+`MONORUBY_INSTALL_ROOT` がリンクを指すときや、ホームがリンク越し
+（macOS の `/tmp`、リンクの `/home`）のビルドで、`builtins/` の
+ファイルが一つも内部扱いされなかった（#2152）。root の下の
+`builtins` / `lib` / `stub` がそれぞれリンクの木（下のテストが組む形）
+でも同じことが起きるので、三つは個別にも正規化して持つ
+（`builtins_dir` / `lib_dir` / `stub_dir`）。比較はそれらを使い、
+`$LOAD_PATH` に載せるのは `install_root().join("lib")` のまま。
+`tests/install_root.rs` がリンク越しの root で、
+`tests/relocatable_install.rs` がリンクの木で確かめる。
+
 2 の目印が `builtins/` なのは、それが install root にしか無く、
 `~/.cargo/bin/monoruby` のような「木を伴わないバイナリ」を
 誤検出しないため。`bin/dist` はこの形

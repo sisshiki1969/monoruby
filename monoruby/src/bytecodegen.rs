@@ -1825,8 +1825,7 @@ impl<'a> BytecodeGen<'a> {
     /// see warnings pointing into interpreter internals.
     fn chill_literal_template(&self, mut v: Value, loc: Loc) -> Value {
         if self.sourceinfo.frozen_string_literal.is_none()
-            && !std::path::Path::new(self.sourceinfo.file_name().as_ref())
-                .starts_with(crate::globals::install_root())
+            && !crate::globals::is_install_tree_path(&self.sourceinfo.path)
         {
             v.set_chilled_literal();
             self.record_literal_origin(v, loc);
