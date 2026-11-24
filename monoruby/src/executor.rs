@@ -856,14 +856,17 @@ impl Executor {
         self.cfp().method_func_id()
     }
 
+    #[inline]
     pub fn temp_len(&self) -> usize {
         self.temp_stack.len()
     }
 
+    #[inline]
     pub fn temp_push(&mut self, val: Value) {
         self.temp_stack.push(val);
     }
 
+    #[inline]
     pub fn temp_clear(&mut self, len: usize) {
         self.temp_stack.truncate(len);
     }
@@ -915,6 +918,7 @@ impl Executor {
         }
     }
 
+    #[inline]
     pub fn temp_pop(&mut self) -> Value {
         self.temp_stack.pop().unwrap()
     }
@@ -934,6 +938,7 @@ impl Executor {
     /// Read a Value previously pushed onto the temp stack. The bit pattern
     /// remains a valid heap pointer as long as the Value is still in the
     /// temp stack (i.e. it has not yet been popped/cleared).
+    #[inline]
     pub fn temp_at(&self, idx: usize) -> Value {
         self.temp_stack[idx]
     }
@@ -944,6 +949,7 @@ impl Executor {
     /// without touching the global GC enable flag — any `temp_push` /
     /// `temp_array_new` / `temp_array_push` issued through `f` is rolled
     /// back automatically, including paths that early-return via `?`.
+    #[inline(always)]
     pub fn with_temp_scope<F, T>(&mut self, f: F) -> T
     where
         F: FnOnce(&mut Executor) -> T,
@@ -964,6 +970,7 @@ impl Executor {
         f(&mut *guard.vm)
     }
 
+    #[inline]
     pub fn temp_array_push(&mut self, v: Value) {
         self.temp_stack.last_mut().unwrap().as_array().push(v);
     }
@@ -975,6 +982,7 @@ impl Executor {
         h.aset(k, v, self, globals)
     }
 
+    #[inline]
     pub fn temp_array_extend_from_slice(&mut self, slice: &[Value]) {
         self.temp_stack
             .last_mut()
@@ -5015,6 +5023,7 @@ impl Executor {
     ///  
     /// let data = vm.get_block_data(globals, block);
     ///
+    #[inline]
     pub(crate) fn invoke_block(
         &mut self,
         globals: &mut Globals,
@@ -5231,6 +5240,7 @@ impl Executor {
         res
     }
 
+    #[inline]
     pub(crate) fn invoke_block_once(
         &mut self,
         globals: &mut Globals,

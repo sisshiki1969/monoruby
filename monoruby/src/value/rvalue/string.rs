@@ -4655,6 +4655,7 @@ impl RStringInner {
     /// `cr` via `Encoding::classify`. Useful for source-byte
     /// literals (`"\xFF"`) and other long-lived inputs where the
     /// classification will outlive many clones.
+    #[inline]
     pub fn from_encoding_scanned(slice: &[u8], encoding: Encoding) -> Self {
         RStringInner::from(
             SmallVec::from_slice(slice),
