@@ -17,6 +17,7 @@ mod alloc_limits_full_message_check_id;
 mod arith;
 mod arith_seq_enumerator;
 mod arith_seq_float;
+mod array_block_methods_ruby;
 mod array_frozen_index_assign;
 mod array_initialize;
 mod array_loop_seed;

@@ -37,6 +37,9 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_fill", init_fill, 2);
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_from", init_from, 1);
     globals.define_private_builtin_func(ARRAY_CLASS, "__size_to_int", size_to_int, 1);
+    // `flat_map` in builtins/array.rb: the block's Array, appended in one
+    // native call (`Array#concat` takes a rest argument and converts each).
+    globals.define_private_builtin_func(ARRAY_CLASS, "__concat_to", concat_to, 2);
     globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
         "size",
@@ -119,13 +122,10 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(ARRAY_CLASS, "min", min, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "max", max, 0, 1, false);
     globals.define_builtin_func(ARRAY_CLASS, "minmax", minmax, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "partition", partition, 0);
-    globals.define_builtin_funcs(ARRAY_CLASS, "filter", &["select", "find_all"], filter, 0);
     globals.define_builtin_funcs(ARRAY_CLASS, "filter!", &["select!"], filter_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(ARRAY_CLASS, "reject!", reject_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "delete_if", delete_if, 0);
-    globals.define_builtin_func(ARRAY_CLASS, "reject", reject, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort", sort, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort!", sort_, 0);
     globals.define_builtin_func(ARRAY_CLASS, "sort_by!", sort_by_, 0);
@@ -135,7 +135,6 @@ pub(super) fn init(globals: &mut Globals) {
     //globals.define_builtin_func(ARRAY_CLASS, "each_with_index", each_with_index, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map", &["collect"], map, 0);
     //globals.define_builtin_funcs(ARRAY_CLASS, "map!", &["collect!"], map_, 0);
-    globals.define_builtin_funcs(ARRAY_CLASS, "flat_map", &["collect_concat"], flat_map, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "all?", all_, 0, 1, false);
     globals.define_builtin_func_with(ARRAY_CLASS, "any?", any_, 0, 1, false);
     globals.define_builtin_funcs_with(ARRAY_CLASS, "detect", &["find"], detect, 0, 1, false);
@@ -1133,6 +1132,33 @@ fn concat(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })?;
     self_ary.extend_from_slice(&ary);
     Ok(self_ary.into())
+}
+
+/// `Array#__concat_to(dst, src)` (private): the elements of the Array
+/// *src* appended to the Array *dst*, which is returned. `flat_map` in
+/// builtins/array.rb passes Arrays it made or checked, so nothing is
+/// converted and no Ruby runs; anything else is a TypeError rather than
+/// a panic, since `send` reaches a private method too.
+#[monoruby_builtin]
+fn concat_to(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let (dst, src) = (lfp.arg(0), lfp.arg(1));
+    match (dst.try_rvalue(), src.try_rvalue()) {
+        (Some(d), Some(s)) if d.ty() == ObjTy::ARRAY && s.ty() == ObjTy::ARRAY => {
+            if d.is_frozen() {
+                return Err(MonorubyErr::cant_modify_frozen(&globals.store, dst));
+            }
+        }
+        _ => return Err(MonorubyErr::typeerr("__concat_to: Array expected")),
+    }
+    let mut dst = dst.as_array();
+    if dst.id() == src.id() {
+        // The slice would borrow the buffer being grown.
+        let elems = dst.to_vec();
+        dst.extend_from_slice(&elems);
+    } else {
+        dst.extend_from_slice(&src.as_array());
+    }
+    Ok(dst.into())
 }
 
 ///
@@ -3272,53 +3298,6 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     })
 }
 
-///
-/// ### Enumerable#partition
-///
-/// - partition -> Enumerator
-/// - partition {|item| ... } -> [[object], [object]]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/max.html]
-#[monoruby_builtin]
-fn partition(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    self_val.expect_array_ty(globals)?;
-    let Some(bh) = lfp.block() else {
-        return array_enumerator(vm, globals, self_val, IdentId::get_id("partition"), pc);
-    };
-    let p = vm.get_block_data(globals, bh)?;
-    // Every element goes on the temp stack as it is yielded, not into Rust
-    // `Vec`s: one the block removes from the receiver is held by nothing
-    // else, and a collection in a later block call would free it. Which
-    // half it belongs to is kept beside, and the halves are made once the
-    // last block call is over.
-    vm.with_temp_scope(|vm| {
-        let base = vm.temp_len();
-        let mut to_first = vec![];
-        let mut i = 0;
-        while i < self_val.as_array().len() {
-            let elem = self_val.as_array()[i];
-            to_first.push(vm.invoke_block(globals, &p, &[elem])?.as_bool());
-            vm.temp_push(elem);
-            i += 1;
-        }
-        let elems = vm.temp_values_from(base);
-        let mut first = Vec::with_capacity(elems.len());
-        let mut second = Vec::with_capacity(elems.len());
-        for (elem, to_first) in elems.into_iter().zip(to_first) {
-            if to_first {
-                first.push(elem);
-            } else {
-                second.push(elem);
-            }
-        }
-        Ok(Value::array2(
-            Value::array_from_vec(first),
-            Value::array_from_vec(second),
-        ))
-    })
-}
-
 pub(super) fn sort_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut ary: Array) -> Result<Value> {
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
@@ -3522,41 +3501,6 @@ fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     }
 }
 
-///
-/// ### Array#filter
-///
-/// - select -> Enumerator
-/// - filter -> Enumerator
-/// - select {|item| ... } -> [object]
-/// - filter {|item| ... } -> [object]
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/filter.html]
-#[monoruby_builtin]
-fn filter(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        // Collected on the temp stack, not in a Rust `Vec`: an element the
-        // block removes from the receiver is held by nothing else, and a
-        // collection in a later block call would free it. The result is
-        // made from them once the last block call is over.
-        vm.with_temp_scope(|vm| {
-            let base = vm.temp_len();
-            let mut i = 0;
-            while i < self_val.as_array().len() {
-                let elem = self_val.as_array()[i];
-                if vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-                    vm.temp_push(elem);
-                };
-                i += 1;
-            }
-            Ok(Value::array_from_vec(vm.temp_values_from(base)))
-        })
-    } else {
-        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("filter"), pc)
-    }
-}
-
 /// Helper for delete_if, keep_if, filter!, reject! that properly tolerates
 /// array mutation during iteration and handles errors gracefully.
 ///
@@ -3667,36 +3611,6 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         Ok(lfp.self_val())
     } else {
         array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("keep_if"), pc)
-    }
-}
-
-///
-/// ### Array#reject
-///
-/// - reject {|x| ... } -> self | nil
-/// - reject -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Array/i/reject.html]
-#[monoruby_builtin]
-fn reject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    if let Some(bh) = lfp.block() {
-        let data = vm.get_block_data(globals, bh)?;
-        // Collected on the temp stack, as in `filter`.
-        vm.with_temp_scope(|vm| {
-            let base = vm.temp_len();
-            let mut i = 0;
-            while i < self_val.as_array().len() {
-                let elem = self_val.as_array()[i];
-                if !vm.invoke_block(globals, &data, &[elem])?.as_bool() {
-                    vm.temp_push(elem);
-                };
-                i += 1;
-            }
-            Ok(Value::array_from_vec(vm.temp_values_from(base)))
-        })
-    } else {
-        array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("reject"), pc)
     }
 }
 
@@ -3882,58 +3796,6 @@ fn map_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         vm.generate_enumerator(id, lfp.self_val(), vec![])
     }
 }*/
-
-/// ### Enumerable#collect_concat
-///
-/// - flat_map {| obj | block } -> Array
-/// - collect_concat {| obj | block } -> Array
-/// - flat_map -> Enumerator
-/// - collect_concat -> Enumerator
-///
-/// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/collect_concat.html]
-#[monoruby_builtin]
-fn flat_map(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
-    let Some(bh) = lfp.block() else {
-        return array_enumerator(vm, globals, lfp.self_val(), IdentId::get_id("flat_map"), pc);
-    };
-    let self_val = lfp.self_val();
-    let data = vm.get_block_data(globals, bh)?;
-    // The accumulator has to be a *rooted* Ruby Array, not a Rust `Vec`:
-    // every `invoke_block` below is a safepoint, and values held only by
-    // an unrooted Vec would be swept out from under us (the gc-stress
-    // optcarrot abort).
-    vm.temp_array_new(self_val.as_array().len());
-    let res = flat_map_inner(vm, globals, &data, self_val);
-    let v = vm.temp_pop();
-    res?;
-    Ok(v)
-}
-
-fn flat_map_inner(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    data: &ProcData,
-    self_val: Value,
-) -> Result<()> {
-    // The receiver is read by index at every step, as `Array#each` reads
-    // it, and not from a snapshot: an element the block removes would be
-    // held by the snapshot alone, freed by a collection in a later block
-    // call, and then yielded.
-    let mut i = 0;
-    while let Some(&x) = self_val.as_array().get(i) {
-        i += 1;
-        let r = vm.invoke_block(globals, data, &[x])?;
-        if let Some(a) = r.try_array_ty() {
-            vm.temp_array_extend_from_slice(&a);
-        } else if let Some(arr) = r.check_array_type(vm, globals)? {
-            // One level of `#to_ary` flattening (`rb_check_array_type`).
-            vm.temp_array_extend_from_slice(&arr);
-        } else {
-            vm.temp_array_push(r);
-        }
-    }
-    Ok(())
-}
 
 fn all_any_inner(
     vm: &mut Executor,

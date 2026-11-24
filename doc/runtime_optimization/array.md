@@ -388,8 +388,10 @@ rest 引数 `Array` の遅延実体化（D1）は
 ## 4. Ruby で書かれているメソッド
 
 `builtins/array.rb` に `initialize` / `each` / `reverse_each` /
-`each_with_index` / `each_index` / `map` / `map!` / `bsearch` /
-`bsearch_index` / `dig` / `tally` / `filter_map` / `cycle` / `combination` /
+`each_with_index` / `each_index` / `map` / `map!` / `select` (`filter` /
+`find_all`) / `reject` / `partition` / `flat_map` (`collect_concat`) /
+`bsearch` / `bsearch_index` / `dig` / `tally` / `filter_map` / `cycle` /
+`combination` /
 `permutation` / `repeated_*` / `at` / `to_ary` / `deconstruct` / `drop_while` /
 `fetch_values` / `rindex` / `assoc` / `rassoc` / `values_at` / `__zip_pull` が
 ある。
@@ -454,9 +456,14 @@ rest 引数 `Array` の遅延実体化（D1）は
   `try_convert_to_array` は `rb_check_funcall` の 4 段（ユーザーの
   `respond_to?` → `to_ary` → `respond_to_missing?` → `method_missing`）を
   ruby/spec どおりに踏む。
-- **`flat_map`**: 蓄積先は Rust の `Vec` ではなく **rooted な Ruby Array**
-  （`vm.temp_array_*`）。`invoke_block` はすべて safepoint だからで、
-  gc-stress の optcarrot が落ちた事例が [`../gc.md`](../gc.md) にある。
+- **`select` / `reject` / `partition` / `flat_map`**: Ruby 実装（§4）。
+  集めた要素はフレームのローカル（Ruby の Array）にあるので、ブロック呼び出しを
+  またぐ root を手で書く必要がない（Rust 版は temp スタックに積んでいた。
+  `flat_map` が素の `Vec` に貯めて gc-stress の optcarrot を落とした事例が
+  [`../gc.md`](../gc.md) にある）。`flat_map` はブロックの返した Array が
+  1〜2 要素ならその場で `<<` し、3 要素以上は private な
+  `Array#__concat_to(dst, src)` を 1 回呼ぶ（JIT コードからの native 呼び出しは
+  約 200 命令かかり、`Array#concat` は rest 引数と変換でさらに重い）。
 - **`pack`**: `string/pack.rs` の CRuby `pack.c` 忠実移植で、実行時の
   高速経路は特に無い。
 - **`shuffle` / `sample`**: CRuby の `RAND_UPTO`（`rb_random_ulong_limited`）

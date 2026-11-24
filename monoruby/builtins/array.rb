@@ -234,6 +234,90 @@ class Array
     h
   end
 
+  # `select` / `reject` / `partition` / `flat_map` are Ruby so that the
+  # JIT compiles the block into the loop: written in Rust, every element
+  # costs a call out to the block and back, and the collected values
+  # have to be rooted by hand across it. Here they sit in the frame.
+  def select
+    return self.to_enum(__callee__) { self.size } unless block_given?
+    res = []
+    i = 0
+    while i < self.size
+      # The element is read again after the block, as `rb_ary_select`
+      # reads it: what the block stored there (or nil, once the block
+      # shrank the receiver) is what is collected.
+      res << self[i] if yield(self[i])
+      i += 1
+    end
+    res
+  end
+  alias filter select
+  alias find_all select
+
+  def reject
+    return self.to_enum(:reject) { self.size } unless block_given?
+    res = []
+    i = 0
+    while i < self.size
+      x = self[i]
+      res << x unless yield(x)
+      i += 1
+    end
+    res
+  end
+
+  def partition
+    return self.to_enum(:partition) { self.size } unless block_given?
+    first = []
+    second = []
+    i = 0
+    while i < self.size
+      x = self[i]
+      if yield(x)
+        first << x
+      else
+        second << x
+      end
+      i += 1
+    end
+    [first, second]
+  end
+
+  def flat_map
+    return self.to_enum(__callee__) { self.size } unless block_given?
+    res = []
+    i = 0
+    while i < self.size
+      r = yield(self[i])
+      if r.instance_of?(Array)
+        # Up to three elements, what most blocks return, are pushed here:
+        # reading and pushing one is some 40 to 50 instructions, the call
+        # out to `__concat_to` about 200. Only for an Array proper, whose
+        # `size` and `[]` are Array's own.
+        n = r.size
+        if n == 1
+          res << r[0]
+        elsif n == 2
+          res << r[0]
+          res << r[1]
+        elsif n == 3
+          res << r[0]
+          res << r[1]
+          res << r[2]
+        elsif n != 0
+          __concat_to(res, r)
+        end
+      elsif (a = __check_ary(r)).nil?
+        res << r
+      else
+        __concat_to(res, a)
+      end
+      i += 1
+    end
+    res
+  end
+  alias collect_concat flat_map
+
   def filter_map
     return to_enum(:filter_map) { self.size } unless block_given?
     res = []
