@@ -625,11 +625,27 @@ fn try_prism_inner(
     // wrapper does not expose the diagnostic level, so an allowlist
     // (message → verbose-only flag) stands in for it. Everything else
     // is dropped rather than risking warnings CRuby would not print.
+    // The `0.0` / `-0.0` keys prism 2.x calls duplicates of each other,
+    // found only when it warned about a zero key at all.
+    let mut zero_keys: Option<ZeroFloatKeys> = None;
     let warnings: Vec<(String, bool)> = result
         .warnings()
         .filter_map(|w| {
             let msg = String::from_utf8_lossy(w.message()).into_owned();
             let msg = msg.as_str();
+            // prism 2.x compares Float keys by value, so `0.0` and `-0.0`
+            // are one key to it; CRuby 4.0.9's prism 1.x tells them apart
+            // by sign, and so does `Hash` at run time (#2165).
+            if is_zero_float_key_warning(msg) {
+                let keys = zero_keys.get_or_insert_with(|| {
+                    let mut keys = ZeroFloatKeys::default();
+                    keys.visit(&tree.root());
+                    keys
+                });
+                if keys.spurious.contains(&(w.location().start() as usize)) {
+                    return None;
+                }
+            }
             // prism decides where it applies (not at the top level of
             // an eval or of `-e`) and skips `_`-prefixed names, as
             // CRuby's own check does.
@@ -5656,6 +5672,55 @@ impl<'pr> Lowerer<'pr> {
 fn is_frame_local(node: &prism::Node<'_>) -> bool {
     node.as_local_variable_read_node()
         .is_some_and(|r| r.depth() == 0)
+}
+
+/// Whether `msg` is prism's duplicated-key warning for a Float zero key
+/// (`key 0.0 is duplicated and overwritten on line N`, or `-0.0`).
+fn is_zero_float_key_warning(msg: &str) -> bool {
+    msg.strip_prefix("key ")
+        .and_then(|rest| rest.split_once(" is duplicated and overwritten on line "))
+        .and_then(|(key, _)| key.parse::<f64>().ok())
+        .is_some_and(|f| f == 0.0)
+}
+
+/// The start offsets of the Float zero keys of Hash literals and keyword
+/// arguments that prism 2.x warns about although no later key of the
+/// same literal has their sign (#2165): CRuby's prism keeps `0.0` and
+/// `-0.0` apart.
+#[derive(Default)]
+struct ZeroFloatKeys {
+    spurious: std::collections::HashSet<usize>,
+}
+
+impl ZeroFloatKeys {
+    fn elements(&mut self, elements: prism::NodeList<'_>) {
+        // (offset, negative) of each zero key, in order.
+        let zeros: Vec<(usize, bool)> = elements
+            .iter()
+            .filter_map(|e| e.as_assoc_node())
+            .filter_map(|a| a.key().as_float_node())
+            .filter(|f| f.value() == 0.0)
+            .map(|f| (f.location().start() as usize, f.value().is_sign_negative()))
+            .collect();
+        for (i, &(offset, negative)) in zeros.iter().enumerate() {
+            let rest = &zeros[i + 1..];
+            if rest.iter().any(|&(_, n)| n != negative) && !rest.iter().any(|&(_, n)| n == negative)
+            {
+                self.spurious.insert(offset);
+            }
+        }
+    }
+}
+
+impl<'pr> prism::Visit<'pr> for ZeroFloatKeys {
+    fn visit_hash_node(&mut self, node: &prism::HashNode<'pr>) {
+        self.elements(node.elements());
+        prism::visit_hash_node(self, node);
+    }
+    fn visit_keyword_hash_node(&mut self, node: &prism::KeywordHashNode<'pr>) {
+        self.elements(node.elements());
+        prism::visit_keyword_hash_node(self, node);
+    }
 }
 
 /// Can evaluating `node` assign a local, or run code that might?

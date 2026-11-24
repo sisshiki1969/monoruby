@@ -1595,6 +1595,7 @@ impl Globals {
         };
         crate::scheduler::terminate_all(executor, self);
         executor.run_finalizers(self);
+        crate::rvalue::io::flush_open_files();
         executor.temp_clear(root_len);
         crate::rvalue::io::flush_std_streams();
         std::process::exit(handler_status.unwrap_or(status))
@@ -1703,6 +1704,7 @@ impl Globals {
         // And the `ObjectSpace` finalizers run last, once no other
         // thread can still be using the objects.
         executor.run_finalizers(self);
+        crate::rvalue::io::flush_open_files();
         crate::rvalue::io::flush_std_streams();
         #[cfg(any(feature = "profile", feature = "jit-log"))]
         self.show_stats();

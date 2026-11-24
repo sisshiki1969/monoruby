@@ -727,51 +727,10 @@ fn file_basename(
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/directory=3f.html]
 #[monoruby_builtin]
 fn directory_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // CRuby's `rb_stat` accepts either a path (coerced via `#to_path`/`#to_str`)
-    // or an IO/fd (converted via `#to_io` and `fstat`'d). Try the path form
-    // first — this covers String and IO objects that expose `#to_path` — and
-    // fall back to `#to_io` on a coercion failure before surfacing the
-    // TypeError. `Path::is_dir` stats the path and returns false for a
-    // non-existent entry, so no canonicalization (which would swallow the
-    // TypeError for a non-path type such as Integer/nil) is needed.
-    let arg = lfp.arg(0);
-    match to_path(vm, globals, arg) {
-        Ok(path) => Ok(Value::bool(path.is_dir())),
-        Err(e) => {
-            let to_io = IdentId::get_id("to_io");
-            if globals.check_method(arg, to_io).is_some() {
-                // `e` is what is raised when `to_io` gives no IO, and the
-                // Values it carries (the exception object a Ruby `to_path`
-                // raised) live only in it while `to_io` runs: root them.
-                let io = vm.with_temp_scope(|vm| {
-                    e.for_each_value(|v| vm.temp_push(v));
-                    vm.invoke_method_inner(globals, to_io, arg, &[], None, None)
-                })?;
-                if let Some(rv) = io.try_rvalue()
-                    && rv.ty() == ObjTy::IO
-                {
-                    let fd = io.as_io_inner().fileno()?;
-                    return Ok(Value::bool(fd_is_dir(fd)));
-                }
-            }
-            Err(e)
-        }
-    }
-}
-
-/// `fstat(2)` an open file descriptor and report whether it refers to a
-/// directory. A failed `fstat` (bad fd, etc.) reports `false`.
-fn fd_is_dir(fd: i32) -> bool {
-    // SAFETY: `fstat` fills a zeroed `stat` buffer for an open fd; we only
-    // read `st_mode`. On failure the buffer is unused and we return false.
-    unsafe {
-        let mut st: libc::stat = std::mem::zeroed();
-        if libc::fstat(fd, &mut st) == 0 {
-            (st.st_mode & libc::S_IFMT) == libc::S_IFDIR
-        } else {
-            false
-        }
-    }
+    // `rb_stat`: an IO's descriptor, else the path (#2129). A missing
+    // entry is not a directory.
+    let src = size_source(vm, globals, lfp.arg(0))?;
+    Ok(Value::bool(source_metadata(&src).is_ok_and(|m| m.is_dir())))
 }
 
 ///
@@ -831,13 +790,13 @@ fn file_extname(
 #[monoruby_builtin]
 fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Validate the argument type first (raises TypeError for non-string)
-    let path = to_stat_path(vm, globals, lfp.arg(0))?;
+    let src = size_source(vm, globals, lfp.arg(0))?;
     // One `stat` (following symlinks), as CRuby's `rb_stat`. This used to
     // be `canonicalize`, a `realpath` — a `readlink` per path component on
     // top of the `stat` — for an answer that never needed the resolved
     // path; on railsbench, Sprockets and Zeitwerk ask this a few hundred
     // times a request.
-    let b = std::fs::metadata(&path).is_ok();
+    let b = source_metadata(&src).is_ok();
     Ok(Value::bool(b))
 }
 
@@ -858,9 +817,9 @@ fn to_stat_path(vm: &mut Executor, globals: &mut Globals, file: Value) -> Result
 #[monoruby_builtin]
 fn file_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Validate the argument type first (raises TypeError for non-string)
-    let path = to_stat_path(vm, globals, lfp.arg(0))?;
+    let src = size_source(vm, globals, lfp.arg(0))?;
     // One `stat`, as `File.exist?` above; a symlink answers for its target.
-    let b = match std::fs::metadata(&path) {
+    let b = match source_metadata(&src) {
         Ok(meta) => meta.is_file(),
         Err(_) => false,
     };
@@ -1578,13 +1537,17 @@ fn open_impl_body(
         // transfers to the File here.
         unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(fd) }
     };
-    let res = Value::new_file(
+    let mut res = Value::new_file(
         file,
         path,
         Some((path_bytes.clone(), path_enc)),
         readable,
         writable,
     );
+    // `rb_io_oflags_fmode`: the open flags a C extension reads back from
+    // `fptr->mode` (#2132).
+    res.as_io_inner_mut()
+        .set_capi_fmode(fmode_of_oflags(open_flags));
     // The fresh File is referenced only by this Rust local while
     // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
     vm.with_temp_scope(|vm| {
@@ -1604,6 +1567,27 @@ fn open_impl_body(
         }
         Ok(res)
     })
+}
+
+/// The `FMODE_*` bits `rb_io_oflags_fmode` derives from open(2) flags
+/// beyond the access mode, which the IO keeps for the C API.
+fn fmode_of_oflags(oflags: i32) -> i32 {
+    const FMODE_APPEND: i32 = 0x40;
+    const FMODE_CREATE: i32 = 0x80;
+    const FMODE_EXCL: i32 = 0x400;
+    const FMODE_TRUNC: i32 = 0x800;
+    let mut fmode = 0;
+    for (flag, bit) in [
+        (libc::O_APPEND, FMODE_APPEND),
+        (libc::O_TRUNC, FMODE_TRUNC),
+        (libc::O_CREAT, FMODE_CREATE),
+        (libc::O_EXCL, FMODE_EXCL),
+    ] {
+        if oflags & flag != 0 {
+            fmode |= bit;
+        }
+    }
+    fmode
 }
 
 ///
@@ -2057,28 +2041,54 @@ enum SizeSource {
     Fd(i32),
 }
 
-/// `File.size` / `File.size?` accept a path (via `#to_path` / `#to_str`)
-/// or an IO-convertible object (via `#to_io`, fstat(2) on its fd) —
-/// CRuby's `rb_stat` order: path coercion first, then `#to_io`.
+/// What a `stat`-answered predicate asks about: CRuby's `rb_stat`
+/// converts the argument with `#to_io` first and `fstat`s the IO's
+/// descriptor (`GetOpenFile`, so a closed or uninitialized stream raises
+/// IOError, #2129), and only otherwise takes it as a path (`#to_path` /
+/// `#to_str`). A String goes straight to the path.
 fn size_source(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<SizeSource> {
-    match to_path(vm, globals, arg) {
-        Ok(path) => Ok(SizeSource::Path(path)),
-        Err(path_err) => {
+    if arg.is_rstring().is_none() {
+        let io = if arg.try_rvalue().map(|rv| rv.ty()) == Some(ObjTy::IO) {
+            Some(arg)
+        } else {
             let to_io = IdentId::get_id("to_io");
-            if globals.check_method(arg, to_io).is_none() {
-                return Err(path_err);
+            if globals.check_method(arg, to_io).is_some() {
+                let io = vm.invoke_method_inner(globals, to_io, arg, &[], None, None)?;
+                if io.is_nil() {
+                    // `rb_check_convert_type`: nil means "not an IO".
+                    None
+                } else if io.try_rvalue().map(|rv| rv.ty()) != Some(ObjTy::IO) {
+                    return Err(MonorubyErr::typeerr(format!(
+                        "can't convert {} to IO ({}#to_io gives {})",
+                        arg.get_real_class_name(&globals.store),
+                        arg.get_real_class_name(&globals.store),
+                        io.get_real_class_name(&globals.store),
+                    )));
+                } else {
+                    Some(io)
+                }
+            } else {
+                None
             }
-            // `path_err` is what is raised when `to_io` gives no IO, and the
-            // Values it carries (the exception object a Ruby `to_path`
-            // raised) live only in it while `to_io` runs: root them.
-            let io = vm.with_temp_scope(|vm| {
-                path_err.for_each_value(|v| vm.temp_push(v));
-                vm.invoke_method_inner(globals, to_io, arg, &[], None, None)
-            })?;
-            if io.try_rvalue().map(|rv| rv.ty()) != Some(ObjTy::IO) {
-                return Err(path_err);
-            }
-            Ok(SizeSource::Fd(io.as_io_inner().fileno()?))
+        };
+        if let Some(io) = io {
+            return Ok(SizeSource::Fd(io.as_io_inner().fileno()?));
+        }
+    }
+    Ok(SizeSource::Path(to_stat_path(vm, globals, arg)?))
+}
+
+/// `fstat(2)` of `fd`, or `stat(2)` of the path: [`size_source`]'s
+/// answer as `std::fs::metadata` would give it.
+fn source_metadata(src: &SizeSource) -> std::io::Result<std::fs::Metadata> {
+    match src {
+        SizeSource::Path(path) => std::fs::metadata(path),
+        SizeSource::Fd(fd) => {
+            use std::os::fd::FromRawFd;
+            // SAFETY: the descriptor belongs to a live IO; the `File` is
+            // never dropped, so it is not closed here.
+            let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(*fd) });
+            file.metadata()
         }
     }
 }
@@ -3104,13 +3114,14 @@ fn stat_initialize(
 #[monoruby_builtin]
 fn identical_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     use std::os::unix::fs::MetadataExt;
-    let path1 = to_path(vm, globals, lfp.arg(0))?;
-    let path2 = to_path(vm, globals, lfp.arg(1))?;
-    let m1 = match std::fs::metadata(&path1) {
+    // `rb_stat` of each, in turn (#2129).
+    let src1 = size_source(vm, globals, lfp.arg(0))?;
+    let m1 = match source_metadata(&src1) {
         Ok(m) => m,
         Err(_) => return Ok(Value::bool(false)),
     };
-    let m2 = match std::fs::metadata(&path2) {
+    let src2 = size_source(vm, globals, lfp.arg(1))?;
+    let m2 = match source_metadata(&src2) {
         Ok(m) => m,
         Err(_) => return Ok(Value::bool(false)),
     };

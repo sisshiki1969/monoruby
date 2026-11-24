@@ -200,7 +200,10 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
     if let Some(cur) = inner.current {
         return Ok(Some(cur));
     }
-    if inner.state == ArgfState::Done {
+    // A finished walk goes on once the queue is refilled (`ARGV.replace`
+    // after the last file), as `argf_next_argv` does with `next_p == 1`.
+    if inner.state == ArgfState::Done && inner.argv.try_array_ty().is_none_or(|ary| ary.is_empty())
+    {
         return Ok(None);
     }
     loop {
@@ -217,8 +220,9 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                     return Ok(Some(stdin));
                 }
                 // Named files were consumed earlier; no more input.
+                // An in-place walk leaves its last output as `$stdout`,
+                // open (#2174): `argf_next_argv` puts nothing back.
                 inner.state = ArgfState::Done;
-                inplace_finish(vm, globals, argf)?;
                 return Ok(None);
             }
             Some(name) => {
@@ -288,6 +292,17 @@ fn finish_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Resul
         // A double close is harmless; other errors propagate.
         let _ = invoke0(vm, globals, cur, "close");
     }
+    // CRuby flushes a read stream's tied writer before each read, so the
+    // in-place output is on disk once its input is drained, although it
+    // stays open as `$stdout` after the last file (#2174).
+    if inner.inplace.is_some() {
+        let out = globals
+            .get_gvar(IdentId::get_id("$stdout"))
+            .unwrap_or_default();
+        if out.ty() == Some(ObjTy::IO) && !matches!(out.as_io_inner().kind(), IoKind::Stdout) {
+            let _ = invoke0(vm, globals, out, "flush");
+        }
+    }
     Ok(())
 }
 
@@ -312,13 +327,13 @@ fn inplace_redirect(
     };
     let stdout_id = IdentId::get_id("$stdout");
     let cur_stdout = globals.get_gvar(stdout_id).unwrap_or_default();
-    match inner.inplace_saved_stdout {
-        None => inner.inplace_saved_stdout = Some(cur_stdout),
-        // Moving on from a previous in-place file: close its output.
-        Some(saved) if saved != cur_stdout => {
-            let _ = invoke0(vm, globals, cur_stdout, "close");
-        }
-        Some(_) => {}
+    // `argf_next_argv`: a `$stdout` that is an IO other than the
+    // process's own standard output (the previous file's output, or one
+    // the program opened) is closed before the next output replaces it.
+    if cur_stdout.ty() == Some(ObjTy::IO)
+        && !matches!(cur_stdout.as_io_inner().kind(), IoKind::Stdout)
+    {
+        let _ = invoke0(vm, globals, cur_stdout, "close");
     }
     let path = name.is_str().unwrap_or_default().to_string();
     if ext.is_empty() {
@@ -338,29 +353,6 @@ fn inplace_redirect(
         None,
     )?;
     globals.set_gvar(stdout_id, out);
-    Ok(())
-}
-
-/// The walk finished: close the last in-place output and put the real
-/// `$stdout` back.
-fn inplace_finish(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result<()> {
-    let inner = expect_inner(argf)?;
-    let Some(saved) = inner.inplace_saved_stdout.take() else {
-        return Ok(());
-    };
-    let stdout_id = IdentId::get_id("$stdout");
-    let cur_stdout = globals.get_gvar(stdout_id).unwrap_or_default();
-    if cur_stdout != saved {
-        // Out of `inner` now, `saved` lives only in this local while the
-        // output's `close` runs, which can be Ruby (an override, a
-        // prepended module) that collects: root it until it is `$stdout`
-        // again.
-        vm.with_temp_scope(|vm| {
-            vm.temp_push(saved);
-            let _ = invoke0(vm, globals, cur_stdout, "close");
-            globals.set_gvar(stdout_id, saved);
-        });
-    }
     Ok(())
 }
 
@@ -1729,14 +1721,13 @@ mod tests {
         );
     }
 
-    /// At the end of an in-place walk ARGF closes the last output and puts
-    /// back the `$stdout` it saved when the walk began, which it has taken
-    /// out of its own state by then; that object must survive a collection
-    /// in a Ruby `close`. Not compared with CRuby, which leaves the last
-    /// in-place output as `$stdout` rather than restoring the saved one.
+    /// Moving to the next file of an in-place walk closes the previous
+    /// file's output, which is then referenced only by the walk; a
+    /// collection in a Ruby `close` must not free what the walk still
+    /// reads. At the end the last output stays `$stdout`, open (#2174).
     #[test]
-    fn argf_inplace_saved_stdout_survives_gc_in_close() {
-        let ok = run_test_no_result_check(
+    fn argf_inplace_output_close_survives_gc() {
+        run_test_once(
             r##"
             module CloseGC
               def close
@@ -1755,33 +1746,30 @@ mod tests {
             dir = "/tmp/monoruby_test_argf_inplace_stdout_gc_#{Process.pid}_#{rand(100000)}"
             Dir.mkdir(dir)
             begin
-              res = 3.times.map do |k|
+              paths = 3.times.map do |k|
                 path = "#{dir}/file_with_a_long_enough_name_#{k}.txt"
                 File.write(path, "line #{k}\n")
-                $stdout = Sink.new
-                a = ARGF.class.new(path)
-                a.inplace_mode = ".bak"
-                while (line = a.gets)
-                  print line.upcase
-                end
-                restored = $stdout
-                $stdout = STDOUT
-                restored.write("after")
-                [restored.class, restored.buf, File.read(path), File.read(path + ".bak")]
+                path
               end
-              res == 3.times.map { |k| [Sink, "after", "LINE #{k}\n", "line #{k}\n"] }
+              sink = Sink.new
+              $stdout = sink
+              a = ARGF.class.new(*paths)
+              a.inplace_mode = ".bak"
+              while (line = a.gets)
+                print line.upcase
+              end
+              last = $stdout
+              print "after\n"
+              $stdout = STDOUT
+              r = [last.class, last.closed?, sink.buf]
+              last.close
+              r + paths.map { [File.read(_1), File.read(_1 + ".bak")] }
             ensure
               $stdout = STDOUT
               Dir.children(dir).each { File.unlink(File.join(dir, _1)) }
               Dir.rmdir(dir)
             end
             "##,
-        );
-        assert_eq!(
-            ok,
-            crate::Value::bool(true),
-            "the `$stdout` saved when the in-place walk began was not restored \
-             intact after the collection in the last output's `close`"
         );
     }
 

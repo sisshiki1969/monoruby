@@ -51,9 +51,6 @@ pub struct ArgfInner {
     /// In-place-edit extension (`-i` / `ARGF.inplace_mode=`):
     /// `Some("")` = no backup, `Some(".bak")` = keep backups.
     pub inplace: Option<String>,
-    /// The `$stdout` to restore when in-place editing moves past the
-    /// current file (the original stdout the redirect replaced).
-    pub inplace_saved_stdout: Option<Value>,
 }
 
 impl ArgfInner {
@@ -71,7 +68,6 @@ impl ArgfInner {
             cur_encs: None,
             binmode: false,
             inplace: None,
-            inplace_saved_stdout: None,
         }
     }
 
@@ -87,9 +83,6 @@ impl ArgfInner {
             v.mark(alloc);
         }
         for v in &self.enc_args {
-            v.mark(alloc);
-        }
-        if let Some(v) = self.inplace_saved_stdout {
             v.mark(alloc);
         }
     }

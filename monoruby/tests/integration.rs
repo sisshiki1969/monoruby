@@ -84,6 +84,7 @@ mod encode_xml_invalid;
 mod encoding_locale;
 mod ensure_end_deferral_gate;
 mod enumerable;
+mod env_grep_gvar_format_file_stat;
 mod eq_funcall;
 mod eq_search;
 mod equal_identity;

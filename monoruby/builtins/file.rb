@@ -33,7 +33,8 @@ module File::Constants
   LOCK_EX  = 2
   LOCK_UN  = 8
   LOCK_NB  = 4
-  NULL = "/dev/null"
+  # Frozen, as `Init_File`'s strings are (#2162).
+  NULL = "/dev/null".freeze
 end
 
 class File
@@ -44,7 +45,7 @@ class File
   FNM_DOTMATCH = 4
   FNM_CASEFOLD = 8
   FNM_EXTGLOB = 16
-  NULL = "/dev/null"
+  NULL = File::Constants::NULL
   BINARY = 0
 
   RDONLY   = IO::RDONLY
@@ -67,10 +68,11 @@ class File
   LOCK_UN  = 8
   LOCK_NB  = 4
 
-  Separator = "/"
-  SEPARATOR = "/"
+  # One frozen String under both names, as in `Init_File` (#2162).
+  SEPARATOR = "/".freeze
+  Separator = SEPARATOR
   ALT_SEPARATOR = nil
-  PATH_SEPARATOR = ":"
+  PATH_SEPARATOR = ":".freeze
 end
 
 class File

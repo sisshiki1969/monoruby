@@ -1567,14 +1567,32 @@ fn options(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Resul
 /// [https://docs.ruby-lang.org/ja/latest/method/Regexp/i/match=3f.html]
 #[monoruby_builtin]
 fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_ = lfp.self_val();
+    let pos = lfp.try_arg(1);
+    Ok(Value::bool(reg_match_p(
+        vm,
+        globals,
+        lfp.self_val(),
+        lfp.arg(0),
+        pos,
+    )?))
+}
+
+/// `rb_reg_match_p`: [`match_`]'s work, also `Array#grep`'s with a Regexp
+/// pattern (#2142), so the two agree on a String in any encoding.
+pub(crate) fn reg_match_p(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_: Value,
+    subject: Value,
+    pos: Option<Value>,
+) -> Result<bool> {
     let regex = self_.is_regex().unwrap();
     if !regex.initialized() {
         return Err(MonorubyErr::typeerr("uninitialized Regexp"));
     }
-    let arg0 = reg_operand(vm, globals, lfp.arg(0))?;
+    let arg0 = reg_operand(vm, globals, subject)?;
     if arg0.is_nil() {
-        return Ok(Value::bool(false));
+        return Ok(false);
     }
     // A subject String that is invalid in its own encoding can't be
     // matched — CRuby raises ArgumentError before scanning (as `match`
@@ -1596,16 +1614,16 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         && rs.code_range() != CodeRange::SevenBit
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
     {
-        let byte_pos = if let Some(pos) = lfp.try_arg(1) {
+        let byte_pos = if let Some(pos) = pos {
             match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
                 Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
-                None => return Ok(Value::bool(false)),
+                None => return Ok(false),
             }
         } else {
             0
         };
         let bytes = arg0.as_rstring_inner().as_bytes();
-        return Ok(Value::bool(regex.match_pred_bytes(bytes, native_enc, byte_pos)?));
+        return regex.match_pred_bytes(bytes, native_enc, byte_pos);
     }
     // Borrow a valid-UTF-8 String subject in place, as `match` / `=~` do;
     // anything else goes through `subject_to_string`. This used to read the
@@ -1613,8 +1631,16 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // on railsbench the request id and the session cookie, forever.
     let given_owned: String;
     let given: &str = match arg0.is_rstring() {
-        Some(rs) if std::str::from_utf8(rs.as_bytes()).is_ok() => {
-            // SAFETY: just validated as UTF-8.
+        // Every non-7-bit String in a native encoding left above, so the
+        // cached code range already says "UTF-8" for most subjects: a 7-bit
+        // one, or a valid one tagged UTF-8. Scan only the rest.
+        Some(rs)
+            if rs.code_range() == CodeRange::SevenBit
+                || (rs.code_range() == CodeRange::Valid
+                    && rs.encoding() == crate::value::Encoding::UTF8)
+                || std::str::from_utf8(rs.as_bytes()).is_ok() =>
+        {
+            // SAFETY: valid UTF-8, by the code range or the scan above.
             unsafe { std::str::from_utf8_unchecked(arg0.as_rstring_inner().as_bytes()) }
         }
         _ => {
@@ -1622,10 +1648,10 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             &given_owned
         }
     };
-    let char_pos = if let Some(pos) = lfp.try_arg(1) {
+    let char_pos = if let Some(pos) = pos {
         match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
-            None => return Ok(Value::bool(false)),
+            None => return Ok(false),
         }
     } else {
         0
@@ -1634,9 +1660,7 @@ fn match_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // `$~` and friends". Route through the predicate helper so we
     // skip the special-var save (`save_capture_special_variables`).
     let _ = vm;
-    Ok(Value::bool(RegexpInner::match_pred(
-        &regex, given, char_pos,
-    )?))
+    RegexpInner::match_pred(&regex, given, char_pos)
 }
 
 /// The subject of a match as an owned UTF-8 String, for the operands the

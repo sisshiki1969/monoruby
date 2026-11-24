@@ -1979,6 +1979,9 @@ fn trace_var(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
             }
         }
     };
+    // `rb_global_entry`: the variable exists from now on, whatever its
+    // name (#2159).
+    globals.gvars.declare(name);
     globals.gvar_traces.entry(name).or_default().push(cmd);
     Ok(Value::nil())
 }
@@ -2001,6 +2004,15 @@ fn untrace_var(
     _: BytecodePtr,
 ) -> Result<Value> {
     let name = gvar_trace_name(globals, lfp.arg(0))?;
+    if !globals.gvars.is_declared(name) {
+        let shown = name.get_name();
+        let shown = shown
+            .strip_prefix(USER_INTERNAL_GVAR_PREFIX)
+            .unwrap_or(&shown);
+        return Err(MonorubyErr::nameerr(format!(
+            "undefined global variable {shown}"
+        )));
+    }
     match lfp.try_arg(1).filter(|v| !v.is_nil()) {
         None => {
             let removed = globals.gvar_traces.remove(&name).unwrap_or_default();
@@ -2018,23 +2030,30 @@ fn untrace_var(
     }
 }
 
-/// Coerce a `trace_var`/`untrace_var` variable name (Symbol or String)
-/// and require the `$` prefix.
+/// Coerce a `trace_var`/`untrace_var` variable name (Symbol or String).
 ///
-/// The prefix is also what keeps a hook off the interpreter's own
-/// entries of the global variable table, which are named without it
-/// (`globals::ERRINFO_INTERNAL_GVAR`): the JIT stores `$!`'s save without
-/// asking for hooks, so one there would fire in the interpreter only.
+/// As `rb_to_id` takes it, any name is a global variable's (#2159), but
+/// the interpreter's own entries of the table are named without a `$`
+/// and with a leading `/` (`globals::ERRINFO_INTERNAL_GVAR`, the
+/// flip-flop state, ...): a program's name of that shape is moved out of
+/// their way under [`USER_INTERNAL_GVAR_PREFIX`], so its hook is on a
+/// variable nobody assigns, as it is in CRuby. (The JIT stores `$!`'s
+/// save without asking for hooks, so a hook there would fire in the
+/// interpreter only.)
 fn gvar_trace_name(globals: &mut Globals, v: Value) -> Result<IdentId> {
     let name = v.expect_symbol_or_string(globals)?;
     let s = name.get_name();
-    if !s.starts_with('$') {
-        return Err(MonorubyErr::nameerr(format!(
-            "'{s}' is not allowed as a global variable name"
+    if s.starts_with('/') {
+        return Ok(IdentId::get_id_from_string(format!(
+            "{USER_INTERNAL_GVAR_PREFIX}{s}"
         )));
     }
     Ok(name)
 }
+
+/// See [`gvar_trace_name`]. A name of this shape is listed by no
+/// `global_variables`.
+const USER_INTERNAL_GVAR_PREFIX: &str = "/user";
 
 ///
 /// ### Kernel.#Integer

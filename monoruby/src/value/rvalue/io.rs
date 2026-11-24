@@ -89,6 +89,27 @@ pub fn flush_std_streams() {
     let _ = stderr_buf().drain(&signal_pending);
 }
 
+/// At process exit, after the finalizers: push every open `File`'s
+/// buffered writes to the kernel, as CRuby's finalization of the IO
+/// objects still alive does (`rb_io_fptr_finalize`). A File nobody closed
+/// (the last output of an in-place walk, which stays `$stdout`, #2174)
+/// would otherwise lose them.
+pub(crate) fn flush_open_files() {
+    let mut files = vec![];
+    crate::alloc::ALLOC.with(|alloc| {
+        alloc.borrow().for_each_live(|rv| {
+            if rv.ty() == ObjTy::IO {
+                files.push(Value::from_rvalue_ref(rv));
+            }
+        })
+    });
+    for mut v in files {
+        if let IoKind::File(file) = &mut v.as_io_inner_mut().kind {
+            let _ = file.drain_wbuf();
+        }
+    }
+}
+
 /// Append to monoruby's stdout buffer, flushing per the stream's policy.
 /// Used by `Kernel#puts` / `#print`, which write to the process's stdout
 /// without going through a Ruby `IO` object — sharing the one buffer

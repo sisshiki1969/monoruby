@@ -277,6 +277,13 @@ io_mode_append(VALUE self, VALUE io)
     return (rb_io_mode(io) & FMODE_APPEND) ? Qtrue : Qfalse;
 }
 
+/* The open flags `rb_io_oflags_fmode` keeps in the mode (#2132). */
+static VALUE
+io_mode_open_flags(VALUE self, VALUE io)
+{
+    return INT2FIX(rb_io_mode(io) & (FMODE_APPEND | FMODE_CREATE | FMODE_EXCL | FMODE_TRUNC));
+}
+
 static VALUE
 io_maybe_wait_closed(VALUE self, VALUE io)
 {
@@ -521,6 +528,7 @@ Init_capi_procio(void)
     rb_define_module_function(m, "io_misc", io_misc, 2);
     rb_define_module_function(m, "io_path", io_path, 1);
     rb_define_module_function(m, "io_mode_append", io_mode_append, 1);
+    rb_define_module_function(m, "io_mode_open_flags", io_mode_open_flags, 1);
     rb_define_module_function(m, "io_maybe_wait_closed", io_maybe_wait_closed, 1);
     rb_define_module_function(m, "io_get_open_file", io_get_open_file, 1);
     rb_define_module_function(m, "io_open_descriptor", io_open_descriptor, 1);
