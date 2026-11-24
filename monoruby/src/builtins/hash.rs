@@ -2855,24 +2855,33 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 /// rb_hash_invert_i)` walks it (`Hashmap::walk`, which also keeps the
 /// pair being stored rooted): the new key's `hash` / `eql?` may take
 /// pairs out of the receiver (#2155). Nothing has run since the native
-/// part read the first `stored` pairs, so the walk passes over those.
+/// part read the first `stored` pairs, so the walk starts behind them.
 #[inline(never)]
 fn invert_rooted(
     vm: &mut Executor,
     globals: &mut Globals,
     hash: Hashmap,
     map: HashmapInner,
-    mut stored: usize,
+    stored: usize,
 ) -> Result<Value> {
+    // Where the pair after the `stored` live ones stands: a position
+    // counts the tombstones before it too.
+    let start = if hash.entry_count() == hash.len() {
+        stored
+    } else {
+        let mut live = 0;
+        let mut pos = 0;
+        while live < stored {
+            live += hash.live_at(pos) as usize;
+            pos += 1;
+        }
+        pos
+    };
     vm.with_temp_scope(|vm| {
         let res = Value::hash_from_inner(map);
         vm.temp_push(res);
         let mut map = res.as_hash();
-        hash.walk(vm, globals, |vm, globals, _, k, v| {
-            if stored > 0 {
-                stored -= 1;
-                return Ok(false);
-            }
+        hash.walk_from(start, vm, globals, |vm, globals, _, k, v| {
             map.aset(v, k, vm, globals)?;
             Ok(false)
         })?;

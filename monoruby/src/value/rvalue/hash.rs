@@ -1173,6 +1173,19 @@ impl<'a> HashRef<'a> {
         &self,
         vm: &mut Executor,
         globals: &mut Globals,
+        f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
+    ) -> Result<bool> {
+        self.walk_from(0, vm, globals, f)
+    }
+
+    /// [`Self::walk`] from the position `start` on, for a caller that has
+    /// already been over the pairs before it without running Ruby.
+    #[inline]
+    pub(crate) fn walk_from(
+        &self,
+        start: usize,
+        vm: &mut Executor,
+        globals: &mut Globals,
         mut f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
     ) -> Result<bool> {
         let _iter_guard = self.iter_guard();
@@ -1183,7 +1196,7 @@ impl<'a> HashRef<'a> {
             let slot = vm.temp_len();
             vm.temp_push(Value::nil());
             vm.temp_push(Value::nil());
-            let mut i = 0;
+            let mut i = start;
             loop {
                 // One look at the storage per step — which `f` may have
                 // promoted, tombstoned or emptied since the last one.
@@ -2408,6 +2421,18 @@ impl Hashmap {
         f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
     ) -> Result<bool> {
         self.inner().walk(vm, globals, f)
+    }
+
+    /// See [`HashRef::walk_from`].
+    #[inline]
+    pub(crate) fn walk_from(
+        &self,
+        start: usize,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
+    ) -> Result<bool> {
+        self.inner().walk_from(start, vm, globals, f)
     }
 
     pub fn keys(&self) -> Vec<Value> {

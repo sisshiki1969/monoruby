@@ -186,6 +186,32 @@ fn hash_walk_search() {
     );
 }
 
+// `invert` stores the leading pairs whose new key cannot run Ruby without
+// a walk, and walks from the first one that can: from its position, which
+// counts the pairs deleted before it during an enclosing walk.
+#[test]
+fn hash_walk_invert_resume() {
+    check(
+        r##"
+        ["small", t { {a: 1, b: V.new(101), c: 2, d: V.new(102)}.invert }],
+        ["first", t { {a: V.new(101), b: 2}.invert }],
+        ["last", t { {a: 1, b: 2, c: V.new(101)}.invert }],
+        ["big", t { h = big(12); h[:x] = V.new(101); h[:y] = 5; h[:z] = V.new(102); h.invert }],
+        ["collide", t { {a: 1, b: V.new(101), c: V.new(101), d: 1}.invert }],
+        ["del", t { v = D.new(50); h = {a: 1, b: 2, c: v, d: 4}; v.h = h; [h.invert, h] }],
+        ["holes", t { h = big(12); h[:o] = V.new(103); h[:p] = 99; r = nil
+                      h.each { |k, _| if k == 1 then h.delete(2); h.delete(5); r = h.invert end }
+                      [r, h.invert] }],
+        ["holes small", t { h = {a: 1, b: 2, c: V.new(101), d: 3}; r = nil
+                            h.each { |k, _| if k == :a then h.delete(:a); r = h.invert end }
+                            [r, h] }],
+        ["hole at the stop", t { h = big(10); h[:o] = V.new(103); h[:p] = V.new(104); r = nil
+                                 h.each { |k, _| if k == 1 then h.delete(:o); r = h.invert end }
+                                 r }],
+        "##,
+    );
+}
+
 // `==`, `eql?`, `hash` and the subset operators run `#==` / `#hash` on
 // the values per pair.
 #[test]
