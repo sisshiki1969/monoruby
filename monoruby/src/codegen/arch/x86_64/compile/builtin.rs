@@ -1257,8 +1257,8 @@ impl Codegen {
     ///
     /// See `array_slice_assign` for why that shape is worth singling out: it
     /// neither grows nor shrinks the receiver, so it is a straight copy of
-    /// `len` values. Everything else calls `f` (`set_array_slice`), which
-    /// reproduces the builtin.
+    /// `len` values. Everything else calls `f` (`set_array_slice_pure`),
+    /// which answers 0 where the builtin would run Ruby or raise.
     ///
     /// ### in
     /// - rdi: receiver: Array (class- and frozen-guarded)
@@ -1338,7 +1338,7 @@ impl Codegen {
             movq r9, [rdi + (RVALUE_OFFSET_HEAP_PTR)];
             jmp  dst_ready;
         slow:
-            // set_array_slice(base, start, len, val, vm, globals).
+            // set_array_slice_pure(base, start, len, val, vm, globals).
             // rdi = base and rsi = start are already in place.
             movq rcx, rdx;               // val  -> arg3
             movq rdx, (len);             // len  -> arg2

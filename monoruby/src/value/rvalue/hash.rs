@@ -1146,6 +1146,82 @@ impl<'a> HashRef<'a> {
         }
     }
 
+    ///
+    /// Hand the pairs to `f` in order, the way CRuby's `rb_hash_foreach`
+    /// walks a table: by position, under the iteration guard, each pair
+    /// read from the live table as it is reached. `f` gets the position
+    /// with the pair and answers whether to stop; the walk answers whether
+    /// it did.
+    ///
+    /// For every walk that runs Ruby between one pair and the next — a
+    /// block, a key's `#hash` / `#eql?`, a value's `#==`. That code may
+    /// change the Hash under the walk: a pair it deletes is tombstoned in
+    /// place and never reached, a new key raises, and `clear` deletes the
+    /// pairs where they stand (`HashRefMut::clear_during_iteration`). A
+    /// live iterator ([`Self::iter`]) held over such code instead kept
+    /// reading the storage the Hash had when the walk began, after a
+    /// delete had closed the gap in it or promoted it to the boxed form,
+    /// or `clear` had given it back (#2155).
+    ///
+    /// The pair `f` is working on stays rooted while it runs: once that
+    /// Ruby code has deleted the pair, nothing else may hold it. The Hash
+    /// itself is the caller's to root.
+    ///
+    #[inline]
+    pub(crate) fn walk(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        mut f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
+    ) -> Result<bool> {
+        let _iter_guard = self.iter_guard();
+        vm.with_temp_scope(|vm| {
+            // Two slots, kept for the walk. An immediate is never
+            // collected and is not stored (see `set_any` in builtins/set.rs
+            // for what that store costs a walk over Integers).
+            let slot = vm.temp_len();
+            vm.temp_push(Value::nil());
+            vm.temp_push(Value::nil());
+            let mut i = 0;
+            loop {
+                // One look at the storage per step — which `f` may have
+                // promoted, tombstoned or emptied since the last one.
+                let (k, v) = match self.content() {
+                    ContentRef::Inline(pairs) => match pairs.get(i) {
+                        Some(&pair) => pair,
+                        None => return Ok(false),
+                    },
+                    ContentRef::Map(m) => match m.get_index(i) {
+                        Some((Some(k), v)) => (*k, *v),
+                        Some((None, _)) => {
+                            i += 1;
+                            continue;
+                        }
+                        None => return Ok(false),
+                    },
+                    ContentRef::Ident(m) => match m.get_index(i) {
+                        Some((Some(k), v)) => (k.0, *v),
+                        Some((None, _)) => {
+                            i += 1;
+                            continue;
+                        }
+                        None => return Ok(false),
+                    },
+                };
+                if !k.is_packed_value() {
+                    vm.temp_set(slot, k);
+                }
+                if !v.is_packed_value() {
+                    vm.temp_set(slot + 1, v);
+                }
+                if f(vm, globals, i, k, v)? {
+                    return Ok(true);
+                }
+                i += 1;
+            }
+        })
+    }
+
     /// Start a traversal: returns an RAII guard that decrements the
     /// iteration count when dropped. Takes `&self` (not `&mut`) so the
     /// hash can be iterated concurrently with the guard being alive.
@@ -1358,17 +1434,15 @@ impl RubyEql<Executor, Globals, MonorubyErr> for HashRef<'_> {
         if self.len() != other.len() {
             return Ok(false);
         }
-        for (k, v) in self.iter() {
-            match other.get(k, vm, globals)? {
-                None => return Ok(false),
-                Some(ov) => {
-                    if !v.eql(&ov, vm, globals)? {
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-        Ok(true)
+        // Walked, not iterated: the keys' `hash` / `eql?` and the values'
+        // `eql?` are Ruby code (`HashRef::walk`).
+        let differ = self.walk(vm, globals, |vm, globals, _, k, v| {
+            Ok(match other.get(k, vm, globals)? {
+                None => true,
+                Some(ov) => !v.eql(&ov, vm, globals)?,
+            })
+        })?;
+        Ok(!differ)
     }
 }
 
@@ -1379,35 +1453,20 @@ impl RubyHash<Executor, Globals, MonorubyErr> for HashRef<'_> {
         e: &mut Executor,
         g: &mut Globals,
     ) -> Result<()> {
-        match self.content() {
-            ContentRef::Inline(pairs) => {
-                if self.is_ident_inline() {
-                    // digest keys by id, matching `IdentKey::ruby_hash`
-                    // so inline and boxed identity hashes digest alike
-                    for (key, val) in pairs {
-                        key.id().hash(state);
-                        val.ruby_hash(state, e, g)?;
-                    }
-                } else {
-                    for (key, val) in pairs {
-                        key.ruby_hash(state, e, g)?;
-                        val.ruby_hash(state, e, g)?;
-                    }
-                }
+        // Walked, not iterated: a key's or a value's `hash` is Ruby code
+        // (`HashRef::walk`). An identity-keyed Hash digests its keys by
+        // id, matching `IdentKey::ruby_hash`, so its inline and boxed
+        // forms digest alike.
+        let ident = self.is_compare_by_identity();
+        self.walk(e, g, |e, g, _, key, val| {
+            if ident {
+                key.id().hash(state);
+            } else {
+                key.ruby_hash(state, e, g)?;
             }
-            ContentRef::Map(h) => {
-                for (key, val) in h.iter() {
-                    key.ruby_hash(state, e, g)?;
-                    val.ruby_hash(state, e, g)?;
-                }
-            }
-            ContentRef::Ident(h) => {
-                for (key, val) in h.iter() {
-                    key.ruby_hash(state, e, g)?;
-                    val.ruby_hash(state, e, g)?;
-                }
-            }
-        }
+            val.ruby_hash(state, e, g)?;
+            Ok(false)
+        })?;
         Ok(())
     }
 }
@@ -1882,6 +1941,41 @@ impl<'a> HashRefMut<'a> {
         Ok(())
     }
 
+    /// Delete the `index`-th entry from inside a walk of this Hash
+    /// ([`HashRef::walk`]): what `ST_DELETE` answered by the function of a
+    /// CRuby `rb_hash_foreach` does. The entry is tombstoned where it
+    /// stands, as [`Self::remove`] does during iteration, but found by
+    /// position: its key is neither hashed nor compared, so no Ruby code
+    /// runs, and a key whose `hash` has changed since it was stored is
+    /// deleted all the same. A position that is out of range or already
+    /// dead is left alone.
+    pub(crate) fn delete_at(
+        &mut self,
+        index: usize,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        debug_assert!(self.as_ref().iter_active());
+        if !self.as_ref().live_at(index) {
+            return Ok(());
+        }
+        if self.is_inline() {
+            let ident = self.as_ref().is_compare_by_identity();
+            self.promote(ident, vm, globals)?;
+        }
+        match &mut self.boxed_mut().content {
+            HashContent::Map(m) => {
+                m.tombstone_index(index, None, Value::nil(), vm, globals)?;
+            }
+            HashContent::IdentMap(m) => {
+                m.tombstone_index(index, None, Value::nil(), vm, globals)?;
+            }
+        }
+        let dead = &self.boxed_mut().dead;
+        dead.set(dead.get() + 1);
+        Ok(())
+    }
+
     /// Delete every entry while a traversal is live, which is what CRuby's
     /// `set_i_clear` does then (an `ST_DELETE` per entry from inside a
     /// foreach). Each live entry is tombstoned where it stands, as
@@ -2298,8 +2392,21 @@ impl Hashmap {
         self.inner().is_empty()
     }
 
+    /// The pairs, read from the storage as it is now: for a loop that
+    /// runs no Ruby code. One that does takes [`Self::walk`].
     pub fn iter(&self) -> Iter<'_> {
         self.inner().iter()
+    }
+
+    /// See [`HashRef::walk`].
+    #[inline]
+    pub(crate) fn walk(
+        &self,
+        vm: &mut Executor,
+        globals: &mut Globals,
+        f: impl FnMut(&mut Executor, &mut Globals, usize, Value, Value) -> Result<bool>,
+    ) -> Result<bool> {
+        self.inner().walk(vm, globals, f)
     }
 
     pub fn keys(&self) -> Vec<Value> {
@@ -2453,6 +2560,16 @@ impl Hashmap {
         self.0
             .as_hashmap_inner_mut()
             .clear_during_iteration(vm, globals)
+    }
+
+    /// See [`HashRefMut::delete_at`].
+    pub(crate) fn delete_at(
+        &mut self,
+        index: usize,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        self.0.as_hashmap_inner_mut().delete_at(index, vm, globals)
     }
 
     pub fn shift(

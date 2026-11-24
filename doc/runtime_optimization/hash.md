@@ -79,10 +79,21 @@ boxed map を作らない**。
 niche によりキーワードがゼロなら死んだエントリ、という判定が機械語からも
 できる。反復が終わった後の最初の変更操作が `compact_if_dirty` で詰める。
 
+**Rust 側の走査は 2 種類ある（#2155）。** ステップの間に Ruby コード（ブロック、
+キーの `#hash` / `#eql?`、値の `#==` / `#inspect`）が走りうる走査は
+`Hashmap::walk` を使う。CRuby の `rb_hash_foreach` と同じく、反復ガードの下で
+**位置**で進み、毎ステップ格納を読み直して tombstone を飛ばし、現在のペアを
+temp スタックに root する。`select!` / `delete_if` などは到達したペアをその場で
+`delete_at`（tombstone 化）し、反復中の `clear` は格納を手放さず全ペアを
+tombstone にする（`clear_during_iteration`）ので、走査中に Hash が変えられても
+解放済みの領域を読むことはない。新しいキーの追加は従来どおり RuntimeError。
+`Hashmap::iter` は借用したままの走査で、ステップの間に Ruby が走らない
+（か、root 済みのスナップショットを回す）場所だけで使う。
+
 ### 1.3 探索経路
 
 ```
-JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex(vm, globals, recv, key)
+JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex_pure(vm, globals, recv, key)
                                                   │
 VM:  Hash#[]  ──builtin index───────────────────►  Hashmap::index
                                                   │  （ミス時のみ default / default_proc）
@@ -285,7 +296,7 @@ Integer キーの参照が Symbol キーと同じところまで来るはず。
 
 ### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1〜3 実装済み**、2026-09-04/05）
 
-いまは `Hash#[]` のインライン生成が `hashindex` への直接呼び出しまでしか
+いまは `Hash#[]` のインライン生成が `hashindex_pure` への直接呼び出しまでしか
 やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
 `Hash` ちょうどで boxed 表現だと分かっている呼び出しサイトなら、
 ダイジェスト → インデックステーブル引き → エントリ比較を機械語で出せる。
@@ -321,7 +332,7 @@ Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す�
   下位 64 ビットのみ）。aarch64 には `umulh` がある。monoasm に足したら
   ヘルパをその命令列に置き換えるだけで、他は変わらない。
 - **形の不一致は deopt ではなく builtin 呼び出し。** inline 表現・identity
-  マップ・索引領域はすべて `hashindex` への合流で、exit しない。最初は deopt に
+  マップ・索引領域はすべて `hashindex_pure` への合流で、exit しない。最初は deopt に
   していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
   Hash のサイトが**毎回 deopt**することになる（4.5 の ic ゲートで踏んだのと
   同型）。builtin 呼び出しなら現状と同コストで退行しない。
@@ -342,7 +353,7 @@ Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す�
 | miss | 16.5–20.4 | **7.4–10.6** |
 | 18 エントリ Symbol（索引領域、fallback） | 18.7–26.0 | 15.5–21.2（退行なし） |
 
-hit 経路の call は `packed_digest_c` の 1 つだけになり、`hashindex` の call は
+hit 経路の call は `packed_digest_c` の 1 つだけになり、`hashindex_pure` の call は
 miss 側にしか残らない（`emit-asm` で確認）。`tests/hash_probe_jit.rs` が
 hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
 索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
@@ -398,7 +409,7 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
 - `Hash#[]` のインライン生成 `hash_index` は `fire_index_inline` から呼ばれ、
   受信側クラスが**ちょうど `Hash`** のときだけ probe を出す。理由は builtin
   の `Hash#[]` がミス時に `default` **メソッド**を dispatch する（サブクラスや
-  特異メソッドで上書きできる）のに対し、`hashindex` は格納されたデフォルトを
+  特異メソッドで上書きできる）のに対し、`hashindex_pure` は格納されたデフォルトを
   直接読むからで、サブクラスは通常の class-version ガード付き呼び出しに残す。
   `Hash#[]` は `BASIC_OP_DEFS` に入っているので class-version ガードは省き、
   `record_bop_dep` で再定義を捕まえる。`Hash#[]=` は意図的に BOP に**入って
@@ -410,7 +421,21 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
 - キーのクラスはサイトのインラインキャッシュ／抽象状態から取り、
   Symbol / nil / true / false は `packed_digest_c`、String は `string_digest_c`
   + `string_key_eq_c`、それ以外（Integer を含む）は probe を出さず
-  `hashindex` の直接呼び出しに落ちる。
+  `hashindex_pure` の直接呼び出しに落ちる。
+- **ヘルパは Ruby を実行しない（#2156）。** JIT コードから直接呼ぶヘルパは
+  フレームを持たない。そこで Ruby コードが走ると、(1) メソッド・定数・基本
+  演算の再定義や ivar の型変化がヘルパより後ろのコード（ガード済みの前提）に
+  伝わらず、(2) chain deopt がそのフレームを変換できない。そこで
+  `hashindex_pure` が答えるのは、探索が Ruby を走らせないと分かっている場合
+  だけである: キーが packed 値か、クラスがちょうど `String` の文字列か、
+  受信側が identity Hash のとき。ミス時は default proc が無ければ格納された
+  デフォルトを返す。それ以外（`#hash` / `#eql?` を dispatch するキー、default
+  proc の実行）では 0 を返し、JIT コードは deopt して、インタプリタがフレーム
+  付きで builtin を呼ぶ。deopt を繰り返すサイトは
+  `RecompileReason::ImpureHelper` で印が付き、再コンパイル後は通常のメソッド
+  呼び出しになる（1 回あたり約 +37 命令）。`Hash#[]=`
+  （`hashindex_assign_pure`）、`Hash#__get_or_key`（`hashgetorkey_pure`）、
+  `Hash#include?`（`hashinclude_pure`、#2147）も同じ規則に従う。
 - `hash_entries_layout()` が `None`（2 つのマップ型でレイアウトが一致しない
   構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
   `miss` へ飛ばす。いずれも性能上の後退で、正しさには関わらない。
@@ -448,7 +473,7 @@ shape に相当する仕組みを Hash に持ち込むことになるので、�
 
 ### 4.4 ディスパッチ段数を減らす（小〜中）
 
-`hashindex` → `Hashmap::index` → `HashRef::get` → `IndexMapCore` の 4 段で、
+`hashindex_pure` → `Hashmap::index` → `HashRef::get` → `IndexMapCore` の 4 段で、
 それぞれが `vm` / `globals` を引き回している。`Hashmap::index` はミス時の
 default 処理のためだけに 1 段あり、`HashRef::get` は表現の分岐をしている。
 表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
@@ -504,7 +529,7 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
 | String キーの比較・ハッシュ | 内容のみ、`String#hash` は dispatch しない。クラスが `String` ちょうどのときだけバイト比較で短絡（`rb_any_cmp` / `any_hash`） | 同じ規則（`Value::eql`、`string_key_eq`）。ただしバイト比較は `RStringInner::eq` で**エンコーディングを見ない**。CRuby の `rb_str_hash` は非 ASCII 文字列でエンコーディング index を混ぜる |
 | `compare_by_identity` | `st_table` の型を `identhash` に切り替えて再ハッシュ | inline は `IDENT_BIT` を立てるだけ（packed キーは `eql?` と同一性が一致するので inline のまま）。boxed は**別型**の `RubyMap<Option<IdentKey>, Value>` に作り直す。空マップ限定で双方向に切り替える `set_compare_by_identity_empty` があり、`Hash#replace` / `Set` が使う |
 | デフォルト値／proc | `ifnone` スロット | `Option<Box<HashDefault>>`。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（`Hash.new(7)` は確保する）。`clear` はデフォルトを保つ（CRuby と同じ） |
-| ミス時の `default` | `rb_funcall(id_default)` | builtin の `Hash#[]` は同じく dispatch。`hashindex` / `runtime::get_index` は格納値を直接読むので、対象を `Hash` ちょうどに限定 |
+| ミス時の `default` | `rb_funcall(id_default)` | builtin の `Hash#[]` は同じく dispatch。`hashindex_pure` / `runtime::get_index` は格納値を直接読むので、対象を `Hash` ちょうどに限定 |
 | Ruby から見える `#hash` | `rb_hash_start` 系（SipHash-1-3、seeded） | `HASH_STATE`（std `RandomState` = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5） |
 | String ハッシュのキャッシュ | 無し | 無し（§4.5 に候補として残す） |
 | GC | `rb_gc_mark` | `HashRef::mark` がデフォルトと生きたエントリを mark。`young_child_exists` が世代別の remember 判定、mutator と JIT の `emit_hash_default_assign` が write barrier を出す（[`../gc.md`](../gc.md)） |

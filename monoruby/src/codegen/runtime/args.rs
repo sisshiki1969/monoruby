@@ -887,10 +887,14 @@ fn set_callee_frame_arguments(
                         continue;
                     }
                     // `**obj` accepts any #to_hash-convertible object
-                    // (implicit conversion), not just a Hash.
-                    for (k, v) in v.coerce_to_hash(vm, globals)?.iter() {
+                    // (implicit conversion), not just a Hash. Walked, not
+                    // iterated: a key's `hash` / `eql?` may change the
+                    // Hash being splatted (`Hashmap::walk`).
+                    let src = v.coerce_to_hash(vm, globals)?;
+                    src.walk(vm, globals, |vm, globals, _, k, v| {
                         h.insert(k, v, vm, globals)?;
-                    }
+                        Ok(false)
+                    })?;
                 }
             }
         }

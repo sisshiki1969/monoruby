@@ -1546,7 +1546,7 @@ impl Codegen {
             b dst_ready;
         );
         self.jit.bind_label(slow);
-        // set_array_slice(base, start, len, val, vm, globals). Source regs at
+        // set_array_slice_pure(base, start, len, val, vm, globals). Source regs at
         // entry: base=x4, start=x3, val=x2. Reorder into the C ABI args
         // without clobbering a still-needed source.
         monoasm_arm64!(&mut self.jit,

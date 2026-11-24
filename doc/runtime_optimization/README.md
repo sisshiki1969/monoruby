@@ -69,7 +69,7 @@ class-version ガード無しの直接発火経路を取れ、再定義は記録
 （[`../chain_deopt.md`](../chain_deopt.md)、[`../deopt_log.md`](../deopt_log.md)）。
 そのため各文書に出てくる高速経路は、形が合わないケースを **deopt でなく
 builtin への call** で逃がす設計を繰り返し選んでいる: Hash の probe が
-inline / identity / 索引の表現を `hashindex` に渡す、`Array#[]` の多相
+inline / identity / 索引の表現を `hashindex_pure` に渡す、`Array#[]` の多相
 サイトが 2 腕の dispatch を出す、`String#<<` が fallback を末尾呼び出しする、
 `String#setbyte` が共有レシーバを detach して再試行する、など。
 
