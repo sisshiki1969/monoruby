@@ -472,6 +472,22 @@ impl alloc::GC<RValue> for Store {
 }
 
 impl Store {
+    /// `"file:line"` of the instruction at `pc`: looked for in the iseq
+    /// `cfp` runs, then (a JIT-inlined callee's instruction runs in its
+    /// caller's frame) among every iseq.
+    pub(crate) fn location_of_pc(&self, cfp: Cfp, pc: BytecodePtr) -> Option<String> {
+        let own = self[cfp.lfp().func_id()].is_iseq().map(|id| &self[id]);
+        let info = own
+            .filter(|info| info.contains_pc(pc))
+            .or_else(|| self.iseqs.iter().find(|info| info.contains_pc(pc)))?;
+        let loc = info.sourcemap[info.get_pc_index(Some(pc)).to_usize()];
+        Some(format!(
+            "{}:{}",
+            info.sourceinfo.file_name(),
+            info.sourceinfo.get_line(&loc)
+        ))
+    }
+
     ///
     /// A tally of what the compiled program costs in memory, printed at
     /// exit when `MONORUBY_STORE_STATS` is set.

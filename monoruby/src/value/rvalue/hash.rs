@@ -1041,6 +1041,9 @@ impl<'a> HashRef<'a> {
 
     pub fn get(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<Value>> {
         Ok(match self.content() {
+            // An empty inline table answers without hashing the key, as
+            // `ar_lookup` does for an empty AR table (#2127).
+            ContentRef::Inline([]) => None,
             ContentRef::Inline(pairs) => self.inline_pos(k, vm, globals)?.map(|i| pairs[i].1),
             ContentRef::Map(m) => {
                 // See `HashRefMut::insert`: a packed key probes vm-free,
@@ -1074,6 +1077,8 @@ impl<'a> HashRef<'a> {
         globals: &mut Globals,
     ) -> Result<bool> {
         match self.content() {
+            // See `get` (#2127).
+            ContentRef::Inline([]) => Ok(false),
             ContentRef::Inline(_) => Ok(self.inline_pos(k, vm, globals)?.is_some()),
             ContentRef::Map(m) => {
                 // See `HashRefMut::insert`: a packed key probes vm-free,

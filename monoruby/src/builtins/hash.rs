@@ -4126,7 +4126,13 @@ fn env_merge_bang(
         Some(bh) => Some(vm.get_block_data(globals, bh)?),
         None => None,
     };
+    let env = lfp.self_val();
     for arg in lfp.arg(0).as_array().iter() {
+        // `env_update`: ENV itself is skipped (#2157); its pairs are
+        // already there, and a block would otherwise run for each one.
+        if arg.id() == env.id() {
+            continue;
+        }
         let other = arg.coerce_to_hash(vm, globals)?;
         let pairs: Vec<(Value, Value)> = other.iter().collect();
         // The pairs wait on the temp stack until they are stored: what
@@ -4190,6 +4196,10 @@ fn env_replace(
     // converted.
     let live = crate::environ::Snapshot::take();
     let mut stale: Vec<&[u8]> = live.iter().map(|(name, _)| name).collect();
+    // `if (env == hash) return env;` (#2157).
+    if lfp.arg(0).id() == lfp.self_val().id() {
+        return Ok(lfp.self_val());
+    }
     let other = lfp.arg(0).coerce_to_hash(vm, globals)?;
     let pairs: Vec<(Value, Value)> = other.iter().collect();
     // The pairs wait on the temp stack until they are stored, as in

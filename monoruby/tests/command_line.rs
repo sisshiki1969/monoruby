@@ -398,7 +398,8 @@ fn inplace_edit_with_backup() {
 #[test]
 fn inplace_edit_without_backup() {
     // Bare `-i`: rewritten in place, no backup left behind. Also routes
-    // the write family through the redirected $stdout.
+    // the write family through the redirected $stdout while the walk is
+    // on (after it, CRuby's `ARGF.write` raises: the last file is closed).
     let dir = std::env::temp_dir().join(format!("cli_inplace_nb_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let f1 = dir.join("c.txt");
@@ -407,7 +408,7 @@ fn inplace_edit_without_backup() {
         monoruby().args([
             "-i",
             "-e",
-            "while line = ARGF.gets do ARGF.print line.upcase; end; ARGF.write ARGF.puts",
+            "while line = ARGF.gets do ARGF.print line.chomp.upcase; ARGF.write ARGF.puts; end",
             f1.to_str().unwrap(),
         ]),
         "",

@@ -743,6 +743,44 @@ fn format_int_with_prefix(
 /// the named-arg hash (cached in `cache`); advances `*i` to one past
 /// the closing `>`. Otherwise leaves `*i` untouched and returns
 /// `Ok(None)`.
+/// Which kinds of argument reference a format has used so far, and the
+/// `<name>` of the spec being read: CRuby's `posarg` and `sym`
+/// (`sprintf.c`), for the errors that mixing them raises (#2144).
+#[derive(Default)]
+struct RefKinds {
+    numbered: bool,
+    unnumbered: bool,
+    named: bool,
+    /// The `<name>` already given in the current spec.
+    angle: Option<String>,
+}
+
+impl RefKinds {
+    /// `check_name_arg`, and the `sym` check before it: a named
+    /// reference `open key close` is about to be read; `arg_no`
+    /// unnumbered references have been read. The name is spelled out
+    /// only for an error.
+    fn name_arg(&mut self, open: char, key: &str, close: char, arg_no: usize) -> Result<()> {
+        if let Some(prev) = &self.angle {
+            return Err(MonorubyErr::argumenterr(format!(
+                "named{open}{key}{close} after <{prev}>"
+            )));
+        }
+        if self.unnumbered {
+            return Err(MonorubyErr::argumenterr(format!(
+                "named{open}{key}{close} after unnumbered({arg_no})"
+            )));
+        }
+        if self.numbered {
+            return Err(MonorubyErr::argumenterr(format!(
+                "named{open}{key}{close} after numbered"
+            )));
+        }
+        self.named = true;
+        Ok(())
+    }
+}
+
 fn try_consume_angle_named(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -751,6 +789,8 @@ fn try_consume_angle_named(
     fchars: &[char],
     i: &mut usize,
     flen: usize,
+    refs: &mut RefKinds,
+    arg_no: usize,
 ) -> Result<Option<Value>> {
     if *i >= flen || fchars[*i] != '<' {
         return Ok(None);
@@ -766,9 +806,11 @@ fn try_consume_angle_named(
             "malformed name - unmatched parenthesis",
         ));
     }
+    refs.name_arg('<', &key, '>', arg_no)?;
     let hash = named_hash(vm, globals, arguments, cache)?;
     let key_val = Value::symbol_from_str(&key);
     let val = hash_lookup_or_keyerror(vm, globals, &hash, key_val, key.as_str(), '<')?;
+    refs.angle = Some(key);
     *i = j + 1;
     Ok(Some(val))
 }
@@ -857,41 +899,40 @@ impl Executor {
         ctx: FormatCtx,
     ) -> Result<String> {
         let mut arg_no = 0;
-        // Track whether the format string has used a numbered (`N$`)
-        // and/or an unnumbered (sequential `%s` / `*`) argument
-        // reference. CRuby forbids mixing the two within one format
-        // string.
-        let mut used_numbered = false;
-        let mut used_unnumbered = false;
-        // A named reference (`%<n>` / `%{n}`) may not be mixed with
-        // numbered or unnumbered references in one format string.
-        let mut used_named = false;
-        fn mark_numbered(
-            n: usize,
-            used_numbered: &mut bool,
-            used_unnumbered: bool,
-            arg_no: usize,
-        ) -> Result<()> {
-            if used_unnumbered {
+        // Which kinds of argument reference the format string has used:
+        // CRuby forbids mixing numbered (`N$`), unnumbered (sequential
+        // `%s` / `*`) and named (`%<n>` / `%{n}`) ones.
+        let mut refs = RefKinds::default();
+        fn mark_numbered(n: usize, refs: &mut RefKinds, arg_no: usize) -> Result<()> {
+            // `check_pos_arg`.
+            if refs.unnumbered {
                 return Err(MonorubyErr::argumenterr(format!(
                     "numbered({n}) after unnumbered({arg_no})"
                 )));
             }
-            *used_numbered = true;
+            if refs.named {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "numbered({n}) after named"
+                )));
+            }
+            refs.numbered = true;
             Ok(())
         }
-        fn mark_unnumbered(
-            used_numbered: bool,
-            used_unnumbered: &mut bool,
-            arg_no: usize,
-        ) -> Result<()> {
-            if used_numbered {
+        fn mark_unnumbered(refs: &mut RefKinds, arg_no: usize) -> Result<()> {
+            // `check_next_arg`.
+            if refs.numbered {
                 return Err(MonorubyErr::argumenterr(format!(
                     "unnumbered({}) mixed with numbered",
                     arg_no + 1
                 )));
             }
-            *used_unnumbered = true;
+            if refs.named {
+                return Err(MonorubyErr::argumenterr(format!(
+                    "unnumbered({}) mixed with named",
+                    arg_no + 1
+                )));
+            }
+            refs.unnumbered = true;
             Ok(())
         }
         let mut format_str = String::new();
@@ -930,6 +971,7 @@ impl Executor {
             // to_s-only form and may be preceded by flags / width /
             // precision (e.g. `%-20.5{foo}`); we recognize it where
             // the type char would be expected.
+            refs.angle = None;
             let mut named_val = try_consume_angle_named(
                 self,
                 globals,
@@ -938,6 +980,8 @@ impl Executor {
                 &fchars,
                 &mut i,
                 flen,
+                &mut refs,
+                arg_no,
             )?;
 
             // Detect (and consume) a `N$` positional argument reference at
@@ -975,7 +1019,7 @@ impl Executor {
             let mut positional_arg = if named_val.is_none() {
                 match try_positional(&fchars, flen, &mut i) {
                     Some(num) => {
-                        mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                        mark_numbered(num, &mut refs, arg_no)?;
                         if num == 0 || num > arguments.len() {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
@@ -1026,6 +1070,8 @@ impl Executor {
                         &fchars,
                         &mut i,
                         flen,
+                        &mut refs,
+                        arg_no,
                     )? {
                         named_val = Some(v);
                         if i >= flen {
@@ -1042,7 +1088,7 @@ impl Executor {
             // was not already consumed before the flags.
             if positional_arg.is_none() && named_val.is_none() {
                 if let Some(num) = try_positional(&fchars, flen, &mut i) {
-                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    mark_numbered(num, &mut refs, arg_no)?;
                     if num == 0 || num > arguments.len() {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -1071,13 +1117,13 @@ impl Executor {
                 let width_val = if let Some(num) =
                     try_positional(&fchars, flen, &mut i)
                 {
-                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    mark_numbered(num, &mut refs, arg_no)?;
                     if num == 0 || num > arguments.len() {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
                     arguments[num - 1]
                 } else {
-                    mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
+                    mark_unnumbered(&mut refs, arg_no)?;
                     if arguments.len() <= arg_no {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -1133,6 +1179,8 @@ impl Executor {
                     &fchars,
                     &mut i,
                     flen,
+                    &mut refs,
+                    arg_no,
                 )? {
                     named_val = Some(v);
                     if i >= flen {
@@ -1160,13 +1208,13 @@ impl Executor {
                     let prec_val = if let Some(num) =
                         try_positional(&fchars, flen, &mut i)
                     {
-                        mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                        mark_numbered(num, &mut refs, arg_no)?;
                         if num == 0 || num > arguments.len() {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
                         arguments[num - 1]
                     } else {
-                        mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
+                        mark_unnumbered(&mut refs, arg_no)?;
                         if arguments.len() <= arg_no {
                             return Err(MonorubyErr::argumenterr("too few arguments"));
                         }
@@ -1213,7 +1261,7 @@ impl Executor {
             // / precision (e.g. `%*1$.*2$3$d`).
             if positional_arg.is_none() && named_val.is_none() {
                 if let Some(num) = try_positional(&fchars, flen, &mut i) {
-                    mark_numbered(num, &mut used_numbered, used_unnumbered, arg_no)?;
+                    mark_numbered(num, &mut refs, arg_no)?;
                     if num == 0 || num > arguments.len() {
                         return Err(MonorubyErr::argumenterr("too few arguments"));
                     }
@@ -1236,6 +1284,8 @@ impl Executor {
                     &fchars,
                     &mut i,
                     flen,
+                    &mut refs,
+                    arg_no,
                 )? {
                     named_val = Some(v);
                     if i >= flen {
@@ -1262,15 +1312,7 @@ impl Executor {
                         "malformed name - unmatched parenthesis",
                     ));
                 }
-                if named_val.is_some() {
-                    return Err(MonorubyErr::argumenterr("named<name> after named{name}"));
-                }
-                if used_numbered || used_unnumbered {
-                    return Err(MonorubyErr::argumenterr(
-                        "named reference is mixed with numbered/unnumbered",
-                    ));
-                }
-                used_named = true;
+                refs.name_arg('{', &key, '}', arg_no)?;
                 let hash = named_hash(self, globals, arguments, &mut named_hash_cache)?;
                 let key_val = Value::symbol_from_str(&key);
                 let val =
@@ -1295,20 +1337,6 @@ impl Executor {
                 format_str += &apply_width(&s, width, minus_flag, ' ');
                 i = j + 1;
                 continue;
-            }
-            // Enforce CRuby's rule that named references cannot be
-            // mixed with numbered/unnumbered ones.
-            if named_val.is_some() {
-                if used_numbered || used_unnumbered {
-                    return Err(MonorubyErr::argumenterr(
-                        "named reference is mixed with numbered/unnumbered",
-                    ));
-                }
-                used_named = true;
-            } else if used_named {
-                return Err(MonorubyErr::argumenterr(
-                    "numbered/unnumbered reference is mixed with named",
-                ));
             }
             // CRuby validates the conversion character *before* demanding
             // an argument for it: `sprintf("%\n")` is malformed even with
@@ -1346,7 +1374,7 @@ impl Executor {
             } else if let Some(v) = named_val {
                 v
             } else {
-                mark_unnumbered(used_numbered, &mut used_unnumbered, arg_no)?;
+                mark_unnumbered(&mut refs, arg_no)?;
                 if arguments.len() <= arg_no {
                     return Err(MonorubyErr::argumenterr("too few arguments"));
                 }
@@ -1713,7 +1741,7 @@ impl Executor {
         } else {
             arguments.len()
         };
-        if !used_numbered && !used_named && arg_no < positional_len {
+        if !refs.numbered && !refs.named && arg_no < positional_len {
             if globals
                 .get_gvar(IdentId::get_id("$DEBUG"))
                 .is_some_and(|v| v.as_bool())

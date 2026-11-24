@@ -3042,14 +3042,7 @@ pub(crate) fn min(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     }
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut min = ary[0];
-        for v in &ary[1..] {
-            let block_res = vm.invoke_block(globals, &data, &[*v, min])?;
-            if vm.cmpint(globals, block_res, *v, min)? == std::cmp::Ordering::Less {
-                min = *v;
-            }
-        }
-        Ok(min)
+        min_max_block(vm, globals, ary, &data, std::cmp::Ordering::Less)
     } else {
         if let Some((min, _)) = min_max_homogeneous(globals, &ary) {
             return Ok(min);
@@ -3084,23 +3077,64 @@ fn min_max_generic(
     } else {
         std::cmp::Ordering::Greater
     };
-    let mut best = ary[0];
-    let mut i = 1;
     // The length is read again on every round: `<=>` is Ruby code and may
-    // shrink the receiver.
-    while i < ary.len() {
-        let v = ary[i];
-        let ord = if newarray {
-            vm.compare_values(globals, v, best)?
-        } else {
-            vm.compare_values(globals, best, v)?
-        };
-        if ord == replace_on {
-            best = v;
+    // shrink the receiver. For the same reason the running extreme and the
+    // element compared with it are kept in temp slots, not only in Rust
+    // locals: either may have left the receiver (#2172).
+    vm.with_temp_scope(|vm| {
+        let best_slot = vm.temp_len();
+        vm.temp_push(ary[0]);
+        vm.temp_push(Value::nil());
+        let mut i = 1;
+        while i < ary.len() {
+            let v = ary[i];
+            vm.temp_set(best_slot + 1, v);
+            let best = vm.temp_at(best_slot);
+            let ord = if newarray {
+                vm.compare_values(globals, v, best)?
+            } else {
+                vm.compare_values(globals, best, v)?
+            };
+            if ord == replace_on {
+                vm.temp_set(best_slot, v);
+            }
+            i += 1;
         }
-        i += 1;
-    }
-    Ok(best)
+        Ok(vm.temp_at(best_slot))
+    })
+}
+
+///
+/// `min` / `max` with a block (`ary_min` / `ary_max`, `rb_block_given_p`):
+/// the element is the block's first argument and the running extreme the
+/// second, and the extreme is replaced when the answer orders the element
+/// `replace_on` it. The length is read every round and the two values are
+/// kept in temp slots, since the block may shrink the receiver (#2172).
+///
+fn min_max_block(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    data: &ProcData,
+    replace_on: std::cmp::Ordering,
+) -> Result<Value> {
+    vm.with_temp_scope(|vm| {
+        let best_slot = vm.temp_len();
+        vm.temp_push(ary[0]);
+        vm.temp_push(Value::nil());
+        let mut i = 1;
+        while i < ary.len() {
+            let v = ary[i];
+            vm.temp_set(best_slot + 1, v);
+            let best = vm.temp_at(best_slot);
+            let block_res = vm.invoke_block(globals, data, &[v, best])?;
+            if vm.cmpint(globals, block_res, v, best)? == replace_on {
+                vm.temp_set(best_slot, v);
+            }
+            i += 1;
+        }
+        Ok(vm.temp_at(best_slot))
+    })
 }
 
 ///
@@ -3146,14 +3180,7 @@ pub(crate) fn max(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytecod
     }
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
-        let mut max = ary[0];
-        for v in &ary[1..] {
-            let block_res = vm.invoke_block(globals, &data, &[*v, max])?;
-            if vm.cmpint(globals, block_res, *v, max)? == std::cmp::Ordering::Greater {
-                max = *v;
-            }
-        }
-        Ok(max)
+        min_max_block(vm, globals, ary, &data, std::cmp::Ordering::Greater)
     } else {
         if let Some((_, max)) = min_max_homogeneous(globals, &ary) {
             return Ok(max);
@@ -3198,34 +3225,51 @@ fn minmax(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let res = vm.invoke_block(globals, &data, &[a, b])?;
         vm.cmpint(globals, res, a, b)
     };
-    let mut extremes: Option<(Value, Value)> = None;
-    let mut i = 0;
-    while i < ary.len() {
-        let (mut lo, mut hi) = (ary[i], ary[i]);
-        if i + 1 < ary.len() {
-            let (j, k) = (ary[i], ary[i + 1]);
-            (lo, hi) = match cmp(vm, globals, j, k)? {
-                std::cmp::Ordering::Equal => (j, j),
-                std::cmp::Ordering::Less => (j, k),
-                std::cmp::Ordering::Greater => (k, j),
-            };
-        }
-        i += 2;
-        extremes = Some(match extremes {
-            None => (lo, hi),
-            Some((mut min, mut max)) => {
-                if cmp(vm, globals, lo, min)? == std::cmp::Ordering::Less {
-                    min = lo;
-                }
-                if cmp(vm, globals, hi, max)? == std::cmp::Ordering::Greater {
-                    max = hi;
-                }
-                (min, max)
+    // The running extremes and the pair being placed live in temp slots
+    // (#2172): the block may drop them from the receiver, and nothing
+    // else would hold them across the next block call.
+    vm.with_temp_scope(|vm| {
+        let (min_slot, max_slot, lo_slot, hi_slot) = {
+            let base = vm.temp_len();
+            for _ in 0..4 {
+                vm.temp_push(Value::nil());
             }
-        });
-    }
-    let (min, max) = extremes.unwrap();
-    Ok(Value::array2(min, max))
+            (base, base + 1, base + 2, base + 3)
+        };
+        let mut first = true;
+        let mut i = 0;
+        while i < ary.len() {
+            let (mut lo, mut hi) = (ary[i], ary[i]);
+            if i + 1 < ary.len() {
+                let (j, k) = (ary[i], ary[i + 1]);
+                vm.temp_set(lo_slot, j);
+                vm.temp_set(hi_slot, k);
+                (lo, hi) = match cmp(vm, globals, j, k)? {
+                    std::cmp::Ordering::Equal => (j, j),
+                    std::cmp::Ordering::Less => (j, k),
+                    std::cmp::Ordering::Greater => (k, j),
+                };
+            }
+            i += 2;
+            if first {
+                first = false;
+                vm.temp_set(min_slot, lo);
+                vm.temp_set(max_slot, hi);
+                continue;
+            }
+            vm.temp_set(lo_slot, lo);
+            vm.temp_set(hi_slot, hi);
+            let min = vm.temp_at(min_slot);
+            if cmp(vm, globals, lo, min)? == std::cmp::Ordering::Less {
+                vm.temp_set(min_slot, lo);
+            }
+            let max = vm.temp_at(max_slot);
+            if cmp(vm, globals, hi, max)? == std::cmp::Ordering::Greater {
+                vm.temp_set(max_slot, hi);
+            }
+        }
+        Ok(Value::array2(vm.temp_at(min_slot), vm.temp_at(max_slot)))
+    })
 }
 
 ///
@@ -4073,21 +4117,18 @@ fn grep_match(
     pattern: Value,
     v: Value,
 ) -> Result<bool> {
-    if let Some(re) = pattern.is_regex() {
-        let s: Option<String> = if let Some(rs) = v.is_rstring_inner() {
-            rs.check_utf8().ok().map(|s| s.to_string())
-        } else if let Some(sym) = v.try_symbol() {
-            Some(sym.get_name())
-        } else if let Some(conv) =
-            crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_str"))?
-        {
-            conv.is_rstring_inner()
-                .and_then(|rs| rs.check_utf8().ok().map(|s| s.to_string()))
+    if pattern.is_regex().is_some() {
+        // `grep_regexp_i`: an element that is neither a Symbol nor
+        // convertible to a String is no match; the rest are matched as
+        // `Regexp#match?` matches them, in their own encoding (#2142).
+        let converted = if v.try_symbol().is_some() || v.is_rstring().is_some() {
+            Some(v)
         } else {
-            None
+            crate::coerce::check_funcall(vm, globals, v, IdentId::get_id("to_str"))?
+                .filter(|conv| conv.is_rstring().is_some())
         };
-        match s {
-            Some(s) => Ok(RegexpInner::match_pred(&re, &s, 0)?),
+        match converted {
+            Some(subject) => super::regexp::reg_match_p(vm, globals, pattern, subject, None),
             None => Ok(false),
         }
     } else {
@@ -4125,18 +4166,20 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             Ok(vm.temp_pop())
         });
     }
-    // No-block path: pushed values are elements of self's array (already
-    // rooted via lfp.self_val()), so a plain Vec is fine.
-    let mut res = vec![];
-    let mut i = 0;
-    while i < self_val.as_array().len() {
-        let v = self_val.as_array()[i];
-        if grep_match(vm, globals, pattern, v)? {
-            res.push(v)
+    // The matches go into a rooted Array: `pattern === elem` and `#to_str`
+    // run Ruby that may replace the receiver's elements (#2172).
+    vm.with_temp_scope(|vm| {
+        vm.temp_array_new(None);
+        let mut i = 0;
+        while i < self_val.as_array().len() {
+            let v = self_val.as_array()[i];
+            if grep_match(vm, globals, pattern, v)? {
+                vm.temp_array_push(v);
+            }
+            i += 1;
         }
-        i += 1;
-    }
-    Ok(Value::array_from_vec(res))
+        Ok(vm.temp_pop())
+    })
 }
 
 ///

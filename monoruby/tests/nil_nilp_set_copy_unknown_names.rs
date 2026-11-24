@@ -58,6 +58,9 @@ fn arithmetic_sequence_to_a_uses_each() {
 
 #[test]
 fn unknown_names_make_no_symbol() {
+    // The symbol table is shared by every test of the process; another
+    // test's UTF-16 symbol would make the Regexp `grep` raise
+    // Encoding::CompatibilityError, as it does on CRuby.
     probe(&[
         r####"t = Thread.current; [t["zq2033a"], t.key?("zq2033b"), (t.fetch("zq2033c") rescue $!.class), t.fetch("zq2033d") { |k| k }, t.fetch("zq2033e", 3)]"####,
         r####"t = Thread.current; t["zq2033f"] = 1; [t["zq2033f"], t.key?("zq2033f"), t.fetch("zq2033f")]"####,
@@ -69,6 +72,6 @@ fn unknown_names_make_no_symbol() {
         r####"[(Class.new.define_method("zq2033q") rescue $!), (Class.new.define_method("zq2033r", 3) rescue $!), (Class.new.define_method(3) rescue $!)]"####,
         r####"Class.new.define_method("zq2033s") { 1 }"####,
         r####"(Struct.new(:a).new(1).dig("zq2033t") rescue $!.class)"####,
-        r####"Symbol.all_symbols.map(&:to_s).grep(/zq2033/).sort"####,
+        r####"Symbol.all_symbols.map(&:to_s).select(&:ascii_only?).grep(/zq2033/).sort"####,
     ]);
 }

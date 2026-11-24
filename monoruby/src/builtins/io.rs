@@ -3489,6 +3489,16 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let positional_mode = args.get(1).copied().filter(|m| !m.is_nil());
     let mode = match (positional_mode, io_opt("mode")) {
         (Some(_), Some(_)) => return Err(MonorubyErr::argumenterr("mode specified twice")),
+        // An Integer mode is open(2) flags, as for `File.open` (#2145):
+        // only the access mode matters to a pipe.
+        (Some(m), None) | (None, Some(m)) if let Some(flags) = m.try_fixnum() => {
+            match (flags as i32) & libc::O_ACCMODE {
+                libc::O_WRONLY => "w",
+                libc::O_RDWR => "r+",
+                _ => "r",
+            }
+            .to_string()
+        }
         (Some(m), None) | (None, Some(m)) => m.coerce_to_str(vm, globals)?,
         (None, None) => "r".to_string(),
     };

@@ -481,10 +481,13 @@ fn uncaught_report_without_a_detailed_message() {
 /// (#2033).
 #[test]
 fn struct_dig_does_not_intern() {
+    // The symbol table is shared by every test of the process; another
+    // test's UTF-16 symbol would make the Regexp `grep` raise
+    // Encoding::CompatibilityError, as it does on CRuby.
     probe(
         "S2033 = Struct.new(:a, :b)",
         &[
-            r#"s = S2033.new(1, [2]); (s.dig("zq2033dig") rescue 0); Symbol.all_symbols.map(&:to_s).grep(/zq2033dig/)"#,
+            r#"s = S2033.new(1, [2]); (s.dig("zq2033dig") rescue 0); Symbol.all_symbols.map(&:to_s).select(&:ascii_only?).grep(/zq2033dig/)"#,
             r#"s = S2033.new(1, [2]); [s.dig("a"), s.dig(:b, 0), s.dig("b", 0), s.dig(1, 0)]"#,
             r#"S2033.new(1, 2).dig("nope")"#,
             r#"S2033.new(1, 2).dig(:nope)"#,

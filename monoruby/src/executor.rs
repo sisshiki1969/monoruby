@@ -1419,7 +1419,7 @@ impl Executor {
     /// may override, or `$stderr.write` before the module exists. Errors
     /// are ignored (e.g. a nil / broken `$stderr` during early
     /// bootstrap): a warning must never mask the program's result.
-    fn write_warning(&mut self, globals: &mut Globals, msg: String) {
+    pub(crate) fn write_warning(&mut self, globals: &mut Globals, msg: String) {
         let warning = globals
             .store
             .get_constant_noautoload(OBJECT_CLASS, IdentId::get_id("Warning"));

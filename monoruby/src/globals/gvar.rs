@@ -309,6 +309,17 @@ impl GvarTable {
     /// This takes `&mut Executor` and `&mut Globals` because hooked variables
     /// may need to mutate runtime state (e.g. `$~` writes).
     pub fn get(vm: &mut Executor, globals: &mut Globals, name: IdentId) -> Value {
+        Self::get_at(vm, globals, name, None)
+    }
+
+    /// [`Self::get`], given the `LoadGvar` instruction that reads, when
+    /// there is one: the "not initialized" warning names its line.
+    fn get_at(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        name: IdentId,
+        site: Option<BytecodePtr>,
+    ) -> Value {
         match Self::lookup(vm, globals, name) {
             Some(v) => v,
             None => {
@@ -319,16 +330,22 @@ impl GvarTable {
                 // names without the `$`) and hooked entries whose getter
                 // reported "not present" (`$1` with no match) must not
                 // warn either.
-                if !globals.gvars.index.contains_key(&name) {
+                if globals.gvars.is_undefined(name) {
                     let n = name.get_name();
                     if n.starts_with('$')
                         && n[1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
                         && n != "$FILENAME"
                         && verbose_mode(globals)
                     {
-                        let _ = vm.ruby_warn(
+                        // `rb_gvar_undef_getter`'s `rb_warning`: at the
+                        // reading line, through `Warning.warn` (#2160).
+                        let loc = site
+                            .and_then(|pc| globals.store.location_of_pc(vm.cfp(), pc))
+                            .or_else(|| vm.nearest_caller_location(&globals.store));
+                        let prefix = loc.map_or(String::new(), |loc| format!("{loc}: "));
+                        vm.write_warning(
                             globals,
-                            &format!("warning: global variable '{n}' not initialized"),
+                            format!("{prefix}warning: global variable '{n}' not initialized\n"),
                         );
                     }
                 }
@@ -355,13 +372,20 @@ impl GvarTable {
                     *cache = gvars.cache_word(id);
                     id
                 }
-                None => return Self::get(vm, globals, name),
+                None => return Self::get_at(vm, globals, name, Self::load_site(cache)),
             },
         };
         match gvars.entries[id.index()] {
             GvarEntry::Simple(v) => v,
-            _ => Self::get(vm, globals, name),
+            _ => Self::get_at(vm, globals, name, Self::load_site(cache)),
         }
+    }
+
+    /// The `LoadGvar` instruction whose cache word is `cache`: it starts
+    /// one word before.
+    fn load_site(cache: &mut u64) -> Option<BytecodePtr> {
+        // SAFETY: `cache` is the second word of a `LoadGvar`.
+        unsafe { BytecodePtr::from_raw((cache as *mut u64).sub(1) as *mut Bytecode) }
     }
 
     /// Internal lookup that propagates the hook getter's "exists or not"
@@ -514,16 +538,49 @@ impl GvarTable {
     /// Every registered global-variable name (Simple, Alias, or
     /// Hooked), for `Kernel#global_variables`.
     ///
-    /// Only `$` names: the table also holds the interpreter's own
-    /// entries — the `$!` save (`ERRINFO_INTERNAL_GVAR`), the per-site
-    /// state of a flip-flop, `END { }` and `/.../o` — which are named
-    /// without one so that nothing a program can write reaches them.
+    /// Not the interpreter's own entries — the `$!` save
+    /// (`ERRINFO_INTERNAL_GVAR`), the per-site state of a flip-flop,
+    /// `END { }` and `/.../o` — which are named with a leading `/` so that
+    /// nothing a program can write reaches them. A name without a `$` that
+    /// `trace_var` declared is listed (#2159).
     pub(crate) fn names(&self) -> Vec<IdentId> {
         self.index
             .keys()
             .copied()
-            .filter(|name| name.get_name().starts_with('$'))
+            .filter(|name| !name.get_name().starts_with('/'))
             .collect()
+    }
+
+    /// `rb_global_entry`: give `name` an entry unless it has one. Until
+    /// its first assignment the variable is undefined, as CRuby's with
+    /// `rb_gvar_undef_getter`: `defined?` answers nil and a read warns.
+    pub(crate) fn declare(&mut self, name: IdentId) {
+        if self.index.contains_key(&name) {
+            return;
+        }
+        let id = GvarId::from_index(self.entries.len());
+        self.entries.push(GvarEntry::Hooked {
+            getter: undef_getter,
+            setter: Some(undef_setter),
+        });
+        self.index.insert(name, id);
+    }
+
+    /// Whether `name` has no entry, or one [`Self::declare`] made and
+    /// nothing assigned yet.
+    fn is_undefined(&self, name: IdentId) -> bool {
+        match self.index.get(&name) {
+            None => true,
+            Some(&id) => matches!(
+                self.entries[self.resolve(id).index()],
+                GvarEntry::Hooked { getter, .. } if std::ptr::fn_addr_eq(getter, undef_getter as GvarGetter)
+            ),
+        }
+    }
+
+    /// Whether `name` has an entry of the table, as `untrace_var` asks.
+    pub(crate) fn is_declared(&self, name: IdentId) -> bool {
+        self.index.contains_key(&name)
     }
 
     /// Returns `true` if `name` has any entry — Simple, Alias, or Hooked.
@@ -1291,6 +1348,20 @@ pub fn set_cli_flag_gvars(auto_split: bool, line_ending: bool, print_loop: bool)
     CLI_FLAGS[0].store(auto_split, Ordering::Relaxed);
     CLI_FLAGS[1].store(line_ending, Ordering::Relaxed);
     CLI_FLAGS[2].store(print_loop, Ordering::Relaxed);
+}
+
+/// [`GvarTable::declare`]'s getter: the variable is not defined.
+fn undef_getter(_: &mut Executor, _: &mut Globals, _: IdentId) -> Option<Value> {
+    None
+}
+
+/// [`GvarTable::declare`]'s setter: the first assignment makes the entry
+/// an ordinary one (`rb_gvar_undef_setter`).
+fn undef_setter(_: &mut Executor, globals: &mut Globals, name: IdentId, val: Value) -> Result<()> {
+    let gvars = &mut globals.gvars;
+    let id = gvars.resolve(gvars.index[&name]);
+    gvars.entries[id.index()] = GvarEntry::Simple(val);
+    Ok(())
 }
 
 // ============================================================================

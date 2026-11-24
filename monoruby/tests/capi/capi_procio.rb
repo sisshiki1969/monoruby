@@ -74,6 +74,11 @@ Dir.mktmpdir do |dir|
   File.write(f, "x")
   File.open(f, "a") { |io| p P.io_mode_append(io) }
   File.open(f, "r") { |io| p P.io_mode_append(io) }
+  ["w", "a", "r", "r+", "w+", File::WRONLY | File::CREAT | File::EXCL].each_with_index do |mode, i|
+    name = File.join(dir, "m#{i}")
+    File.write(name, "") if mode == "r" || mode == "r+"
+    File.open(name, mode) { |io| p P.io_mode_open_flags(io) }
+  end
 end
 p P.io_open_descriptor(path)
 p P.cloexec
