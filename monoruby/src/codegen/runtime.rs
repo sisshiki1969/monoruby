@@ -756,10 +756,15 @@ pub(super) extern "C" fn yield_symbol_proc(
             Err(MonorubyErr::argumenterr("no receiver given"))
         } else {
             let recv = lfp.register(args_slot).unwrap();
-            let rest: smallvec::SmallVec<[Value; 8]> = (1..pos_num)
-                .map(|i| lfp.register(args_slot + i).unwrap())
-                .collect();
-            vm.dispatch_symbol_proc(globals, symbol, outer, recv, &rest, None, None)
+            if pos_num == 1 {
+                // `yield x`: no argument list to build.
+                vm.dispatch_symbol_proc(globals, symbol, outer, recv, &[], None, None)
+            } else {
+                let rest: smallvec::SmallVec<[Value; 8]> = (1..pos_num)
+                    .map(|i| lfp.register(args_slot + i).unwrap())
+                    .collect();
+                vm.dispatch_symbol_proc(globals, symbol, outer, recv, &rest, None, None)
+            }
         }
     } else {
         vm.callsite_args(globals, lfp, callid, None)

@@ -629,6 +629,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     /// after the probe has missed, and what it returns is stored under
     /// `hash` — so it must digest to `hash` and be one `eq` would accept.
     /// An update of an existing entry never calls it.
+    #[inline]
     pub(crate) fn insert_full_prehashed_with_key(
         &mut self,
         hash: HashValue,

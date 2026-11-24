@@ -339,6 +339,7 @@ impl<'a> MarshalReader<'a> {
         Ok(b)
     }
 
+    #[inline]
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.pos + n > self.data.len() {
             return Err(MonorubyErr::argumenterr("marshal data too short"));
@@ -356,6 +357,7 @@ impl<'a> MarshalReader<'a> {
     /// - 0x80..0xfa (-123..-1 after adding 5) → negative small int
     /// - 0x01..0x04 → positive multi-byte (1..4 LE bytes follow)
     /// - 0xfc..0xff → negative multi-byte (1..4 LE bytes follow, count = -n)
+    #[inline]
     fn read_fixnum(&mut self) -> Result<i32> {
         let b = self.read_byte()? as i8;
         if b == 0 {
@@ -487,6 +489,7 @@ impl<'a> MarshalReader<'a> {
     /// Run the load proc on `value` (if one was given) and return its
     /// replacement, unless `value` is a container still under
     /// construction (a self-reference), which CRuby does not visit.
+    #[inline]
     fn fire_proc(
         &mut self,
         vm: &mut Executor,
@@ -690,6 +693,7 @@ impl<'a> MarshalReader<'a> {
     /// Format: inner_object + marshal_int(ivar_count) + (symbol + value) pairs
     ///
     /// The most common case is a UTF-8 string: I + " + data + 1 + :E + T
+    #[inline]
     fn read_ivar_wrapped(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
         let inner_tag = self.read_byte()?;
         match inner_tag {
