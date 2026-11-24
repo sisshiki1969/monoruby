@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-630284b3.js";
+            window.path_to_searchindex_js = "searchindex-a399d385.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -15732,8 +15732,10 @@ CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { 
 <hr>
 <h2 id="4-ruby-で書かれているメソッド"><a class="header" href="#4-ruby-で書かれているメソッド">4. Ruby で書かれているメソッド</a></h2>
 <p><code>builtins/array.rb</code> に <code>initialize</code> / <code>each</code> / <code>reverse_each</code> /
-<code>each_with_index</code> / <code>each_index</code> / <code>map</code> / <code>map!</code> / <code>bsearch</code> /
-<code>bsearch_index</code> / <code>dig</code> / <code>tally</code> / <code>filter_map</code> / <code>cycle</code> / <code>combination</code> /
+<code>each_with_index</code> / <code>each_index</code> / <code>map</code> / <code>map!</code> / <code>select</code> (<code>filter</code> /
+<code>find_all</code>) / <code>reject</code> / <code>partition</code> / <code>flat_map</code> (<code>collect_concat</code>) /
+<code>bsearch</code> / <code>bsearch_index</code> / <code>dig</code> / <code>tally</code> / <code>filter_map</code> / <code>cycle</code> /
+<code>combination</code> /
 <code>permutation</code> / <code>repeated_*</code> / <code>at</code> / <code>to_ary</code> / <code>deconstruct</code> / <code>drop_while</code> /
 <code>fetch_values</code> / <code>rindex</code> / <code>assoc</code> / <code>rassoc</code> / <code>values_at</code> / <code>__zip_pull</code> が
 ある。</p>
@@ -15793,9 +15795,14 @@ Ruby を走らせうるので、格納ポインタを temp スタックで root 
 <code>try_convert_to_array</code> は <code>rb_check_funcall</code> の 4 段（ユーザーの
 <code>respond_to?</code> → <code>to_ary</code> → <code>respond_to_missing?</code> → <code>method_missing</code>）を
 ruby/spec どおりに踏む。</li>
-<li><strong><code>flat_map</code></strong>: 蓄積先は Rust の <code>Vec</code> ではなく <strong>rooted な Ruby Array</strong>
-（<code>vm.temp_array_*</code>）。<code>invoke_block</code> はすべて safepoint だからで、
-gc-stress の optcarrot が落ちた事例が <a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a> にある。</li>
+<li><strong><code>select</code> / <code>reject</code> / <code>partition</code> / <code>flat_map</code></strong>: Ruby 実装（§4）。
+集めた要素はフレームのローカル（Ruby の Array）にあるので、ブロック呼び出しを
+またぐ root を手で書く必要がない（Rust 版は temp スタックに積んでいた。
+<code>flat_map</code> が素の <code>Vec</code> に貯めて gc-stress の optcarrot を落とした事例が
+<a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a> にある）。<code>flat_map</code> はブロックの返した Array が
+1〜2 要素ならその場で <code>&lt;&lt;</code> し、3 要素以上は private な
+<code>Array#__concat_to(dst, src)</code> を 1 回呼ぶ（JIT コードからの native 呼び出しは
+約 200 命令かかり、<code>Array#concat</code> は rest 引数と変換でさらに重い）。</li>
 <li><strong><code>pack</code></strong>: <code>string/pack.rs</code> の CRuby <code>pack.c</code> 忠実移植で、実行時の
 高速経路は特に無い。</li>
 <li><strong><code>shuffle</code> / <code>sample</code></strong>: CRuby の <code>RAND_UPTO</code>（<code>rb_random_ulong_limited</code>）
