@@ -96,6 +96,30 @@ pub(crate) fn take_cli_e_script(path: &std::path::Path) -> bool {
     }
 }
 
+/// Set for the main script when its ruby `#!` line ends in `\r\n`: the
+/// line it is on. prism warns about it only for a main script it found
+/// the `#!` line of itself (`pm_options_main_script_set`), which would
+/// also have it search a script for that line as `-x` does; monoruby
+/// does that search in `main.rs`, so the warning comes from there too.
+/// Armed for a single path and consumed on first match, like the
+/// markers above.
+static CLI_SHEBANG_CR: Mutex<Option<(PathBuf, usize)>> = Mutex::new(None);
+
+/// Arm the `#!`-line-ends-in-`\r` marker for the main script at `path`.
+pub fn set_cli_shebang_cr(path: PathBuf, line: usize) {
+    *CLI_SHEBANG_CR.lock().unwrap() = Some((path, line));
+}
+
+/// Consume the `#!`-line marker if `path` is the main script.
+pub(crate) fn take_cli_shebang_cr(path: &std::path::Path) -> Option<usize> {
+    let mut guard = CLI_SHEBANG_CR.lock().unwrap();
+    if matches!(&*guard, Some((p, _)) if p == path) {
+        guard.take().map(|(_, line)| line)
+    } else {
+        None
+    }
+}
+
 thread_local! {
     /// The file a `require` / `load` is running and the encoding of its
     /// path String (#2090); consumed by its parse.

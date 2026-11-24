@@ -526,14 +526,27 @@ fn search_script_in_path(name: &str) -> Option<PathBuf> {
 /// line): strip everything before the first `#!`-line that mentions
 /// `ruby`, replacing it with blank lines so line numbers stay stable.
 /// With `forced` set, not finding such a line is an error.
-fn preprocess_shebang(code: Vec<u8>, forced: bool) -> Result<Vec<u8>, String> {
+///
+/// Also answers the line of the script's ruby `#!` line when that line
+/// ends in `\r\n`, which the parse warns about.
+fn preprocess_shebang(code: Vec<u8>, forced: bool) -> Result<(Vec<u8>, Option<usize>), String> {
     fn contains(hay: &[u8], needle: &[u8]) -> bool {
         hay.windows(needle.len()).any(|w| w == needle)
     }
+    /// `line` with its terminator: a `#!` line naming ruby.
+    fn ruby_shebang(line: &[u8]) -> bool {
+        line.starts_with(b"#!") && contains(line, b"ruby")
+    }
+    fn carriage_return(line: &[u8], lineno: usize) -> Option<usize> {
+        line.ends_with(b"\r\n").then_some(lineno + 1)
+    }
     if !forced {
-        let first_line = code.split(|&b| b == b'\n').next().unwrap_or(&[]);
+        let first_line = code.split_inclusive(|&b| b == b'\n').next().unwrap_or(&[]);
         if !(first_line.starts_with(b"#!") && !contains(first_line, b"ruby")) {
-            return Ok(code);
+            let cr = ruby_shebang(first_line)
+                .then(|| carriage_return(first_line, 0))
+                .flatten();
+            return Ok((code, cr));
         }
     }
     let mut offset = 0;
@@ -545,10 +558,11 @@ fn preprocess_shebang(code: Vec<u8>, forced: bool) -> Result<Vec<u8>, String> {
             .map(|p| offset + p + 1)
             .unwrap_or(code.len());
         let line = &code[offset..end];
-        if line.starts_with(b"#!") && contains(line, b"ruby") {
+        if ruby_shebang(line) {
+            let cr = carriage_return(line, lineno);
             let mut new_code = vec![b'\n'; lineno + 1];
             new_code.extend_from_slice(&code[end..]);
-            return Ok(new_code);
+            return Ok((new_code, cr));
         }
         offset = end;
         lineno += 1;
@@ -556,7 +570,7 @@ fn preprocess_shebang(code: Vec<u8>, forced: bool) -> Result<Vec<u8>, String> {
     if forced {
         Err("no Ruby script found in input".to_string())
     } else {
-        Ok(code)
+        Ok((code, None))
     }
 }
 
@@ -776,15 +790,16 @@ fn main() {
     // Determine the program source.
     let mut prog_args = std::mem::take(&mut opts.args);
     let (code, path): (Vec<u8>, PathBuf) = if !opts.exec.is_empty() {
-        // Multiple `-e` options form a single program (joined by
-        // newlines), matching CRuby, so `-r` libraries and `at_exit`
-        // handlers are processed once around the combined script.
+        // Multiple `-e` options form a single program, matching CRuby,
+        // so `-r` libraries and `at_exit` handlers are processed once
+        // around the combined script. Each one is a line of it, the last
+        // included: CRuby ends every `-e` with a newline, so a `\r` that
+        // closes one is a line ending and not "\r in middle of line".
         let code: Vec<u8> = opts
             .exec
             .iter()
-            .map(|s| os_bytes(s))
-            .collect::<Vec<_>>()
-            .join(&b'\n');
+            .flat_map(|s| os_bytes(s).iter().copied().chain([b'\n']))
+            .collect();
         (code, PathBuf::from("-e"))
     } else {
         let first = if prog_args.is_empty() {
@@ -847,7 +862,7 @@ fn main() {
     };
 
     // `-x` / a non-ruby `#!` first line: strip the leading garbage.
-    let code = match preprocess_shebang(code, opts.dash_x) {
+    let (code, shebang_cr) = match preprocess_shebang(code, opts.dash_x) {
         Ok(c) => c,
         Err(msg) => {
             eprintln!("monoruby: {msg} (LoadError)");
@@ -908,6 +923,9 @@ fn main() {
     // which keeps the flip-flop / condition-literal warnings and a
     // top-level unused variable quiet. Before `-c`, whose parse is the
     // main script's too.
+    if let Some(line) = shebang_cr {
+        parser::set_cli_shebang_cr(path.clone(), line);
+    }
     if !opts.exec.is_empty() {
         parser::set_cli_e_script(path.clone());
         // A `-e` script is read in the *locale's* encoding, not UTF-8 —
