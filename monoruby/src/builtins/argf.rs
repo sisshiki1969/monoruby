@@ -113,6 +113,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_rest(argf_class, "print", print);
     globals.define_builtin_func_rest(argf_class, "printf", printf);
     globals.define_builtin_func_rest(argf_class, "puts", puts);
+    globals.define_builtin_func(argf_class, "putc", putc, 1);
 
     // The one process-wide instance, sharing the `ARGV` array as its
     // queue. Bound in `Globals::argf` so `Kernel#gets` and the
@@ -292,16 +293,15 @@ fn finish_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Resul
         // A double close is harmless; other errors propagate.
         let _ = invoke0(vm, globals, cur, "close");
     }
-    // CRuby flushes a read stream's tied writer before each read, so the
-    // in-place output is on disk once its input is drained, although it
-    // stays open as `$stdout` after the last file (#2174).
-    if inner.inplace.is_some() {
-        let out = globals
-            .get_gvar(IdentId::get_id("$stdout"))
-            .unwrap_or_default();
-        if out.ty() == Some(ObjTy::IO) && !matches!(out.as_io_inner().kind(), IoKind::Stdout) {
-            let _ = invoke0(vm, globals, out, "flush");
-        }
+    // `argf_close`: the retired file loses its writer (which stays in
+    // `inner`, marked, until `close` above and `flush` below have run —
+    // `$stdout` may be another IO by now). CRuby flushes a read stream's
+    // tied writer before each read, so the in-place output is on disk
+    // once its input is drained, although it stays open as `$stdout`
+    // after the last file (#2174).
+    if let Some(out) = expect_inner(argf)?.inplace_out {
+        let _ = invoke0(vm, globals, out, "flush");
+        expect_inner(argf)?.inplace_out = None;
     }
     Ok(())
 }
@@ -353,6 +353,7 @@ fn inplace_redirect(
         None,
     )?;
     globals.set_gvar(stdout_id, out);
+    expect_inner(argf)?.inplace_out = Some(out);
     Ok(())
 }
 
@@ -1203,39 +1204,62 @@ fn inplace_mode_assign(
 // ── writing (in-place edit output) ────────────────────────────────────
 //
 
-/// `ARGF`'s write family targets `$stdout` — which in-place edit mode
-/// points at the file being rewritten.
-fn stdout_delegate(
+/// `argf_write_io`: what `ARGF`'s write family writes to — the write
+/// side of the current file. That is the file an in-place walk is
+/// rewriting; outside one it is the file being read (or the one just
+/// drained), whose `write` raises IOError, "not opened for writing" or
+/// "closed stream" (#2175). `$stdout` plays no part.
+fn write_io(lfp: Lfp) -> Result<Value> {
+    let inner = expect_inner(lfp.self_val())?;
+    inner
+        .inplace_out
+        .or(inner.current)
+        .or(inner.last_current)
+        .ok_or_else(|| MonorubyErr::ioerr("not opened for writing"))
+}
+
+fn write_delegate(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     method: &str,
 ) -> Result<Value> {
-    let out = globals
-        .get_gvar(IdentId::get_id("$stdout"))
-        .unwrap_or_default();
+    let out = write_io(lfp)?;
     let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
     vm.invoke_method_inner(globals, IdentId::get_id(method), out, &args, None, None)
 }
 
 #[monoruby_builtin]
 fn write(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    stdout_delegate(vm, globals, lfp, "write")
+    write_delegate(vm, globals, lfp, "write")
 }
 
 #[monoruby_builtin]
 fn print(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    stdout_delegate(vm, globals, lfp, "print")
+    write_delegate(vm, globals, lfp, "print")
 }
 
 #[monoruby_builtin]
 fn printf(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    stdout_delegate(vm, globals, lfp, "printf")
+    write_delegate(vm, globals, lfp, "printf")
 }
 
 #[monoruby_builtin]
 fn puts(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    stdout_delegate(vm, globals, lfp, "puts")
+    write_delegate(vm, globals, lfp, "puts")
+}
+
+#[monoruby_builtin]
+fn putc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let out = write_io(lfp)?;
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("putc"),
+        out,
+        &[lfp.arg(0)],
+        None,
+        None,
+    )
 }
 
 #[cfg(test)]

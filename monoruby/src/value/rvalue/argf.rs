@@ -51,6 +51,11 @@ pub struct ArgfInner {
     /// In-place-edit extension (`-i` / `ARGF.inplace_mode=`):
     /// `Some("")` = no backup, `Some(".bak")` = keep backups.
     pub inplace: Option<String>,
+    /// The file an in-place walk is writing while `current` is being
+    /// read: CRuby's `write_io` of the current file, which is what
+    /// `ARGF.write` and its relatives write to — whatever `$stdout` has
+    /// become since (#2175). Cleared when `current` is retired.
+    pub inplace_out: Option<Value>,
 }
 
 impl ArgfInner {
@@ -68,6 +73,7 @@ impl ArgfInner {
             cur_encs: None,
             binmode: false,
             inplace: None,
+            inplace_out: None,
         }
     }
 
@@ -77,6 +83,9 @@ impl ArgfInner {
             v.mark(alloc);
         }
         if let Some(v) = self.last_current {
+            v.mark(alloc);
+        }
+        if let Some(v) = self.inplace_out {
             v.mark(alloc);
         }
         if let Some(v) = self.filename {

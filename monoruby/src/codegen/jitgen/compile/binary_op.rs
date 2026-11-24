@@ -810,7 +810,7 @@ impl<'a> JitContext<'a> {
         // The ways out of `compile_method_call` that would leave the arm
         // unfinished, hoisted (as `pic_groups` does) so the arm always lands
         // on the merge.
-        if self.jit_visibility_blocks(callid, visibility)
+        if self.jit_visibility_blocks(callid, visibility, fid)
             || self.store[fid].possibly_capture_without_block()
         {
             return Ok(false);

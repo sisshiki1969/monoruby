@@ -802,7 +802,7 @@ impl<'a> JitContext<'a> {
             let Some((fid, visibility)) = self.jit_check_call(class, Some(name)) else {
                 continue;
             };
-            if fid != func_id || self.jit_visibility_blocks(callid, visibility) {
+            if fid != func_id || self.jit_visibility_blocks(callid, visibility, fid) {
                 continue;
             }
             set.push(class);
@@ -933,7 +933,7 @@ impl<'a> JitContext<'a> {
         // method reached without a func-call receiver deopts to the VM, which
         // raises `NoMethodError` (a plain `obj[i]` / `obj + x` while an
         // explicit-`self` `self[i]` / `self + x` compiles inline).
-        if self.jit_visibility_blocks(callid, visibility) {
+        if self.jit_visibility_blocks(callid, visibility, func_id) {
             return Ok(CompileResult::Deopt);
         }
         let callsite = &self.store[callid];
@@ -2958,7 +2958,7 @@ impl<'a> JitContext<'a> {
                 // the *slot*, which the deferral left stale. Box it here,
                 // on the one path into the call, exactly like the
                 // constants above.
-                state.home_deferred_floats(ir, &deferred_homes, generic_yield);
+                state.home_deferred_floats(ir, &deferred_homes);
             }
         }
         if frameless {

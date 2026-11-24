@@ -3348,20 +3348,27 @@ impl<'a> JitContext<'a> {
 
     ///
     /// Bet-confirmation for the write-through keeps a call's subtree made
-    /// (stage 1'): the subtree had a deopt-able exit or a generic yield,
-    /// so a salvage re-entry can run its compiled remainder — or the VM
-    /// can run it outright — writing the kept slots with nothing
+    /// (stage 1'): the subtree had a generic yield, so a block may have
+    /// run outside the unit, writing the kept slots with nothing
     /// refreshing the raw homes. Re-widen every view the subtree kept:
     /// the boxed slot stores were emitted either way, so the slots are
     /// current and `S` is sound; the emitted refreshes go dead (their
     /// resolve keeps the store — it targets the owner's save area or
     /// spill slot, both dead once nothing reads the view).
     ///
-    // Dormant by construction today, verified by probe: a compiled
-    // generic `yield` cannot currently appear *inside* a specialized
-    // subtree — a call site passing `&blk` refuses specialization, and
-    // the given-block resolver only fails at a unit root, which is not a
-    // subtree. The belt exists for the day the specializer widens.
+    /// Not a view whose boxing the subtree *deferred* (stage 1'', the
+    /// owner at `F(spill home)`): there the stores compiled into this unit
+    /// wrote the home and nothing else, so the slot is the stale half and
+    /// `S` would read whatever it held before (#2184 — `t = 0.0; m { |v| t
+    /// += v }; t` answered `nil` once `m` handed a block of its own on). A
+    /// block that leaves the unit and can reach the local ends the
+    /// deferral where it leaves, boxing the home on that path
+    /// (`AbstractState::unbox_to_S_for_outgoing_block`); a claim still
+    /// deferred here is one no such block reached.
+    ///
+    // Reached when a specialized callee hands its own block on (`g(&b)`,
+    // a generic `yield` in a block of the unit's root): the mark travels
+    // up one frame per return, past the frames that block can reach.
     #[coverage(off)]
     pub(super) fn drain_kept_outer_views(&mut self, mark: usize, state: &mut AbstractState) {
         let current = self.stack_frame.len() - 1;
@@ -3369,6 +3376,14 @@ impl<'a> JitContext<'a> {
             if pos > current {
                 // The target frame was popped with its subtree; its state
                 // died with it.
+                continue;
+            }
+            let mode = if pos == current {
+                Some(state.mode(slot))
+            } else {
+                state.outer_mode(current - pos, slot)
+            };
+            if matches!(mode, Some(LinkMode::F(fpr)) if fpr.0 >= crate::codegen::PHYS_FPR_POOL) {
                 continue;
             }
             if pos == current {

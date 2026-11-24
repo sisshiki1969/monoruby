@@ -1181,7 +1181,7 @@ impl<'a> JitContext<'a> {
         // included), and a private method stays the interpreter's to reject.
         let resolved = cs.name.and_then(|name| {
             let (fid, visibility) = self.jit_check_method(class, name)?;
-            (!self.jit_visibility_blocks(callid, visibility)).then_some((name, fid))
+            (!self.jit_visibility_blocks(callid, visibility, fid)).then_some((name, fid))
         });
         let summary = resolved.and_then(|(_, fid)| self.store.recv_escape(fid));
         let plain =
@@ -1726,7 +1726,7 @@ impl<'a> JitContext<'a> {
         let resolved =
             self.jit_check_method(class, IdentId::_INDEX)
                 .and_then(|(fid, visibility)| {
-                    (!self.jit_visibility_blocks(callid, visibility)).then_some(fid)
+                    (!self.jit_visibility_blocks(callid, visibility, fid)).then_some(fid)
                 });
         let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
         let recv_dead = base == dst || self.dead_after(bc_pos, base);
