@@ -1185,6 +1185,8 @@ impl Executor {
             .store
             .get_constant_noautoload(OBJECT_CLASS, toplevel_binding_id())
             .and_then(crate::value::rvalue::Binding::try_new);
+        // The warnings an abandoned plain compile left queued.
+        let mut plain_warnings = None;
         let binding = match binding {
             Some(binding) => binding,
             None => match self.try_exec_main_script_plain(globals, &code, path)? {
@@ -1192,6 +1194,7 @@ impl Executor {
                 // The script names TOPLEVEL_BINDING itself: build the
                 // binding and run inside it, below.
                 Err(()) => {
+                    plain_warnings = Some(globals.store.compile_warnings.len());
                     let v = self.materialize_toplevel_binding(globals);
                     crate::value::rvalue::Binding::try_new(v)
                         .expect("materialized TOPLEVEL_BINDING is a Binding")
@@ -1203,6 +1206,13 @@ impl Executor {
             path.to_string_lossy().into_owned(),
             binding,
         )?;
+        // The script has now been parsed and compiled twice. Its
+        // warnings are the first parse's, which was the script's own
+        // (`-e`, a `#!` line, a top level that is not an eval's); the
+        // second would only repeat them.
+        if let Some(len) = plain_warnings {
+            globals.store.compile_warnings.truncate(len);
+        }
         self.flush_compile_warnings(globals);
         self.define_data(globals, path, data_offset);
         self.invoke_binding(globals, binding.binding().unwrap())

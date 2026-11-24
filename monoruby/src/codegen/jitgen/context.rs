@@ -1397,6 +1397,57 @@ pub(crate) struct JitContext<'a> {
     /// See `frameless_failed`. Only the code generation pass's list is
     /// kept; an analysis walk abandons the same compiles.
     pub(in crate::codegen) frameless_new_failures: Vec<FramelessSite>,
+    /// The locals whose float stores from an inlined block are not
+    /// deferred in this compilation — see [`NoDeferral`].
+    pub(in crate::codegen) no_deferral: std::rc::Rc<NoDeferral>,
+    /// The deferrals this compilation ended inside the call they were
+    /// made under, as the owner's iseq and slot
+    /// ([`Self::resolve_dyn_var_offsets`], `store_dynvar`). A `RefCell`
+    /// because the resolve pass sees the context by shared reference.
+    pub(in crate::codegen) deferral_cuts: std::cell::RefCell<Vec<(ISeqId, SlotId)>>,
+    /// The iseq of each frame of the unit, for the resolve pass to name
+    /// the owner of a home by.
+    specialized_iseqs: HashMap<SpecializedId, ISeqId>,
+    /// The deferred homes a `break` boxed on its way out, as `(stack
+    /// position, slot, home)`, until the frame at that position resumes
+    /// from the call the `break` ran under
+    /// ([`Self::confirm_break_boxes`]).
+    break_boxes: Vec<(usize, SlotId, crate::codegen::FPReg)>,
+}
+
+///
+/// The locals a compilation keeps out of stage-1'' deferred boxing.
+///
+/// A deferral leaves the local's slot stale and its raw-f64 home
+/// authoritative, and the frame that owns the local has one chain-exit
+/// write-back for the whole call it is suspended at, taken from its
+/// state when the call is over. That write-back is right at every exit
+/// under the call only while the deferral lasts to the end of the call:
+/// then it boxes the home, which every store kept current. A deferral
+/// that ends earlier — a block leaves the unit and the home is boxed for
+/// it (`proc { }`, `binding`, a block handed to a callee that is not
+/// inlined), a join surrenders the claim, a `break` — leaves the owner
+/// at "slot current", and an exit taken while the deferral was still on
+/// found the slot stale: `t = 1.5; m { |v| s = v.to_s; t += 1.0; pr =
+/// proc { } }` read `t` as `nil` once `v.to_s` deoptimized.
+///
+/// Where a deferral ends is known only once the callee is compiled, so
+/// the compilation finds out afterwards (`JitContext::deferral_cuts`)
+/// and is run again with the local listed here: its slot is made current
+/// when the call begins and every store keeps it current, the stage-1'
+/// write-through.
+///
+#[derive(Debug, Clone, Default)]
+pub(in crate::codegen) struct NoDeferral {
+    /// No local is deferred: where the per-local list did not settle.
+    pub(in crate::codegen) all: bool,
+    pub(in crate::codegen) slots: std::collections::HashSet<(ISeqId, SlotId)>,
+}
+
+impl NoDeferral {
+    pub(in crate::codegen) fn refuses(&self, iseq: ISeqId, slot: SlotId) -> bool {
+        self.all || self.slots.contains(&(iseq, slot))
+    }
 }
 
 ///
@@ -1455,6 +1506,10 @@ impl<'a> JitContext<'a> {
             loop_hoist_disabled: Default::default(),
             frameless_failed: Default::default(),
             frameless_new_failures: vec![],
+            no_deferral: Default::default(),
+            deferral_cuts: Default::default(),
+            specialized_iseqs: HashMap::default(),
+            break_boxes: vec![],
         }
     }
 
@@ -1537,6 +1592,12 @@ impl<'a> JitContext<'a> {
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
             frameless_failed: self.frameless_failed.clone(),
             frameless_new_failures: vec![],
+            // A walk must place the floats where the code generation
+            // pass will. It finds no cuts: only emitted code has them.
+            no_deferral: self.no_deferral.clone(),
+            deferral_cuts: Default::default(),
+            specialized_iseqs: HashMap::default(),
+            break_boxes: vec![],
         }
     }
 
@@ -1845,6 +1906,8 @@ impl<'a> JitContext<'a> {
                 base,
             },
         );
+        self.specialized_iseqs
+            .insert(frame.specialized_id, frame.iseq_id());
         // Stamp the JIT-owned spill bytes onto the AsmInfo so that
         // `side_exit_with_label` can emit the matching `addq rsp, _`
         // without re-walking the AsmIr. Method / specialized frames
@@ -2023,6 +2086,7 @@ impl<'a> JitContext<'a> {
         for pos in 0..self.stack_frame.len() {
             state.grow_frame_fpr_to(pos, self.stack_frame[pos].spill_home_watermark);
         }
+        self.confirm_break_boxes(state);
         Ok(frame)
     }
 
@@ -2331,6 +2395,91 @@ impl<'a> JitContext<'a> {
         frame.spill_home_watermark = id + 1;
         frame.spill_home_ids.insert(id);
         crate::codegen::FPReg(id)
+    }
+
+    ///
+    /// Whether the spill home *fpr* of the frame *outer* levels out was
+    /// issued while that frame has been waiting on its current call,
+    /// rather than held by it when the call began.
+    ///
+    /// The frame's parked view is the state it entered the call with (a
+    /// nested compile widens its slots, never grows its file), and
+    /// [`Self::alloc_spill_home_at`] issues ids past every live view of
+    /// the file, so an id beyond the parked file is a new one.
+    ///
+    pub(super) fn outer_home_issued_under_call(
+        &self,
+        outer: usize,
+        fpr: crate::codegen::FPReg,
+    ) -> bool {
+        self.outer_pos(outer)
+            .and_then(|pos| self.stack_frame[pos].abstract_state.as_ref())
+            .is_none_or(|parked| fpr.0 >= parked.fpr_len())
+    }
+
+    ///
+    /// Whether a float store into *slot* of the frame *outer* levels out
+    /// keeps the boxed slot current, because this compilation found the
+    /// local's deferral ending under the owner's call ([`NoDeferral`]).
+    ///
+    pub(super) fn outer_deferral_refused(&self, outer: usize, slot: SlotId) -> bool {
+        self.outer_pos(outer).is_none_or(|pos| {
+            self.no_deferral
+                .refuses(self.stack_frame[pos].iseq_id(), slot)
+        })
+    }
+
+    ///
+    /// A `break` boxed the deferred home *fpr* of *slot* in the frame at
+    /// *pos* and left the claim standing.
+    ///
+    pub(super) fn note_break_box(&mut self, pos: usize, slot: SlotId, fpr: crate::codegen::FPReg) {
+        if self.codegen_mode() {
+            self.break_boxes.push((pos, slot, fpr));
+        }
+    }
+
+    ///
+    /// The current frame resumes from a specialized call, in *state*:
+    /// answer for the `break`s under that call that boxed one of its
+    /// deferred homes.
+    ///
+    /// Such a `break` leaves the deferral on, which is right when the
+    /// frame resumes still deferred to that home: the home was current
+    /// all through the call, the `break`'s path included, and the
+    /// frame's chain exit boxes it. A frame that resumes any other way —
+    /// no path but the `break` comes back (`loop { t += 1.5; break if
+    /// done }`), or the paths that do never deferred — resumes at "slot
+    /// current", and an exit taken between a deferred store and the
+    /// `break` found the slot stale. That is a deferral ending under the
+    /// call ([`NoDeferral`]).
+    ///
+    fn confirm_break_boxes(&mut self, state: &AbstractState) {
+        let pos = self.current_frame_pos();
+        let iseq = self.iseq_id();
+        let mut cuts = vec![];
+        self.break_boxes.retain(|&(p, slot, fpr)| {
+            if p == pos && !matches!(state.mode(slot), LinkMode::F(f) if f == fpr) {
+                cuts.push((iseq, slot));
+            }
+            // What is left belongs to the frames still suspended.
+            p < pos
+        });
+        self.deferral_cuts.borrow_mut().extend(cuts);
+    }
+
+    ///
+    /// The deferral of *slot* of the frame *outer* levels out ends here,
+    /// under the owner's call, with no box for the resolve pass to find.
+    ///
+    pub(super) fn note_deferral_cut(&self, outer: usize, slot: SlotId) {
+        if self.codegen_mode()
+            && let Some(pos) = self.outer_pos(outer)
+        {
+            self.deferral_cuts
+                .borrow_mut()
+                .push((self.stack_frame[pos].iseq_id(), slot));
+        }
     }
 
     ///
@@ -3525,7 +3674,12 @@ impl<'a> JitContext<'a> {
                     }
                 }
             }
-            AsmInst::BoxOuterHomeToDynVar { home, offset, .. } => {
+            AsmInst::BoxOuterHomeToDynVar {
+                home,
+                offset,
+                reg,
+                at_break,
+            } => {
                 if let DynVarOffset::Hint { ids, extra } = offset {
                     let resolved = self.resolve_specialized_id_chain(ids) + *extra;
                     *offset = DynVarOffset::Concrete(resolved);
@@ -3539,6 +3693,16 @@ impl<'a> JitContext<'a> {
                 } = home
                 {
                     debug_assert!(fpr.0 >= crate::codegen::PHYS_FPR_POOL);
+                    // Every box of a deferred home that made it into the
+                    // unit's code ends a deferral under the owner's call
+                    // (`NoDeferral`), but for a `break`'s, which the
+                    // owner answers for when it resumes
+                    // (`confirm_break_boxes`). Read here, off the code
+                    // that is kept: a merge builds bridges it then
+                    // throws away.
+                    if !*at_break && let Some(&iseq) = self.specialized_iseqs.get(owner) {
+                        self.deferral_cuts.borrow_mut().push((iseq, *reg));
+                    }
                     let sigma = (self.resolve_specialized_id_chain(ids) + *extra) as i64;
                     let sizes = self.frame_sizes_or_panic(*owner);
                     *home = OuterFprHome::Concrete(Some(
@@ -4305,19 +4469,37 @@ impl<'a> JitContext<'a> {
 
     ///
     /// The id chain + live bump for addressing the frame at stack
-    /// position *pos* from the just-popped callee's rbp: every frame
-    /// from *pos* through the caller inclusive. Must run while the
+    /// position *pos* from the just-popped callee's frame pointer: every
+    /// frame from *pos* through the caller inclusive. Must run while the
     /// caller's call-site bump (`stack_offset += using`) is still
     /// applied, i.e. before `specialized_compile` restores it.
     ///
-    fn ids_spanning_from_callee(&self, pos: usize) -> (Vec<SpecializedId>, usize) {
-        let end = self.stack_frame.len();
-        let chain = &self.stack_frame[pos..end];
-        let ids = chain.iter().map(|f| f.specialized_id).collect();
-        let extra = chain
-            .iter()
-            .map(|f| f.stack_offset - f.base_stack_offset)
-            .sum();
+    /// The links are those of [`Self::specialized_ids_at_pos`]: a
+    /// frameless frame — the callee itself (*callee_frameless*) or one in
+    /// between — runs in a window of its caller's frame, not below it.
+    /// Counting the caller's whole frame for a frameless callee sent the
+    /// write of a surrendered literal past the owner's frame, into the
+    /// frame of the unit's caller.
+    ///
+    fn ids_spanning_from_callee(
+        &self,
+        pos: usize,
+        callee_frameless: bool,
+    ) -> (Vec<SpecializedId>, usize) {
+        let mut ids = vec![];
+        let mut extra = 0;
+        for (i, f) in self.stack_frame[pos..].iter().enumerate() {
+            let frameless = match self.stack_frame.get(pos + i + 1) {
+                Some(below) => below.asm_info.frameless,
+                None => callee_frameless,
+            };
+            if frameless {
+                extra += f.base_stack_offset;
+            } else {
+                ids.push(f.specialized_id);
+                extra += f.stack_offset - f.base_stack_offset;
+            }
+        }
         (ids, extra)
     }
 
@@ -4639,6 +4821,7 @@ impl<'a> JitContext<'a> {
                 FrameRef::make_mut(t).join_no_alloc(e);
             }
         }
+        let callee_frameless = frame.asm_info.frameless;
         for ReturnEdge {
             seg,
             chain,
@@ -4659,7 +4842,9 @@ impl<'a> JitContext<'a> {
                         // the resumed `S` reads a current slot.
                         (LinkMode::C(v), _) => {
                             let (ids, extra) = ids_extra
-                                .get_or_insert_with(|| self.ids_spanning_from_callee(lvl))
+                                .get_or_insert_with(|| {
+                                    self.ids_spanning_from_callee(lvl, callee_frameless)
+                                })
                                 .clone();
                             ir.lit2reg(v, GP::Rax);
                             ir.push(AsmInst::StoreDynVarSpecialized {
@@ -4677,7 +4862,9 @@ impl<'a> JitContext<'a> {
                                 && !matches!(tfm, LinkMode::F(r) if l == r) =>
                         {
                             let (ids, extra) = ids_extra
-                                .get_or_insert_with(|| self.ids_spanning_from_callee(lvl))
+                                .get_or_insert_with(|| {
+                                    self.ids_spanning_from_callee(lvl, callee_frameless)
+                                })
                                 .clone();
                             let owner = self.stack_frame[lvl].specialized_id;
                             ir.push(AsmInst::BoxOuterHomeToDynVar {
@@ -4692,6 +4879,7 @@ impl<'a> JitContext<'a> {
                                 },
                                 offset: DynVarOffset::Hint { ids, extra },
                                 reg: slot,
+                                at_break: false,
                             });
                         }
                         // A suspended pool `F` is path-invariant (its only

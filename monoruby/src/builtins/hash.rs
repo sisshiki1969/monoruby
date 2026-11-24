@@ -2823,18 +2823,56 @@ fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.expect_no_block()?;
     let hash = lfp.self_val().as_hash();
-    // The result is built on the temp stack, not in a bare `HashmapInner`:
-    // `aset` stores the frozen copy of an unfrozen String value turned
-    // key, which nothing else references, and the next key's `hash` /
-    // `eql?` may run a collection.
+    // Built the way `runtime::gen_hash_inner` builds a Hash literal: in a
+    // bare `HashmapInner`, sized for the receiver up front as CRuby's
+    // `rb_hash_new_with_size` sizes it, for as long as no Ruby code can
+    // run. The map lives on the Rust stack, which the collector does not
+    // scan, and it alone holds the frozen copy of an unfrozen String value
+    // turned key; that is sound because `aset_native_key` stores a packed
+    // key or a String of class String without a call, so nothing here
+    // reaches a safepoint. The first value whose `#hash` / `#eql?` may
+    // dispatch is declined, and from it on the result is built rooted
+    // (`invert_rooted`). Building every result rooted cost ~45% on a
+    // 1000-pair Hash (#2173): a call through `Hashmap::aset` and two
+    // root-slot stores per pair.
+    let mut map = HashmapInner::with_capacity(hash.len());
+    for (stored, (k, v)) in hash.iter().enumerate() {
+        if !map.aset_native_key(v, k, vm, globals)? {
+            return invert_rooted(vm, globals, hash, map, stored);
+        }
+    }
+    Ok(Value::hash_from_inner(map))
+}
+
+/// The rest of [`invert`], from the first pair whose new key may run Ruby
+/// code: `map`, holding the `stored` pairs before it, becomes the result
+/// Hash right away and stays on the temp stack while the others go in, so
+/// that a collection inside a key's `#hash` / `#eql?` finds every pair
+/// stored so far — the frozen copies of String keys included, which
+/// nothing else holds.
+///
+/// From here the receiver is walked as `rb_hash_foreach(hash,
+/// rb_hash_invert_i)` walks it (`Hashmap::walk`, which also keeps the
+/// pair being stored rooted): the new key's `hash` / `eql?` may take
+/// pairs out of the receiver (#2155). Nothing has run since the native
+/// part read the first `stored` pairs, so the walk passes over those.
+#[inline(never)]
+fn invert_rooted(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    hash: Hashmap,
+    map: HashmapInner,
+    mut stored: usize,
+) -> Result<Value> {
     vm.with_temp_scope(|vm| {
-        let res = Value::hash_from_inner(HashmapInner::default());
+        let res = Value::hash_from_inner(map);
         vm.temp_push(res);
         let mut map = res.as_hash();
-        // Walked as `rb_hash_foreach(hash, rb_hash_invert_i)` walks it:
-        // the new key's `hash` / `eql?` may take pairs out of the receiver
-        // (the walk keeps the one being stored rooted).
         hash.walk(vm, globals, |vm, globals, _, k, v| {
+            if stored > 0 {
+                stored -= 1;
+                return Ok(false);
+            }
             map.aset(v, k, vm, globals)?;
             Ok(false)
         })?;
@@ -8564,6 +8602,55 @@ mod tests {
             r = nil
             5.times { r = {a: "x#{1}", b: "y#{2}", c: K.new(3), d: K.new(4)}.invert }
             [r.map { |k, v| [k.inspect, v] }, r.keys.map(&:frozen?)]
+            "##,
+        );
+    }
+
+    /// `Hash#invert` builds its result in a bare map while each new key is
+    /// stored without a call, and roots it at the first key that may run
+    /// Ruby (#2173). The String keys stored before that are frozen copies
+    /// the bare map alone held, so a collection in the declined key's
+    /// `hash`, and the allocations after it that would reuse their cells,
+    /// must find them in the rooted result. Each round's Strings have
+    /// contents of their own: an fstring an earlier result still holds
+    /// would keep its copy alive and hide a lost root.
+    #[test]
+    fn hash_invert_roots_the_native_part_at_the_first_dispatching_key() {
+        run_test_once(
+            r##"
+            class K
+              attr_reader :i
+              def initialize(i) = @i = i
+              def hash = (GC.start; $junk = Array.new(2000) { "junk#{_1}" }; @i.hash)
+              def eql?(o) = o.is_a?(K) && o.i == @i
+              def inspect = "K#{@i}"
+            end
+            [0, 1, 3, 12, 39].map do |at|
+              h = (0...40).to_h { |i| [i, i == at ? K.new(i) : "s#{at}-#{i}"] }
+              r = h.invert
+              [r.keys.map(&:inspect).join(","), r.keys.count(&:frozen?), r.values.sum]
+            end
+            "##,
+        );
+    }
+
+    /// What the native part of `Hash#invert` stores is what `Hash#[]=`
+    /// stores: the fstring of an unfrozen String key, the first of equal
+    /// keys with the last value, `0.0` and `-0.0` as one key; and the
+    /// result never compares by identity.
+    #[test]
+    fn hash_invert_keys() {
+        run_test_once(
+            r##"
+            s = "str"
+            h = {a: s, b: "str", c: 1, d: 1, e: :sym, f: 1.5, g: nil, h: true,
+                 i: "x".encode("UTF-16LE"), j: "y".b, k: 0.0, l: -0.0, m: 2**70, n: 2**70}
+            r = h.invert
+            ci = {}.compare_by_identity.tap { |x| x["a"] = 1; x["a".dup] = 2 }
+            [r.to_a.inspect, r.keys.map(&:frozen?), r.keys[0].equal?(s), r.keys[0].equal?(-"str"),
+             r.keys.map { _1.encoding.to_s rescue nil }, r.compare_by_identity?,
+             ci.invert.to_a, ci.invert.compare_by_identity?,
+             {}.invert, {a: 1}.invert, (0...10).to_h { [_1, _1 % 3] }.invert]
             "##,
         );
     }

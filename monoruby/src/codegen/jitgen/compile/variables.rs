@@ -505,8 +505,28 @@ impl<'a> JitContext<'a> {
                         // occupied-pool tmp path of that bridge is exactly
                         // the fragile-under-pressure code the loop
                         // adoption exists to avoid.
+                        //
+                        // And only for a home the owner already had when
+                        // its call began (#2188). One issued under the
+                        // call — a stage-2 promotion by an earlier store
+                        // of this subtree — is filled from that store on,
+                        // and the owner's chain exit boxes an `F(home)`
+                        // on *every* way out of the call: an exit taken
+                        // before the promoting store (the capture guard
+                        // after `proc { }`, say) wrote the unfilled home
+                        // over the local. Such a home keeps the boxed
+                        // store, so the owner stays at `Sf` and its exit
+                        // reads the slot.
+                        //
+                        // The other end has the same rule: a deferral
+                        // must last until the call is over, and a local
+                        // whose deferral this compilation saw ending
+                        // earlier is not deferred (`NoDeferral`).
                         let hfpr = afpr;
-                        if hfpr.0 < crate::codegen::PHYS_FPR_POOL {
+                        if hfpr.0 < crate::codegen::PHYS_FPR_POOL
+                            || self.outer_home_issued_under_call(dst.outer, hfpr)
+                            || self.outer_deferral_refused(dst.outer, dst.reg)
+                        {
                             let home = self.keep_outer_sf_view(
                                 ids.clone(),
                                 *extra,
@@ -555,6 +575,15 @@ impl<'a> JitContext<'a> {
             return;
         }
         if keep.is_none() {
+            // A store of something else over a deferred float ends the
+            // deferral here, with the slot written by the store itself
+            // (`NoDeferral`).
+            if matches!(
+                state.outer_mode(dst.outer, dst.reg),
+                Some(LinkMode::F(fpr)) if fpr.0 >= crate::codegen::PHYS_FPR_POOL
+            ) {
+                self.note_deferral_cut(dst.outer, dst.reg);
+            }
             // The store invalidates whatever the outer frame's abstract
             // state claimed about this slot — in both places that track
             // it: the live chain this compile is reasoning about, and the
