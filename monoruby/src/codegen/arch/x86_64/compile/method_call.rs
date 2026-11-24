@@ -185,6 +185,7 @@ impl Codegen {
                 movq rdx, [r14 - (conv(args))];
                 movq rdi, rbx;
                 movq rsi, r12;
+                movl r8, (callid.get());
                 movq rax, (runtime::yield_symbol_proc1);
                 call rax;
                 jmp  done;

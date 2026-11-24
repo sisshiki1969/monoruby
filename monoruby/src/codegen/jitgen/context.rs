@@ -623,6 +623,14 @@ pub(super) struct JitStackFrame {
     refinements: RefinementSetId,
 
     ///
+    /// The Symbol this (method) frame was handed as its block: the call
+    /// site it is specialized for passes `&:sym`, and a `yield x` in it is
+    /// the call `x.sym` (`JitContext::symbol_yield`). `None` for a frame
+    /// that is not a method specialized for such a site.
+    ///
+    given_symbol: Option<IdentId>,
+
+    ///
     /// Whether this function is a method, a class definition, or a top-level.
     ///
     is_not_block: bool,
@@ -918,6 +926,10 @@ impl JitStackFrame {
         self.is_not_block = true;
     }
 
+    pub(super) fn set_given_symbol(&mut self, symbol: Option<IdentId>) {
+        self.given_symbol = symbol;
+    }
+
     pub(super) fn new(
         store: &Store,
         jit_type: JitType,
@@ -979,6 +991,7 @@ impl JitStackFrame {
             callid: None,
             abstract_state,
             refinements,
+            given_symbol: None,
             is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
@@ -1016,6 +1029,7 @@ impl JitStackFrame {
             callid: self.callid,
             abstract_state: self.abstract_state.clone(),
             refinements: self.refinements,
+            given_symbol: self.given_symbol,
             is_not_block: self.is_not_block,
             loop_info: indexmap::IndexMap::default(),
             loop_outer_reads: HashMap::default(),
@@ -1356,6 +1370,10 @@ pub(crate) struct JitContext<'a> {
     /// frame is marked `AsmInfo::self_fresh`. Taken by the frame's
     /// creation (`compile_specialized_func_uncached`).
     pub(super) pending_fresh_self: bool,
+    /// Set by `call` for the specialized compile it is about to start:
+    /// the call site passes `&:sym`, the Symbol a compile-time constant.
+    /// Taken by the frame's creation as its `given_symbol`.
+    pub(super) pending_given_symbol: Option<IdentId>,
     /// Also set by `inline_class_new` for that compile: the exit its
     /// callee's side exits hand the call back to. Taken before the
     /// allocation is emitted, with the receiver slot bound to the class
@@ -1429,6 +1447,7 @@ impl<'a> JitContext<'a> {
             frameless_budget_hits: 0,
             frameless_unit_refusals: 0,
             pending_fresh_self: false,
+            pending_given_symbol: None,
             pending_class_new_redo: None,
             outer_claim_barrier: false,
             widened_outer_log: vec![],
@@ -1513,6 +1532,7 @@ impl<'a> JitContext<'a> {
             frameless_budget_hits: 0,
             frameless_unit_refusals: 0,
             pending_fresh_self: false,
+            pending_given_symbol: None,
             pending_class_new_redo: None,
             loop_hoist_disabled: self.loop_hoist_disabled.clone(),
             frameless_failed: self.frameless_failed.clone(),
@@ -2008,6 +2028,17 @@ impl<'a> JitContext<'a> {
 
     pub(crate) fn current_method_given_block(&self) -> Option<JitBlockInfo> {
         self.resolve_given_block().flatten()
+    }
+
+    ///
+    /// The Symbol the current method was handed as its block, when the
+    /// method is compiled for a call site that passes `&:sym` (see
+    /// `JitStackFrame::given_symbol`).
+    ///
+    pub(crate) fn current_method_given_symbol(&self) -> Option<IdentId> {
+        let offset = self.current_method_frame()?.1;
+        let method_pos = self.stack_frame.len().checked_sub(1 + offset)?;
+        self.stack_frame[method_pos].given_symbol
     }
 
     ///
@@ -3046,6 +3077,7 @@ impl<'a> JitContext<'a> {
             outer: _,
             specialized_id: _,
             callid: _,
+            given_symbol: _,
             // A function of the frame's iseq, which the chain names: the
             // store does not change under a compilation.
             refinements: _,
@@ -3154,6 +3186,7 @@ impl<'a> JitContext<'a> {
                 outer: f.outer,
                 specialize_level: f.specialize_level,
                 specialized_id: f.specialized_id,
+                given_symbol: f.given_symbol,
             })
             .collect()
     }
@@ -3858,6 +3891,7 @@ impl<'a> JitContext<'a> {
             refinements,
             func_id,
             super_of: None,
+            visibility: None,
         };
         let mut extra = self.inline_cache_extra.borrow_mut();
         if !extra.contains(&entry) {

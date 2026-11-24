@@ -924,6 +924,7 @@ impl<'a> JitContext<'a> {
                 refinements: self.refinements(),
                 func_id: Some(func_id),
                 super_of: None,
+                visibility: None,
             });
             self.guard_class_version(state, ir, true);
             state.load(ir, rhs, GP::Rdi);

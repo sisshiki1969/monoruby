@@ -716,6 +716,15 @@ struct SymbolProcCache {
     class_id: ClassId,
     class_version: u32,
     func_id: FuncId,
+    /// The `yield x` site that asked for this entry last and has its
+    /// `SymbolTwin` up to date for it (`Globals::cached_symbol_method_at`);
+    /// `NO_SITE` until one does.
+    site: CallSiteId,
+}
+
+impl SymbolProcCache {
+    /// No call site: ids are indices into `Store::callsite_info`.
+    const NO_SITE: CallSiteId = CallSiteId(u32::MAX);
 }
 
 impl std::ops::Deref for Globals {
@@ -830,7 +839,60 @@ impl Globals {
             class_id,
             class_version,
             func_id,
+            site: SymbolProcCache::NO_SITE,
         });
+    }
+
+    ///
+    /// [`Globals::cached_symbol_method`] for the `yield x` site *callid*,
+    /// which also keeps that site's `SymbolTwin` current
+    /// (`Store::note_symbol_yield`): once per entry and site rather than
+    /// once per yield, the entry remembering the site it last did it for.
+    ///
+    #[inline(always)]
+    pub(crate) fn cached_symbol_method_at(
+        &self,
+        symbol: IdentId,
+        class_id: ClassId,
+        class_version: u32,
+        callid: CallSiteId,
+    ) -> Option<FuncId> {
+        let cache = self.symbol_proc_cache.as_ref()?;
+        (cache.symbol == symbol
+            && cache.class_id == class_id
+            && cache.class_version == class_version
+            && cache.site == callid)
+            .then_some(cache.func_id)
+    }
+
+    ///
+    /// The other half of [`Globals::cached_symbol_method_at`]: the entry
+    /// answers `recv.symbol` but last did so for another yield site, or
+    /// does not answer it at all. Either way the site's `SymbolTwin`
+    /// learns the receiver's class (`Store::note_symbol_yield`); the
+    /// method comes back only in the first case.
+    ///
+    #[inline(never)]
+    pub(crate) fn note_symbol_yield_miss(
+        &mut self,
+        symbol: IdentId,
+        recv: Value,
+        callid: CallSiteId,
+    ) -> Option<FuncId> {
+        let class_id = recv.class();
+        self.store.note_symbol_yield(callid, symbol, class_id);
+        if self.store.refinements().is_active() {
+            return None;
+        }
+        let cache = self.symbol_proc_cache.as_mut()?;
+        if cache.symbol != symbol
+            || cache.class_id != class_id
+            || cache.class_version != Self::class_version()
+        {
+            return None;
+        }
+        cache.site = callid;
+        Some(cache.func_id)
     }
 
     pub(crate) fn symbol_proc(&mut self, symbol: IdentId, pc: BytecodePtr) -> Value {

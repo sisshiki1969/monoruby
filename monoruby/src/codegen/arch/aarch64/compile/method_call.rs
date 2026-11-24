@@ -2127,7 +2127,7 @@ impl Codegen {
         self.jit.b_label(&resolved);
 
         if let Some((args, symbol1)) = symbol1 {
-            // yield_symbol_proc1(vm, globals, recv, symbol) -> x0 =
+            // yield_symbol_proc1(vm, globals, recv, symbol, callid) -> x0 =
             // Option<Value>.
             self.jit.bind_label(symbol1);
             monoasm_arm64!(&mut self.jit, mov x3, x0;); // the Symbol
@@ -2135,6 +2135,7 @@ impl Codegen {
             monoasm_arm64!(&mut self.jit,
                 mov x0, x19;
                 mov x1, x20;
+                mov x4, (callid.get() as u64);
                 str x30, [sp, #-16]!;
                 mov x9, (runtime::yield_symbol_proc1 as *const () as u64);
                 blr x9;

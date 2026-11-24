@@ -778,7 +778,10 @@ pub(super) extern "C" fn yield_symbol_proc(
             let recv = lfp.register(args_slot).unwrap();
             if pos_num == 1 {
                 // `yield x`: no argument list to build.
-                vm.dispatch_symbol_proc(globals, symbol, outer, recv, &[], None, None)
+                match vm.symbol_proc_method_at(globals, symbol, recv, callid) {
+                    Some(func_id) => vm.invoke_func_inner(globals, func_id, recv, &[], None, None),
+                    None => vm.dispatch_symbol_proc(globals, symbol, outer, recv, &[], None, None),
+                }
             } else {
                 let rest: smallvec::SmallVec<[Value; 8]> = (1..pos_num)
                     .map(|i| lfp.register(args_slot + i).unwrap())
@@ -807,16 +810,18 @@ pub(super) extern "C" fn yield_symbol_proc(
 ///
 /// `yield x` to a `&:sym` block found in the yielding method's own frame:
 /// `x.sym`. What `yield_symbol_proc` does for one plain argument, without
-/// the call site to read it from or `get_yield_data` before it.
+/// the call site to read it from or `get_yield_data` before it. *callid*
+/// is the yield's, for the note `Store::note_symbol_yield` keeps.
 ///
 pub(super) extern "C" fn yield_symbol_proc1(
     vm: &mut Executor,
     globals: &mut Globals,
     recv: Value,
     symbol: Value,
+    callid: CallSiteId,
 ) -> Option<Value> {
     let symbol = symbol.as_symbol();
-    if let Some(func_id) = vm.symbol_proc_method(globals, symbol, recv) {
+    if let Some(func_id) = vm.symbol_proc_method_at(globals, symbol, recv, callid) {
         // A failed call has already left its error in `vm`.
         return vm.invoke_func(globals, func_id, recv, &[], None, None);
     }

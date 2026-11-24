@@ -2229,6 +2229,7 @@ impl Store {
             class_new_init: None,
             yield_expanded: None,
             newarray_recv: false,
+            symbol_twins: Vec::new(),
         });
         id
     }
@@ -2255,6 +2256,80 @@ impl Store {
     /// [`CallSiteInfo::newarray_recv`].
     pub(crate) fn set_newarray_recv(&mut self, callid: CallSiteId) {
         self.callsite_info[callid.0 as usize].newarray_recv = true;
+    }
+
+    ///
+    /// A `yield x` at *callid* reached a `&:symbol` block with an *x* of
+    /// *class*: keep the site's [`SymbolTwin`] for the symbol up to date,
+    /// making it on the first visit.
+    ///
+    /// Called when the site's yield misses the one-entry `&:sym` cache,
+    /// and the first time it hits an entry another site put there
+    /// (`Globals::note_symbol_yield_miss`), so a site that keeps yielding
+    /// to one symbol and one class pays for this once.
+    ///
+    #[inline]
+    pub(crate) fn note_symbol_yield(
+        &mut self,
+        callid: CallSiteId,
+        symbol: IdentId,
+        class: ClassId,
+    ) {
+        if let Some(t) = self.callsite_info[callid.0 as usize].symbol_twins.first()
+            && t.symbol == symbol
+            && t.class == class
+        {
+            return;
+        }
+        self.note_symbol_yield_slow(callid, symbol, class)
+    }
+
+    #[inline(never)]
+    fn note_symbol_yield_slow(&mut self, callid: CallSiteId, symbol: IdentId, class: ClassId) {
+        let cs = &mut self.callsite_info[callid.0 as usize];
+        if let Some(i) = cs.symbol_twins.iter().position(|t| t.symbol == symbol) {
+            cs.symbol_twins[i].class = class;
+            cs.symbol_twins[..=i].rotate_right(1);
+            return;
+        }
+        if cs.symbol_twins.len() >= SYMBOL_TWINS_MAX || !cs.is_simple() || cs.pos_num != 1 {
+            return;
+        }
+        let (bc_pos, recv, dst) = (cs.bc_pos, cs.args, cs.dst);
+        let twin = self.new_callsite(
+            Some(symbol),
+            bc_pos,
+            0,
+            recv,
+            indexmap::IndexMap::default(),
+            vec![],
+            vec![],
+            vec![],
+            None,
+            None,
+            recv,
+            recv,
+            dst,
+            false,
+            false,
+            false,
+        );
+        self.callsite_info[callid.0 as usize].symbol_twins.insert(
+            0,
+            SymbolTwin {
+                symbol,
+                twin,
+                class,
+            },
+        );
+    }
+
+    /// The [`SymbolTwin`] of the `yield` site *callid* for *symbol*.
+    pub(crate) fn symbol_twin(&self, callid: CallSiteId, symbol: IdentId) -> Option<&SymbolTwin> {
+        self.callsite_info[callid.0 as usize]
+            .symbol_twins
+            .iter()
+            .find(|t| t.symbol == symbol)
     }
 
     pub(crate) fn new_constsite(
@@ -3708,7 +3783,34 @@ pub struct CallSiteInfo {
     /// The builtin (`array::newarray_send`) and the JIT's elided form
     /// (`runtime::opt_newarray_min`) read the flag.
     pub(crate) newarray_recv: bool,
+    /// For a `yield x` site: the call `x.sym` it amounts to for each
+    /// `&:sym` block it has been reached with — see [`SymbolTwin`]. The
+    /// one answered last comes first.
+    symbol_twins: Vec<SymbolTwin>,
 }
+
+///
+/// `yield x` to a `&:sym` block is the call `x.sym`. A method specialized
+/// for a call site that passes `&:sym` compiles its `yield` as that call
+/// (`JitContext::symbol_yield`), and a call needs a call site with the
+/// method's name on it: this is one, made the first time the yield site
+/// runs with that symbol, with the yielded value as the receiver and the
+/// yield's destination.
+///
+/// The yield bytecode has no inline cache to say what class the receiver
+/// was, so the run-time helpers note the last one here.
+///
+#[derive(Debug, Clone)]
+pub(crate) struct SymbolTwin {
+    pub(crate) symbol: IdentId,
+    /// The call site of `x.sym`.
+    pub(crate) twin: CallSiteId,
+    /// The class of the value yielded last.
+    pub(crate) class: ClassId,
+}
+
+/// How many symbols one `yield` site keeps a [`SymbolTwin`] for.
+const SYMBOL_TWINS_MAX: usize = 8;
 
 impl CallSiteInfo {
     /// Positions of splat arguments; empty when the site has none.

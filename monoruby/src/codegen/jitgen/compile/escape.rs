@@ -1238,6 +1238,7 @@ impl<'a> JitContext<'a> {
                     refinements: self.refinements(),
                     func_id: Some(fid),
                     super_of: None,
+                    visibility: None,
                 });
                 self.guard_class_version(state, ir, true);
                 if let ElementsPlan::Range(plan) = &plan {
@@ -1493,6 +1494,7 @@ impl<'a> JitContext<'a> {
                     refinements: self.refinements(),
                     func_id: resolved,
                     super_of: None,
+                    visibility: None,
                 });
                 self.guard_class_version(state, ir, true);
                 self.guard_range_cover_arg(state, ir, &plan);
@@ -1765,6 +1767,7 @@ impl<'a> JitContext<'a> {
                     refinements: self.refinements(),
                     func_id: resolved,
                     super_of: None,
+                    visibility: None,
                 });
                 self.guard_class_version(state, ir, true);
                 match plan {
