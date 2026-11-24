@@ -107,6 +107,7 @@ mod fixpoint_chain;
 mod flip_flop;
 mod float_across_block_call;
 mod float_call_convention;
+mod float_home_exits;
 mod float_literal_carry;
 mod float_mod_zero_dup_keys_chain_enum;
 mod float_speculation;

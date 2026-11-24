@@ -1617,7 +1617,9 @@ impl Codegen {
                     base: frame.base_stack_offset,
                 })
             }
-            AsmInst::BoxOuterHomeToDynVar { home, offset, reg } => {
+            AsmInst::BoxOuterHomeToDynVar {
+                home, offset, reg, ..
+            } => {
                 let disp = home.unwrap_concrete().expect(
                     "deferred outer home is always a spill slot — its resolve is unconditional",
                 );

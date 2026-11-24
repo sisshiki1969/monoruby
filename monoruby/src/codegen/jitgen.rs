@@ -767,7 +767,6 @@ impl Codegen {
         } else {
             JitType::Entry
         };
-        let frame = JitStackFrame::new(store, jit_type, 0, iseq_id, None, self_class, None);
         // The set each frame of the unit resolves under is a compile-time
         // constant of its iseq (`JitStackFrame::refinements`,
         // `doc/refinements.md` §6.1); `using` moves the class version,
@@ -777,27 +776,61 @@ impl Codegen {
         // that one; the unit's own snapshot and guards (below) take the
         // JIT's word, `jit_class_version`, which is what they compare.
         let vm_class_version = self.class_version();
-        let mut ctx = JitContext::new(
-            store,
-            true,
-            vm_class_version,
-            const_version,
-            vec![],
-        );
-        ctx.loop_hoist_disabled = self.loop_hoist_disabled();
-        ctx.frameless_failed = self.frameless_failed();
-        let frame = ctx.traceir_to_asmir(frame, None);
-        // Only now: every walk of this compilation answered from the same
-        // set (`JitContext::frameless_failed`).
-        self.note_frameless_failures(std::mem::take(&mut ctx.frameless_new_failures));
-        let mut frame = frame?;
-        let specialized_info = SpecializedCodeInfo::from(&frame);
+        // The front end runs again when it ended a float local's
+        // deferred boxing inside the call the deferral was made under
+        // (`context::NoDeferral`): where a deferral ends is known only
+        // once the callee is compiled, and the code is right only if the
+        // local was never deferred. Each run adds the locals it found. A
+        // run that finds only locals already listed turns deferral off
+        // altogether for the next one, which is the last, so the loop
+        // ends.
+        let mut no_deferral = context::NoDeferral::default();
+        let (mut ctx, mut frame) = loop {
+            let frame = JitStackFrame::new(
+                store,
+                jit_type.clone(),
+                0,
+                iseq_id,
+                None,
+                self_class,
+                None,
+            );
+            let mut ctx = JitContext::new(
+                store,
+                true,
+                vm_class_version,
+                const_version,
+                vec![],
+            );
+            ctx.loop_hoist_disabled = self.loop_hoist_disabled();
+            ctx.frameless_failed = self.frameless_failed();
+            ctx.no_deferral = std::rc::Rc::new(no_deferral.clone());
+            let frame = ctx.traceir_to_asmir(frame, None);
+            // Only now: every walk of this compilation answered from the
+            // same set (`JitContext::frameless_failed`).
+            self.note_frameless_failures(std::mem::take(&mut ctx.frameless_new_failures));
+            let mut frame = frame?;
 
-        // Now that every frame's `stack_offset` has been finalised
-        // and recorded in `JitContext::specialized_frame_sizes`,
-        // rewrite every `DynVarOffset::Hint(...)` in the AsmIr tree
-        // into a concrete byte offset before code generation runs.
-        ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
+            // Now that every frame's `stack_offset` has been finalised
+            // and recorded in `JitContext::specialized_frame_sizes`,
+            // rewrite every `DynVarOffset::Hint(...)` in the AsmIr tree
+            // into a concrete byte offset before code generation runs.
+            ctx.resolve_dyn_var_offsets(&mut frame.asm_info);
+            let cuts = ctx.deferral_cuts.take();
+            if cuts.is_empty() || no_deferral.all {
+                break (ctx, frame);
+            }
+            #[cfg(feature = "jit-log")]
+            if self.startup_flag {
+                eprintln!("    deferral cut under a call: {cuts:?}, compiling again");
+            }
+            let known = no_deferral.slots.len();
+            no_deferral.slots.extend(cuts);
+            if no_deferral.slots.len() == known {
+                no_deferral.all = true;
+            }
+        };
+        let specialized_info = SpecializedCodeInfo::from(&frame);
 
         let mut inline_cache = std::mem::take(&mut ctx.inline_method_cache);
         inline_cache.extend(ctx.inline_cache_extra.take());

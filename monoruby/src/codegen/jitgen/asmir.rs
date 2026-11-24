@@ -4023,6 +4023,10 @@ pub(super) enum AsmInst {
     /// exactly the paths where the join demotes the claim, so every
     /// resuming path arrives with the slot current.
     ///
+    /// *at_break* marks the one a `break` emits on its way out, which
+    /// leaves the claim standing: the others end the deferral where
+    /// they are (`context::NoDeferral`).
+    ///
     /// ### destroy
     /// - rax, rcx (x86-64) / x0, x9, x10 (aarch64), xmm0/d0
     ///
@@ -4030,6 +4034,7 @@ pub(super) enum AsmInst {
         home: OuterFprHome,
         offset: DynVarOffset,
         reg: SlotId,
+        at_break: bool,
     },
     LoadDynVarSpecialized {
         /// Machine stack offset in bytes. Emitted as a
