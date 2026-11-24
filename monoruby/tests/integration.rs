@@ -281,6 +281,7 @@ mod weakmap;
 mod wide_string_scan;
 mod wide_string_slice_tr;
 mod yaml_scalars;
+mod yield_block_kinds;
 mod zlib_deflate;
 mod zlib_gzip;
 

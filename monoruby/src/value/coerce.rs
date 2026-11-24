@@ -104,7 +104,7 @@ impl Value {
 
     /// CRuby's `rb_check_array_type`: the Array `self` is or converts to
     /// by `to_ary`, `None` when it does not convert.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn check_array_type(
         &self,
         vm: &mut Executor,

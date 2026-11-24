@@ -454,6 +454,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         self.entries.push(Bucket { hash, key, value });
     }
 
+    #[inline]
     pub(crate) fn insert_full(
         &mut self,
         hash: HashValue,
@@ -675,6 +676,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     /// conditions). As with the `==` variant, the `E`/`G` refs only feed
     /// the index table's fallible probe signature; the predicate never
     /// touches them.
+    #[inline]
     pub(crate) fn get_index_of_prehashed_with(
         &self,
         hash: HashValue,

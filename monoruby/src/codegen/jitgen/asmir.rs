@@ -3030,8 +3030,9 @@ pub(super) enum AsmInst {
     Yield {
         callid: CallSiteId,
         /// Statically simple call site: plain positional args, so the
-        /// runtime argument transfer takes the direct-copy path.
-        simple: bool,
+        /// argument transfer takes the direct-copy path. The first
+        /// argument slot and the number of arguments.
+        simple: Option<(SlotId, usize)>,
         error: AsmError,
         evict: AsmEvict,
     },

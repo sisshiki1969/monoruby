@@ -96,6 +96,13 @@ pub(crate) fn set_frame_arguments_simple(
     positional_simple(vm, globals, callee_fid, src, pos_num, callee_lfp)?;
     let callee = &globals.store[callee_fid];
     if !callee.no_keyword() {
+        if !globals[callid].kw_may_exists() {
+            // The call site writes no keyword and no `**hash`, so there
+            // is nothing to bind: the keyword parameters stay unbound
+            // and `**kwrest` nil, which is what `bind_keywords` leaves
+            // for such a site after building and dropping an empty map.
+            return handle_keyword_simple(callee, callee_lfp);
+        }
         coerce_hash_splat_args(vm, globals, callid, caller_lfp)?;
         handle_keyword(vm, globals, callee_fid, callid, callee_lfp, caller_lfp, None)?;
     }

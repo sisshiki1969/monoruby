@@ -3695,7 +3695,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
-        simple: bool,
+        simple: Option<(SlotId, usize)>,
         error: &DestLabel,
         evict: AsmEvict,
     ) -> bool {

@@ -1929,7 +1929,7 @@ impl Codegen {
     pub(in crate::codegen::jitgen) fn emit_yield(
         &mut self,
         callid: CallSiteId,
-        simple: bool,
+        simple: Option<(SlotId, usize)>,
         error: &DestLabel,
         evict: AsmEvict,
     ) -> bool {
@@ -1938,25 +1938,60 @@ impl Codegen {
         // they survive the C calls and hold the outer LFP / funcdata. The
         // continuation frame is already reserved by the surrounding
         // fpr_save_cont, so no extra push here.
+        let lfp = GP::R14.a64().0; // x22
         let f_yield = runtime::get_yield_data as *const () as u64;
-        let f_args = if simple {
+        let f_args = if simple.is_some() {
             runtime::jit_handle_arguments_no_block_for_yield as *const () as u64
         } else {
             runtime::jit_handle_arguments_no_block as *const () as u64
         };
         let symbol = self.jit.label();
         let done = self.jit.label();
-        // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
+        let slow = self.jit.label();
+        let resolved = self.jit.label();
+        // `yield x` to a bare `&:sym`: `x.sym`, with no call site to read.
+        let symbol1 = match simple {
+            Some((args, 1)) => Some((args, self.jit.label())),
+            _ => None,
+        };
+        // The block of a method body sits in its own frame. A Proc there
+        // carries its outer frame (always a heap frame, so never an
+        // invalidated one) and FuncId, and a Symbol is called by name, so
+        // neither needs `get_yield_data`: that is for a block literal of
+        // the caller, for a `yield` written inside a block, and for the
+        // errors. Twin of the head of x86 `gen_yield`.
+        // x0 = outer Lfp, x1 = FuncId at `resolved`.
+        self.a64_frame_load(0, lfp, LFP_OUTER as u32);
+        monoasm_arm64!(&mut self.jit, cbnz x0, slow;);
+        self.a64_frame_load(0, lfp, LFP_BLOCK as u32);
+        if let Some((_, symbol1)) = &symbol1 {
+            let symbol1 = symbol1.clone();
+            monoasm_arm64!(&mut self.jit,
+                mov x9, #(0xff);
+                and x9, x0, x9;
+                cmp x9, #(TAG_SYMBOL as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Eq, &symbol1);
+        }
         monoasm_arm64!(&mut self.jit,
-            mov x0, x19;
-            mov x1, x20;
-            str x30, [sp, #-16]!;
-            mov x9, (f_yield);
-            blr x9;
-            ldr x30, [sp], #16;
+            cbz x0, slow;                                 // no block
+            mov x9, #(0b111);
+            and x9, x0, x9;
+            cbnz x9, slow;                                // a proxy (or another immediate)
+            ldrb w9, [x0, #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::PROC.get() as u32);
         );
-        self.a64_resolve_invalidated_outer(0);
-        self.emit_handle_error(error); // null outer (no block given) -> error
+        self.jit.bcond_label(monoasm::Cond::Ne, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldr w1, [x0, #(PROC_FUNCID_OFFSET as u32)];
+            cmp x1, #(SYMBOL_TO_PROC_BODY_FUNCID.get());
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &slow);
+        monoasm_arm64!(&mut self.jit,
+            ldr x0, [x0, #(PROC_OUTER_OFFSET as u32)];
+            cbz x0, slow;
+        );
+        self.jit.bind_label(resolved.clone());
         // `&:sym` answers no FuncId, the symbol's frame in x0: the named
         // method is called straight from this frame, with no block frame
         // between (`yield_symbol_proc`).
@@ -1984,6 +2019,30 @@ impl Codegen {
             sub x11, sp, #((RSP_LOCAL_FRAME + LFP_META) as u32);
             str x10, [x11];
         );
+        // A block taking exactly the values yielded, and nothing else: they
+        // are copied into its frame here (the test
+        // `jit_handle_arguments_no_block_for_yield` itself begins with).
+        // Twin of x86 `gen_yield`.
+        let args_done = self.jit.label();
+        if let Some((args, pos_num)) = simple
+            && pos_num <= 8
+        {
+            let generic = self.jit.label();
+            monoasm_arm64!(&mut self.jit,
+                ldrb w9, [x26, #((FUNCDATA_META + META_KIND) as u32)];
+                tbz w9, #(4), generic;                    // not a simple iseq -> generic
+                ldrh w9, [x26, #(FUNCDATA_MIN as u32)];    // callee min arity
+                cmp w9, #(pos_num as u32);
+            );
+            self.jit.bcond_label(monoasm::Cond::Ne, &generic);
+            monoasm_arm64!(&mut self.jit, sub x13, sp, #(RSP_LOCAL_FRAME as u32);); // callee LFP base
+            for k in 0..pos_num {
+                self.a64_frame_load(9, lfp, conv(args + k) as u32);
+                self.a64_frame_store(9, 13, (LFP_ARG0 + 8 * k as i32) as u32);
+            }
+            self.jit.b_label(&args_done);
+            self.jit.bind_label(generic);
+        }
         // jit_handle_arguments_no_block(vm, globals, caller_lfp, callee_lfp,
         // callid). callee_lfp is computed before the dynamic callee-scratch
         // reservation; the pre-reservation sp is saved in x25 and restored
@@ -2007,6 +2066,7 @@ impl Codegen {
             mov sp, x25;                             // restore sp
         );
         self.emit_handle_error(error); // argument error -> error
+        self.jit.bind_label(args_done);
         // call_funcdata (indirect, fdata in x26): push the control frame, set
         // the callee LFP/PC, blr the codeptr, then restore the caller frame
         // (cfp from the saved prev slot, lfp from x29 == the JIT frame pointer).
@@ -2050,6 +2110,37 @@ impl Codegen {
             blr x9;
             ldr x30, [sp], #16;
         );
+        self.jit.b_label(&done);
+
+        // get_yield_data(vm, globals) -> x0 = outer Lfp, x1 = FuncId.
+        self.jit.bind_label(slow);
+        monoasm_arm64!(&mut self.jit,
+            mov x0, x19;
+            mov x1, x20;
+            str x30, [sp, #-16]!;
+            mov x9, (f_yield);
+            blr x9;
+            ldr x30, [sp], #16;
+        );
+        self.a64_resolve_invalidated_outer(0);
+        self.emit_handle_error(error); // null outer (no block given) -> error
+        self.jit.b_label(&resolved);
+
+        if let Some((args, symbol1)) = symbol1 {
+            // yield_symbol_proc1(vm, globals, recv, symbol) -> x0 =
+            // Option<Value>.
+            self.jit.bind_label(symbol1);
+            monoasm_arm64!(&mut self.jit, mov x3, x0;); // the Symbol
+            self.a64_frame_load(2, lfp, conv(args) as u32); // the value yielded
+            monoasm_arm64!(&mut self.jit,
+                mov x0, x19;
+                mov x1, x20;
+                str x30, [sp, #-16]!;
+                mov x9, (runtime::yield_symbol_proc1 as *const () as u64);
+                blr x9;
+                ldr x30, [sp], #16;
+            );
+        }
         self.jit.bind_label(done);
         self.set_deopt_with_return_addr(return_addr, evict);
         true

@@ -27,6 +27,15 @@ impl Proc {
     }
 }
 
+/// Offsets of a Proc's outer frame and FuncId from its `RValue`, for the
+/// `yield` the JIT emits (`gen_yield`).
+pub(crate) const PROC_OUTER_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(ProcInner, outer_lfp);
+pub(crate) const PROC_FUNCID_OFFSET: usize =
+    RVALUE_OFFSET_KIND + std::mem::offset_of!(ProcInner, func_id);
+// The aarch64 loads of these fields use scaled offsets.
+const _: () = assert!(PROC_OUTER_OFFSET % 8 == 0 && PROC_FUNCID_OFFSET % 4 == 0);
+
 #[derive(Debug, Clone)]
 pub struct ProcInner {
     outer_lfp: Option<Lfp>,

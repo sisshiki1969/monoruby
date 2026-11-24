@@ -5111,6 +5111,28 @@ impl Executor {
         if let Some(func_id) = self.symbol_proc_method(globals, symbol, recv) {
             return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
         }
+        self.dispatch_symbol_proc_slow(globals, symbol, outer, recv, args, bh, kw)
+    }
+
+    ///
+    /// [`Self::dispatch_symbol_proc`] past its cache: a refined proc, a
+    /// receiver whose `symbol` is not public or is absent, or the first
+    /// call for this symbol and class.
+    ///
+    #[inline(never)]
+    fn dispatch_symbol_proc_slow(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        outer: Lfp,
+        recv: Value,
+        args: &[Value],
+        bh: Option<BlockHandler>,
+        kw: Option<Hashmap>,
+    ) -> Result<Value> {
+        if let Some(func_id) = self.symbol_proc_method_slow(globals, symbol, recv) {
+            return self.invoke_func_inner(globals, func_id, recv, args, bh, kw);
+        }
         if let Some(set) = globals.refined_symbol_proc_set(outer) {
             return self.invoke_method_in(globals, symbol, recv, args, bh, kw, true, set);
         }
@@ -5152,7 +5174,7 @@ impl Executor {
 
     ///
     /// The public method `symbol` names on `recv`, from the one-entry
-    /// cache in `Globals` or resolved and recorded there.
+    /// cache in `Globals`.
     ///
     /// `None` whenever the plain path must run instead: a receiver whose
     /// `symbol` is private, protected or absent (the refusal and the
@@ -5164,7 +5186,11 @@ impl Executor {
     /// frame-dependent visibility rule let in would serve every later
     /// caller, whatever its frame.
     ///
-    fn symbol_proc_method(
+    /// This is the cache probe alone, small enough to inline into each
+    /// caller; a miss is [`Self::symbol_proc_method_slow`]'s.
+    ///
+    #[inline]
+    pub(crate) fn symbol_proc_method(
         &mut self,
         globals: &mut Globals,
         symbol: IdentId,
@@ -5178,11 +5204,24 @@ impl Executor {
         // back to a per-class lookup when the two resolve differently — so
         // a shared key could hand `false` the method it resolved for
         // `true`.
+        globals.cached_symbol_method(symbol, recv.class(), Globals::class_version())
+    }
+
+    ///
+    /// Resolve `symbol` on `recv` and record it for
+    /// [`Self::symbol_proc_method`], under the same conditions.
+    ///
+    fn symbol_proc_method_slow(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+    ) -> Option<FuncId> {
+        if globals.store.refinements().is_active() {
+            return None;
+        }
         let class_id = recv.class();
         let class_version = Globals::class_version();
-        if let Some(func_id) = globals.cached_symbol_method(symbol, class_id, class_version) {
-            return Some(func_id);
-        }
         let entry = globals.check_method_for_class(class_id, symbol)?;
         if entry.visibility() != Visibility::Public {
             return None;
