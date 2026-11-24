@@ -612,9 +612,10 @@ impl HashmapInner {
     ///
     /// Only for a map built through this method alone, from empty: it
     /// compares by `eql?`, holds no key that dispatches, is not being
-    /// iterated and has no tombstones. That is the builder of a Hash
-    /// literal (`runtime::gen_hash`), which keeps the map where the
-    /// collector does not look for as long as this answers `true`.
+    /// iterated and has no tombstones. Those are the builders of a Hash
+    /// literal (`runtime::gen_hash`) and of `Hash#invert`'s result, which
+    /// keep the map where the collector does not look for as long as
+    /// this answers `true`.
     ///
     #[inline(always)]
     pub(crate) fn aset_native_key(
