@@ -530,12 +530,17 @@ pub struct Globals {
     /// The `Warning[]` switches, one [`WarningCategory`] bit each.
     warning_categories: u8,
     /// The `Encoding` each `Encoding::<NAME>` constant object stands
-    /// for, keyed by the object. Filled by `init_encoding`; those objects
-    /// live as long as the process, so the keys never go stale. This is
+    /// for, keyed by the object. Filled by `init_encoding`. This is
     /// what lets `String#force_encoding(Encoding::UTF_8)` skip the
     /// object → name → parse round trip (CRuby's `rb_to_encoding` is an
     /// index read too).
     encoding_of_object: HashMap<u64, crate::value::rvalue::Encoding>,
+    /// The objects that are keys of `encoding_of_object`, as GC roots. A
+    /// key is an address, and the constant that held the object can be
+    /// reassigned or removed: once the object is collected, whatever is
+    /// allocated in its cell next (the String `"US-ASCII"`, say, on its
+    /// way into `force_encoding`) would be taken for that encoding.
+    encoding_object_roots: Vec<Value>,
     /// The `Encoding::<NAME>` object `String#encoding` answers for each
     /// `Encoding`, memoized on first use — the reverse of the above,
     /// resolved through the constant table once instead of per call.
@@ -978,6 +983,9 @@ impl alloc::GC<RValue> for Globals {
         for v in self.encoding_objects.values() {
             v.mark(alloc);
         }
+        for v in &self.encoding_object_roots {
+            v.mark(alloc);
+        }
         // The argv array and the bound ARGF object outlive any
         // reassignment of the `ARGV` / `ARGF` constants, so from then on
         // they are reachable only from here.
@@ -1245,6 +1253,7 @@ impl Globals {
             no_gems,
             warning_categories: WarningCategory::DEFAULT,
             encoding_of_object: HashMap::default(),
+            encoding_object_roots: vec![],
             encoding_objects: HashMap::default(),
             load_path: Value::array_empty(),
             gem_lib_dirs: vec![],
@@ -2485,14 +2494,33 @@ impl Globals {
 // `Encoding` objects ↔ `Encoding` values
 impl Globals {
     /// Record that the constant object `obj` (an `Encoding::<NAME>`)
-    /// stands for `enc`. Called by `init_encoding` for objects that are
-    /// never collected.
+    /// stands for `enc`. Called by `init_encoding`; the object is kept
+    /// alive from here on, since the record is keyed by its address.
     pub(crate) fn register_encoding_object(
         &mut self,
         obj: Value,
         enc: crate::value::rvalue::Encoding,
     ) {
-        self.encoding_of_object.insert(obj.id(), enc);
+        if self.encoding_of_object.insert(obj.id(), enc).is_none() {
+            self.encoding_object_roots.push(obj);
+        }
+    }
+
+    /// Drop the records of the objects `is_constant` does not answer
+    /// for: `init_encoding` calls it once the constants are final, for
+    /// an object made for a name and then replaced by another name's.
+    pub(crate) fn retain_encoding_objects(&mut self, mut is_constant: impl FnMut(Value) -> bool) {
+        self.encoding_object_roots.retain(|v| is_constant(*v));
+        let roots = &self.encoding_object_roots;
+        self.encoding_of_object
+            .retain(|id, _| roots.iter().any(|v| v.id() == *id));
+    }
+
+    /// The objects with a record, for the test that every one of them
+    /// is still an `Encoding` constant.
+    #[cfg(test)]
+    pub(crate) fn registered_encoding_objects(&self) -> (&[Value], usize) {
+        (&self.encoding_object_roots, self.encoding_of_object.len())
     }
 
     /// The `Encoding` an `Encoding::<NAME>` constant object stands for,
