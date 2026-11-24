@@ -1084,12 +1084,16 @@ impl<'a> JitContext<'a> {
                 // and the lexical chain stops at the enclosing method). One
                 // does not cover the other, and neither is worth resting on
                 // a per-case proof.
-                let home = self.current_method_given_block().and_then(|bi| {
-                    state.innermost_level().checked_sub(bi.outer)
-                });
-                state.unbox_to_S_for_outgoing_block(self, ir, home);
-                self.set_generic_yield();
-                state.compile_yield(ir, &self.store, callid);
+                //
+                // A method compiled for a call site that passes `&:sym`
+                // knows what the block is without having one to inline:
+                // `yield x` is the call `x.sym`.
+                if let Some(symbol) = self.current_method_given_symbol()
+                    && let Some(res) = self.symbol_yield(state, ir, callid, symbol)?
+                {
+                    return Ok(res);
+                }
+                self.generic_yield(state, ir, callid);
             }
             TraceIr::InlineCache => {
                 // The operand-carrier word of a two-word instruction: emits
@@ -1960,6 +1964,25 @@ impl<'a> JitContext<'a> {
 }
 
 impl<'a> JitContext<'a> {
+    ///
+    /// A `yield` to a block this unit does not hold: hand the block's home
+    /// chain over in its slots (see the `Yield` arm of `compile_instruction`)
+    /// and call it through the run-time resolution.
+    ///
+    pub(super) fn generic_yield(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+    ) {
+        let home = self
+            .current_method_given_block()
+            .and_then(|bi| state.innermost_level().checked_sub(bi.outer));
+        state.unbox_to_S_for_outgoing_block(self, ir, home);
+        self.set_generic_yield();
+        state.compile_yield(ir, &self.store, callid);
+    }
+
     ///
     /// Check whether a method or `super` of class *class_id* exists in compile time.
     ///

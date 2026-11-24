@@ -103,6 +103,13 @@ pub struct InlineCacheEntry {
     /// record has to name it, and a salvage re-validates that it is
     /// *still* missing.
     pub func_id: Option<FuncId>,
+    /// The visibility the method had when the site was compiled as a call
+    /// of it: `private :name` on a public method leaves the resolution
+    /// what it was and turns the call into a NoMethodError, so a salvage
+    /// re-validates this too. `None` for a record whose code does not
+    /// depend on it (a `super`, a missing method, a resolution folded
+    /// without a call).
+    pub visibility: Option<Visibility>,
 }
 
 #[derive(Debug, Clone)]

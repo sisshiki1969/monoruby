@@ -3268,32 +3268,38 @@ impl Store {
         name: Option<IdentId>,
         super_of: Option<FuncId>,
         refinements: RefinementSetId,
-    ) -> Option<FuncId> {
-        if let Some(method_name) = name {
+    ) -> (Option<FuncId>, Option<Visibility>) {
+        let func_id = if let Some(method_name) = name {
             // Re-ask with the *same* refinement set the compiler used;
             // asking the unrefined question would confirm an answer the
             // compiled code is no longer allowed to give
             // (`doc/refinements.md` §3.4).
-            self.check_method_with_refinements(recv_class, method_name, refinements)
-                .map(|entry| entry.func_id())
-                .flatten()
-                .map(|fid| self.site_target(method_name, refinements, fid))
+            let entry = self.check_method_with_refinements(recv_class, method_name, refinements);
+            let func_id = entry
+                .as_ref()
+                .and_then(|entry| entry.func_id())
+                .map(|fid| self.site_target(method_name, refinements, fid));
+            return (func_id, entry.map(|entry| entry.visibility()));
         } else if let Some(func_id) = super_of {
             // The question the compiler asked (`jit_check_super`): the JIT
             // compiles a `super` only where its answer does not depend on
             // the frame, so it can be asked again without one.
-            let name = self[func_id].name()?;
-            self.check_super(recv_class, func_id, name)
+            self[func_id]
+                .name()
+                .and_then(|name| self.check_super(recv_class, func_id, name))
         } else {
             // A `super` site re-resolves relative to the *executing frame of
             // the owning unit*. Without that frame (a salvage triggered from
             // an inlined specialized child, whose own lfp is not the
             // owner's) there is no sound answer — return None so the
             // comparison fails and the salvage falls back to a recompile.
-            let func_id = lfp?.method_func_id();
-            let name = self[func_id].name().unwrap();
-            self.check_super(recv_class, func_id, name)
-        }
+            lfp.and_then(|lfp| {
+                let func_id = lfp.method_func_id();
+                let name = self[func_id].name().unwrap();
+                self.check_super(recv_class, func_id, name)
+            })
+        };
+        (func_id, None)
     }
 
     pub(crate) fn update_inline_cache(&mut self, lfp: Lfp) -> bool {
@@ -3359,14 +3365,17 @@ impl Store {
             return None;
         };
         for entry in cache_map {
-            let func_id = self.check_method_for_name(
+            let (func_id, visibility) = self.check_method_for_name(
                 lfp,
                 entry.recv_class.id(),
                 entry.name,
                 entry.super_of,
                 entry.refinements,
             );
-            if func_id != entry.func_id {
+            // A re-scoped method is the same method: `private :name`
+            // after the compile leaves `func_id` what it was, and the
+            // call the unit holds is no longer one the program may make.
+            if func_id != entry.func_id || entry.visibility.is_some_and(|v| visibility != Some(v)) {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,
@@ -3538,14 +3547,17 @@ impl Store {
             .unwrap()
             .inline_cache_map;
         for entry in cache_map {
-            let func_id = self.check_method_for_name(
+            let (func_id, visibility) = self.check_method_for_name(
                 lfp,
                 entry.recv_class.id(),
                 entry.name,
                 entry.super_of,
                 entry.refinements,
             );
-            if func_id != entry.func_id {
+            // A re-scoped method is the same method: `private :name`
+            // after the compile leaves `func_id` what it was, and the
+            // call the unit holds is no longer one the program may make.
+            if func_id != entry.func_id || entry.visibility.is_some_and(|v| visibility != Some(v)) {
                 #[cfg(feature = "jit-log")]
                 crate::codegen::jit_stats::bump(
                     &crate::codegen::jit_stats::SALVAGE_FAIL_RESOLUTION_CHANGED,

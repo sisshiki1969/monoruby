@@ -71,6 +71,9 @@ pub(super) struct SpecCallSite {
     /// path keeps the per-site entries comparable.
     ///
     pub(super) chain: Vec<ChainStep>,
+    /// The Symbol the call site passes as the block, when the callee is
+    /// compiled for it (`JitStackFrame::given_symbol`).
+    pub(super) given_symbol: Option<IdentId>,
 }
 
 ///
@@ -84,6 +87,7 @@ pub(super) struct ChainStep {
     pub(super) outer: Option<usize>,
     pub(super) specialize_level: usize,
     pub(super) specialized_id: SpecializedId,
+    pub(super) given_symbol: Option<IdentId>,
 }
 
 ///

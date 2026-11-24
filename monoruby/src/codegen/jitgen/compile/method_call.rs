@@ -508,6 +508,120 @@ impl<'a> JitContext<'a> {
     }
 
     ///
+    /// `yield x` in a method compiled for a call site that passes `&:sym`
+    /// (`JitStackFrame::given_symbol`): the call `x.sym`, guarded on the
+    /// class *x* had the last time this site yielded to that symbol, with
+    /// the ordinary yield as the residual for any other receiver.
+    ///
+    /// ```text
+    ///         br_class_ne x, C -> residual
+    ///         <the ordinary compile of x.sym for C>   ; inlined / specialized
+    ///         br merge
+    ///   residual:
+    ///         <generic yield>                         ; `yield_symbol_proc1`
+    ///   merge:
+    /// ```
+    ///
+    /// The call is compiled through the site's [`SymbolTwin`], a call site
+    /// carrying the name, so the target gets everything a written-out call
+    /// gets, and the compile-time resolution is recorded under that name
+    /// for the class-version repair like any other.
+    ///
+    /// What makes the two the same call: a Symbol block calls the *public*
+    /// method of that name with no block and no refinements (a `&:sym`
+    /// written where refinements are active is a Proc, not the Symbol this
+    /// frame was compiled for), so the fast arm is only taken for a public
+    /// target, in a body that has no refinements of its own to resolve the
+    /// name under. Everything else — a private or protected or missing
+    /// method, `method_missing` — is the residual's.
+    ///
+    /// `None` when the site does not qualify, with *state* and *ir*
+    /// untouched.
+    ///
+    pub(super) fn symbol_yield(
+        &mut self,
+        state: &mut AbstractState,
+        ir: &mut AsmIr,
+        callid: CallSiteId,
+        symbol: IdentId,
+    ) -> JitResult<Option<CompileResult>> {
+        let callsite = &self.store[callid];
+        if !callsite.is_simple()
+            || callsite.pos_num != 1
+            || !self.refinements().is_empty()
+            || self.in_dispatch_arm()
+        {
+            return Ok(None);
+        }
+        let Some(twin) = self.store.symbol_twin(callid, symbol) else {
+            return Ok(None);
+        };
+        let (twin, seen) = (twin.twin, twin.class);
+        let recv = callsite.args;
+        let dst = callsite.dst;
+        // An object still elided in the argument slot is the generic
+        // yield's to build; a call would want it as its receiver.
+        if state.virtual_at(recv).is_some() {
+            return Ok(None);
+        }
+        // `true` and `false` share a guard only where they share the
+        // method (`CachedClass::BOOL`); not worth telling apart here.
+        let class = state.class(recv).unwrap_or(seen);
+        if matches!(class, TRUE_CLASS | FALSE_CLASS | BOOL_CLASS) {
+            return Ok(None);
+        }
+        let recv_class = CachedClass::from_class(class);
+        let Some((func_id, visibility)) = self.jit_check_method(recv_class, symbol) else {
+            return Ok(None);
+        };
+        if visibility != Visibility::Public || self.store[func_id].possibly_capture_without_block()
+        {
+            return Ok(None);
+        }
+
+        // As `method_call_with_residual`: any outcome of the fast arm but
+        // `Continue` rolls the whole attempt back.
+        let ir_save = ir.save();
+        let state_save = state.clone();
+        let depth = self.stack_frame_len();
+        let unfrozen_save = (self.unfrozen_slots.clone(), self.instr_unfrozen.clone());
+        let spec_len = self.specialized_methods_len();
+        let (entry, merge) = self.declare_merge(state, ir, &[recv], dst);
+        let residual = self.label();
+        let mut fast = entry.clone();
+        let outcome = self.compile_method_call(
+            &mut fast,
+            ir,
+            recv_class,
+            None,
+            func_id,
+            visibility,
+            twin,
+            RecvMissMode::Residual(residual),
+        );
+        if !matches!(outcome, Ok(CompileResult::Continue)) {
+            assert_eq!(
+                self.stack_frame_len(),
+                depth,
+                "a rolled-back fast arm left frames on the specialization stack"
+            );
+            ir.restore(ir_save);
+            self.specialized_methods_truncate(spec_len);
+            *state = state_save;
+            (self.unfrozen_slots, self.instr_unfrozen) = unfrozen_save;
+            self.discard_cond_results();
+            return Ok(None);
+        }
+        self.end_arm(fast, ir, &merge, true);
+        ir.push(AsmInst::Label(residual));
+        let mut rest = entry;
+        self.generic_yield(&mut rest, ir, callid);
+        self.end_arm(rest, ir, &merge, false);
+        self.bind_merge(state, ir, merge);
+        Ok(Some(CompileResult::Continue))
+    }
+
+    ///
     /// The "polymorphic but single-target" test: collect the receiver
     /// classes the VM observed at this call site (its polymorphic method
     /// cache plus the current inline-cache class — the PMC alone can miss a
@@ -751,6 +865,7 @@ impl<'a> JitContext<'a> {
             refinements: self.refinements(),
             func_id: None,
             super_of: self.super_of(callsite.name),
+            visibility: None,
         });
 
         self.guard_class_version(state, ir, true);
@@ -828,6 +943,7 @@ impl<'a> JitContext<'a> {
             refinements: self.refinements(),
             func_id: Some(func_id),
             super_of: self.super_of(callsite.name),
+            visibility: Some(visibility),
         });
 
         // `recv.send(:foo, ...)` with a literal method name: resolve the
@@ -1071,12 +1187,18 @@ impl<'a> JitContext<'a> {
                 //
                 for &class in classes.iter() {
                     if class != recv_class {
+                        // The member's own: a subclass may re-scope the
+                        // method it inherits.
+                        let visibility = self
+                            .jit_check_call(class, callsite.name)
+                            .map(|(_, visibility)| visibility);
                         self.inline_method_cache.push(InlineCacheEntry {
                             recv_class: class,
                             name: callsite.name,
                             refinements: self.refinements(),
                             func_id: Some(func_id),
                             super_of: self.super_of(callsite.name),
+                            visibility,
                         });
                     }
                 }
@@ -1661,6 +1783,19 @@ impl<'a> JitContext<'a> {
                 let block_exempt =
                     iseq_block.is_some() && !self.callsite_on_specialization_stack(callid);
 
+                // `recv.m(&:sym)` with the Symbol a compile-time constant
+                // is worth the callee frame for the same reason: only a
+                // callee compiled for this site knows what its `yield`
+                // calls (`symbol_yield`). A Symbol written where
+                // refinements are active is a Proc by now (`BlockCode`),
+                // not this constant.
+                let symbol_block = callsite
+                    .block_arg
+                    .and_then(|slot| state.is_symbol_literal(slot))
+                    .filter(|_| {
+                        block_fid.is_none() && !self.callsite_on_specialization_stack(callid)
+                    });
+
                 // A call without a block has nothing to gain from
                 // re-entering a method that is already a frame of this
                 // unit: that is recursion, and inlining `fib(n - 1)` into
@@ -1678,13 +1813,15 @@ impl<'a> JitContext<'a> {
                 if (((specializable || forwarded_initialize)
                     && !callee_in_unit
                     && (forward_exempt || self.specialize_level() < SPECIALIZE_DEPTH_LIMIT))
-                    || block_exempt)
+                    || block_exempt
+                    || symbol_block.is_some())
                     && !self.in_dispatch_arm()
                     && recv_class_proven
                     // See `callee_forwards_block` at the entry.
                     && !callee_forwards_block
                 {
-                    return self.specialized_iseq(
+                    self.pending_given_symbol = symbol_block;
+                    let res = self.specialized_iseq(
                         state,
                         ir,
                         callid,
@@ -1695,6 +1832,9 @@ impl<'a> JitContext<'a> {
                         None,
                         false,
                     );
+                    // A replayed compile makes no frame to take it.
+                    self.pending_given_symbol = None;
+                    return res;
                 }
                 (func_id, None, func_id)
             }
@@ -2455,6 +2595,7 @@ impl<'a> JitContext<'a> {
             refinements: self.refinements(),
             func_id: Some(init_fid),
             super_of: None,
+            visibility: None,
         });
 
         // The slot stores read the arguments as values: an argument the
@@ -3063,6 +3204,7 @@ impl<'a> JitContext<'a> {
             bmethod,
             args_info: args_info.clone(),
             chain: self.spec_call_chain(),
+            given_symbol: self.pending_given_symbol,
         };
         let hash = self.tower_hash(state);
         if let Some(result) = self.spec_memo_try_replay(&site, hash, state) {
@@ -3219,6 +3361,7 @@ impl<'a> JitContext<'a> {
         let mut frame = self.new_specialized_frame(iseq_id, outer, args_info, self_class);
         frame.asm_info.frameless = frameless;
         frame.asm_info.self_fresh = frameless && std::mem::take(&mut self.pending_fresh_self);
+        frame.set_given_symbol(self.pending_given_symbol.take());
         // A method body only: a block's `self` is its defining frame's,
         // whatever the yielding site's receiver slot says.
         frame.asm_info.self_is_callers = frameless

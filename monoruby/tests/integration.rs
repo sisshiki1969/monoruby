@@ -260,6 +260,7 @@ mod string_search_fast_path;
 mod stringio_encoding;
 mod strscan;
 mod super_called_name;
+mod symbol_literal_block;
 mod symbol_name_methods;
 mod symbol_proc_cache;
 mod symbol_proc_no_receiver;

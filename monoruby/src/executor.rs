@@ -5208,6 +5208,32 @@ impl Executor {
     }
 
     ///
+    /// [`Self::symbol_proc_method`] for `yield recv` at the site *callid*:
+    /// the same probe, which also keeps the site's `SymbolTwin` current —
+    /// on a miss too, where the caller goes on to the plain path.
+    ///
+    #[inline(always)]
+    pub(crate) fn symbol_proc_method_at(
+        &mut self,
+        globals: &mut Globals,
+        symbol: IdentId,
+        recv: Value,
+        callid: CallSiteId,
+    ) -> Option<FuncId> {
+        if !globals.store.refinements().is_active()
+            && let Some(func_id) = globals.cached_symbol_method_at(
+                symbol,
+                recv.class(),
+                Globals::class_version(),
+                callid,
+            )
+        {
+            return Some(func_id);
+        }
+        globals.note_symbol_yield_miss(symbol, recv, callid)
+    }
+
+    ///
     /// Resolve `symbol` on `recv` and record it for
     /// [`Self::symbol_proc_method`], under the same conditions.
     ///
