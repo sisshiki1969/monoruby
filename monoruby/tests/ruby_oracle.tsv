@@ -405,6 +405,7 @@
 0e807706f321288442201ed85be292de	["#<Enumerator:0xXX>", "#<Enumerator:0xXX>"]	__a = [];__a << (\n            [1, 2].each.to_s.sub(/0x[0-9a-f]+/, "0xXX")\n      
 0ea12292e6120b88a2aa0b88f1830d5e	[-1, 0, 0, 0, true, false, false, true]	__a = [];__a << ("\\xc3".casecmp("\\xe3"));__a << ("\\xc3".casecmp("\\xc3"));__a << 
 0eb451479b9e3deffa5ff499cb00893c	[:private_answer]	class P\n          def method_missing(name, *args) = :missed\n          p
+0ec2d48a7208b95326a409c637775e9b	[29, 2, 31, [29, 2], false, 31, 31, [31, 30, 29], 43, 43, -43.5, 43.5, Float, false, 1, [:k], [[:k, 29]], 3, "S29", [29, 30, 31], 90, [1, 2], [[1, 1], [2, 2]], [30, 31], "29", 29]	def pair(a, b) = yield([a, b])\n        def trip(a) = yield([a, a + 1, a
 0ec3628a644993ceba6c22fb3d0a00d9	[[[1, 2], {x: 3}, "blk"], [[[7, 8], {}, nil]]]	def inner(*a, **k, &b) = [a, k, b ? b.call : nil]\n        def fwd(*, **
 0ec6154b8e79917f352d1bb26c1ef181	[[227, 129, 130], 384, 1, false]	d = "/tmp/monoruby_test_rawpath_#{Process.pid}_#{rand(100000)}"\n   
 0ec621d058e56d2405776dcff5d7c373	["10 20 10", "a b a", "20", "00042", "ff", "10", "3.140000", "hello", "1 2", "x x", "42", "00042", "        42", "ff", "3.140000", "hello", "     00001", "00001     ", "00001     ", "00001     ", "         1", "   42", "   42", "abc", "         7"]	__a = [];__a << (sprintf("%1$d %2$d %1$d", 10, 20));__a << (sprintf("%1$s %2$s %
@@ -950,6 +951,7 @@
 2475f3fc8f38ad071f66332d846bc60b	"symbol"	x = case :symbol\n        when Integer then 'integer'\n        when Float
 2492f3c9adb70473764e1334e04095b3	"NIL\\nNIL\\nNIL\\nNIL\\n1\\n"	class NilClass; def to_s = "NIL"; end\n        r, w = IO.pipe\n        w.
 24980ee0ca7ee727c3d08bd9ef96c344	[31.5, 27.0, 1.0625324586456702e+22, 0.0]	def d(n, k)\n          i = 0\n          s = 0.0\n          while i < n\n   
+249dad9cd4d526c28210311ef674a00f	[[[1, 2], [[:mm, 1], [:mm, 2]], [1, 2]], [[101, 102], [[:mm, 1], [:mm, 2]], [101, 102]], [NoMethodError, "private method 'v' called for an instance of Pt"], [[101, 102], [:real, :real]], [101, :single, 103], ["101", 102, "103"], [NoMethodError, "undefined method 'v' for an instance of Pt"], [2, 3], [NoMethodError], [2, 4], [3, 5], [1, 2], [:redef, :redef], [3, 5], [3, 5]]	class Pt\n          attr_reader :x\n          def initialize(x) = @x = x\n
 249eeebcb774e4d0a04f64968012ff7b	81	class Integer; alias __orig :**; def **(o); __orig(o); end; end; 3 ** 4
 24a18bcaab600fcb97d8a6dfa484fd4b	true	Module.new.is_a?(Module)\n            
 24ac5154b60f3f04786ba9edf76cd37f	"HELLO, WORLD!"	"Hello, World!".upcase
@@ -6325,7 +6327,6 @@ fb27a658425b604c46ae6e1895b2637d	[0, true]	class NilClass; def ==(o) = true; end
 fb2c17009c289e7ad4487e0bdbff395d	[[:@__x], 1, "#<PlainBox:0x @__x=1>", ["FrozenError", "can't modify frozen PlainBox: #<PlainBox:0x @__x=1>"]]	require "monitor"\n  t = ->(&b) { begin; b.call; rescue Exception => e; [e.cla
 fb34f21f962af0c522442f03bd1d5c04	["ab", "ab"]	$/ = "cde"; s = +"abcde"; r = s.chomp!; $/ = "\\n"; [r, s]
 fb39dbdb558be25e38526a8809edbaac	3	->((*, a)) { a }.call([1, 2, 3])
-fb3b69639c498eab7e000b8f92fdc4a7	[[[1, 2], [[:mm, 1], [:mm, 2]], [1, 2]], [[101, 102], [[:mm, 1], [:mm, 2]], [101, 102]], [NoMethodError, "private method 'v' called for an instance of Pt"], [[101, 102], [:real, :real]], [101, :single, 103], ["101", 102, "103"], [NoMethodError, "undefined method 'v' for an instance of Pt"], [2, 3], [NoMethodError], [2, 4], [3, 5], [1, 2], [:redef, :redef], [3, 5]]	class Pt\n          attr_reader :x\n          def initialize(x) = @x = x\n
 fb444b3bea1a50a264d1f298dfb7bdea	[true, false, false, true]	__a = [];__a << (100.equal?(100));__a << (100.equal?(100.0));__a << ("a".equal?(
 fb46e74275c3d8057706e59df30c7772	[[[["\\"s\\"", true, 2], ["\\"c7\\"", true, 1]], false, 2], [0, 0]]	class GcKey\n  attr_reader :i\n  def initialize(i) = @i = i\n  def hash = ($hashed
 fb5ca5680002838248335aca3324daec	[true, true]	f = File.open("Cargo.toml")\n            begin\n              [f.set_
