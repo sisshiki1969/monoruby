@@ -388,7 +388,34 @@ impl AbstractState {
     /// can see; the bet is confirmed after the fact in `specialized_iseq`.
     ///
     #[allow(non_snake_case)]
-    pub(super) fn locals_unbox_to_S_keeping_claims(&mut self, ir: &mut AsmIr) {
+    pub(super) fn locals_unbox_to_S_keeping_claims(
+        &mut self,
+        ir: &mut AsmIr,
+        slot_current: impl Fn(SlotId) -> bool,
+    ) {
+        // The callee's float stores into a local refresh the local's
+        // register (its raw-f64 home) in place, so the register must be
+        // that local's alone. Slots copied from one float share it (`t =
+        // a; u = a`), and a store into one then changed the others: `m {
+        // t -= 0.5; u += t }` added `t` to itself. A local that shares
+        // its register gives the claim up here (boxed into its slot if
+        // it was not); the last of the sharers keeps the register.
+        for i in self.locals() {
+            if let LinkMode::F(fpr) | LinkMode::Sf(fpr, _) = self.mode(i)
+                && self.fpr_shared(fpr, i)
+            {
+                self.write_back(ir, i, Keep::Type);
+            }
+        }
+        // A float local *slot_current* names crosses the call boxed in
+        // its slot as well (`Sf`), not as a deferred `F(spill home)`:
+        // the callee's stores then keep the slot current
+        // (`context::NoDeferral`).
+        for i in self.locals() {
+            if matches!(self.mode(i), LinkMode::F(_)) && slot_current(i) {
+                self.write_back(ir, i, Keep::All);
+            }
+        }
         for i in self.locals() {
             self.write_back(ir, i, Keep::Claims);
         }
@@ -466,6 +493,7 @@ impl AbstractState {
                                 home,
                                 offset: crate::codegen::jitgen::DynVarOffset::Hint { ids, extra },
                                 reg: i,
+                                at_break: false,
                             });
                         }
                         widened.push((level, i));
@@ -500,7 +528,7 @@ impl AbstractState {
     ///
     pub(super) fn box_deferred_homes_before_break(
         &self,
-        jitctx: &JitContext,
+        jitctx: &mut JitContext,
         ir: &mut AsmIr,
         landing: usize,
     ) {
@@ -516,7 +544,9 @@ impl AbstractState {
                         home,
                         offset: crate::codegen::jitgen::DynVarOffset::Hint { ids, extra },
                         reg: i,
+                        at_break: true,
                     });
+                    jitctx.note_break_box(level, i, fpr);
                 }
             }
             match self.frames[level].lexical_outer() {
@@ -805,6 +835,7 @@ impl ChainSurrender {
                 extra: *extra,
             },
             reg: slot,
+            at_break: false,
         });
         true
     }

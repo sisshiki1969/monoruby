@@ -1116,7 +1116,11 @@ impl<'a> JitContext<'a> {
                         state.float_literal_to_F(ir, slot);
                     }
                 }
-                state.locals_unbox_to_S_keeping_claims(ir);
+                let iseq_id = self.iseq_id();
+                let no_deferral = self.no_deferral.clone();
+                state.locals_unbox_to_S_keeping_claims(ir, |slot| {
+                    no_deferral.refuses(iseq_id, slot)
+                });
             } else {
                 // The literal block handed out here is homed in the
                 // current frame: it can reach that frame and its lexical
