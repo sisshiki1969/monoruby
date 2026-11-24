@@ -244,7 +244,6 @@ pub(super) fn init_encoding(globals: &mut Globals) {
         // index to keep a name of their own (#1562).
         "EUC_JIS_2004",
         "STATELESS_ISO_2022_JP_KDDI",
-        "CESU_8",
         // Additional encodings exercised by ruby/spec. Aliases that
         // share an *object* with an existing constant (BINARY ↔
         // ASCII-8BIT, ASCII ↔ US-ASCII, CP65001 ↔ UTF-8) are handled
@@ -419,6 +418,20 @@ pub(super) fn init_encoding(globals: &mut Globals) {
             globals.set_constant_by_str(enc.id(), alias, val);
         }
     }
+
+    // The constants are final. An object made for one name and then
+    // replaced under it by another name's object (a name listed twice
+    // above, an alias wired to its canonical encoding's object) is no
+    // constant any more, and must not keep its record: the record is
+    // keyed by the object's address.
+    let constants: Vec<u64> = globals
+        .store
+        .get_constant_names(enc.id())
+        .into_iter()
+        .filter_map(|name| globals.store.get_constant_noautoload(enc.id(), name))
+        .map(|v| v.id())
+        .collect();
+    globals.retain_encoding_objects(|v| constants.contains(&v.id()));
 
     // Encoding::CompatibilityError < EncodingError < StandardError.
     // The fourth `define_class` argument is the *lexical parent* —
@@ -5522,6 +5535,56 @@ fn is_dummy_encoding(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Every object with a record in `Globals::encoding_of_object` is an
+    /// `Encoding` constant and is kept alive. The records are keyed by
+    /// address: one left for an object that was replaced under its name
+    /// (`CESU_8` was listed twice) outlived the object, and the String
+    /// `"US-ASCII"` allocated in its cell made `force_encoding` answer
+    /// CESU-8.
+    #[test]
+    fn encoding_object_records_are_constants() {
+        let globals = crate::Globals::new_test();
+        let enc = super::encoding_class(&globals);
+        let constants: Vec<u64> = globals
+            .store
+            .get_constant_names(enc)
+            .into_iter()
+            .filter_map(|name| globals.store.get_constant_noautoload(enc, name))
+            .map(|v| v.id())
+            .collect();
+        let (objects, records) = globals.registered_encoding_objects();
+        assert_eq!(objects.len(), records);
+        assert!(
+            records > 90,
+            "only {records} Encoding objects have a record"
+        );
+        for v in objects {
+            assert!(
+                constants.contains(&v.id()),
+                "{} has a record and is no constant",
+                v.inspect(&globals.store)
+            );
+        }
+    }
+
+    /// The same through Ruby: a name that is not a constant (the String
+    /// operand of `force_encoding`) is read as a name whatever cell it
+    /// sits in, also after the constant's object is gone.
+    #[test]
+    fn force_encoding_by_name_after_collections() {
+        crate::tests::run_test_once(
+            r##"
+            res = []
+            3.times do
+              GC.start
+              names = Array.new(20_000) { |i| i.even? ? "US-ASCII".dup : "ISO-8859-7".dup }
+              res << names.map { |n| "a".dup.force_encoding(n).encoding.to_s }.tally
+            end
+            res
+            "##,
+        );
+    }
+
     #[test]
     fn newly_registered_encodings_match_cruby() {
         // Ten names that raised `unknown encoding name` — or, for
