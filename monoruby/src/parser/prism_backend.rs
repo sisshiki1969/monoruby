@@ -502,6 +502,7 @@ fn try_prism_inner(
         });
     }
     let cli_e_script = super::take_cli_e_script(&path);
+    let cli_shebang_cr = super::take_cli_shebang_cr(&path);
     // prism takes any options scope for an eval (`parsing_eval`) and
     // then keeps to itself what it reports about a script's top level:
     // an "assigned but unused variable" there, and a last statement
@@ -619,15 +620,27 @@ fn try_prism_inner(
         }));
     }
 
-    // Forward a vetted subset of prism's parse warnings, formatted the
-    // way CRuby prints them. Only messages whose wording *and* CRuby
-    // warning level we have verified are forwarded — the Rust prism
-    // wrapper does not expose the diagnostic level, so an allowlist
-    // (message → verbose-only flag) stands in for it. Everything else
-    // is dropped rather than risking warnings CRuby would not print.
+    // Forward prism's parse warnings, formatted the way CRuby prints
+    // them. The Rust prism wrapper does not expose a diagnostic's level,
+    // so `prism_warning_level` recovers it from the message; a message
+    // it does not know is dropped rather than risking a warning CRuby
+    // would not print.
     // The `0.0` / `-0.0` keys prism 2.x calls duplicates of each other,
     // found only when it warned about a zero key at all.
     let mut zero_keys: Option<ZeroFloatKeys> = None;
+    let mut interpolated_regexps: Option<InterpolatedRegexpConditions> = None;
+    // The main script's `#!ruby` line ends in `\r\n`: prism's
+    // `PM_WARN_SHEBANG_CARRIAGE_RETURN`, raised before anything is
+    // parsed. See `take_cli_shebang_cr` for why it is not prism's own.
+    let shebang_cr = cli_shebang_cr.map(|line| {
+        (
+            format!(
+                "{}:{}: warning: shebang line ending with \\r may cause problems",
+                path_display, line
+            ),
+            false,
+        )
+    });
     let warnings: Vec<(String, bool)> = result
         .warnings()
         .filter_map(|w| {
@@ -646,36 +659,19 @@ fn try_prism_inner(
                     return None;
                 }
             }
-            // prism decides where it applies (not at the top level of
-            // an eval or of `-e`) and skips `_`-prefixed names, as
-            // CRuby's own check does.
-            let verbose_only = if msg.starts_with("assigned but unused variable - ") {
-                true
-            } else if msg == "END in method; use at_exit"
-                || msg == "found '= literal' in conditional, should be =="
-                || msg == "integer literal in flip-flop"
-                || msg == "regex literal in condition"
-                // A repeated static key in a Hash literal or in the
-                // keyword arguments of a call
-                // (`pm_hash_key_static_literals_add`), placed at the key
-                // that is overwritten.
-                || (msg.starts_with("key ")
-                    && msg.contains(" is duplicated and overwritten on line "))
-            {
-                false
-            } else if
-            // `PM_WARN_VOID_STATEMENT`: a statement whose value nothing
-            // uses — "a variable", "a literal", "==", "self", "defined?"
-            // … prism leaves out the last statement of an eval, which
-            // is the eval's value.
-            (msg.starts_with("possibly useless use of ")
-                && msg.ends_with(" in void context"))
-                || msg == "'frozen_string_literal' is ignored after any tokens"
-                || (msg.starts_with("'when' clause on line ") && msg.ends_with(" and is ignored"))
-            {
-                true
-            } else {
-                return None;
+            let verbose_only = match prism_warning_level(msg)? {
+                PrismWarningLevel::Default => false,
+                PrismWarningLevel::Verbose => true,
+                // One message at two levels: a plain regexp literal
+                // warns by default, an interpolated one under `-w` only.
+                PrismWarningLevel::RegexpLiteral => interpolated_regexps
+                    .get_or_insert_with(|| {
+                        let mut found = InterpolatedRegexpConditions::default();
+                        found.visit(&tree.root());
+                        found
+                    })
+                    .offsets
+                    .contains(&(w.location().start() as usize)),
             };
             let loc = location_to_loc(&w.location());
             let line = source_info.get_line(&loc);
@@ -685,6 +681,7 @@ fn try_prism_inner(
             ))
         })
         .collect();
+    let warnings: Vec<(String, bool)> = shebang_cr.into_iter().chain(warnings).collect();
 
     // `data_loc` spans from the `__END__` marker to EOF; `DATA` content
     // starts after the marker's line terminator (or at EOF when the file
@@ -5672,6 +5669,121 @@ impl<'pr> Lowerer<'pr> {
 fn is_frame_local(node: &prism::Node<'_>) -> bool {
     node.as_local_variable_read_node()
         .is_some_and(|r| r.depth() == 0)
+}
+
+/// The level CRuby reports a prism warning at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrismWarningLevel {
+    /// `rb_warn`: printed unless `$VERBOSE` is `nil`.
+    Default,
+    /// `rb_warning`: printed only when `$VERBOSE` is `true` (`-w`).
+    Verbose,
+    /// "regex literal in condition" / "… in flip-flop": `Default` for a
+    /// plain regexp literal, `Verbose` for an interpolated one. The two
+    /// share their text, so the node decides.
+    RegexpLiteral,
+}
+
+/// The level of one of prism's warnings, told from its message: every
+/// `PM_WARN_*` of prism's `diagnostic.c` except the Ruby 3.3 wording of
+/// "found '= literal' in conditional" (monoruby parses as Ruby 4.0),
+/// "… is too big for a number variable", which the lowerer raises where
+/// it resolves the reference, and "shebang line ending with \r …",
+/// which prism keeps for a main script (`take_cli_shebang_cr`). Each
+/// wording and level was checked against CRuby 4.0.9. `None` for
+/// anything else.
+fn prism_warning_level(msg: &str) -> Option<PrismWarningLevel> {
+    use PrismWarningLevel::*;
+    let level = match msg {
+        "END in method; use at_exit"
+        | "found '= literal' in conditional, should be =="
+        | "integer literal in flip-flop"
+        | "string literal in condition"
+        | "string literal in flip-flop"
+        | "... at EOL, should be parenthesized?"
+        | "encountered \\r in middle of line, treated as a mere space" => Default,
+        "regex literal in condition" | "regex literal in flip-flop" => RegexpLiteral,
+        "literal in condition"
+        | "literal in flip-flop"
+        | "symbol literal in condition"
+        | "symbol literal in flip-flop"
+        | "statement not reached"
+        | "'frozen_string_literal' is ignored after any tokens"
+        | "'shareable_constant_value' is ignored unless in comment-only line"
+        | "ambiguous first argument; put parentheses or a space even after `-` operator"
+        | "ambiguous first argument; put parentheses or a space even after `+` operator"
+        | "ambiguous `&` has been interpreted as an argument prefix"
+        | "ambiguous `*` has been interpreted as an argument prefix"
+        | "ambiguous `**` has been interpreted as an argument prefix"
+        | "ambiguous `/`; wrap regexp in parentheses or add a space after `/` operator" => Verbose,
+        // A repeated static key in a Hash literal or in the keyword
+        // arguments of a call (`pm_hash_key_static_literals_add`),
+        // placed at the key that is overwritten.
+        _ if msg.starts_with("key ") && msg.contains(" is duplicated and overwritten on line ") => {
+            Default
+        }
+        // `"\C- "`, `"\M-<TAB>"`: a space or a tab as the character of
+        // a control / meta escape.
+        _ if msg.starts_with("invalid character syntax; use ") => Default,
+        // prism decides where it applies (not at the top level of an
+        // eval or of `-e`) and skips `_`-prefixed names, as CRuby's own
+        // check does.
+        _ if msg.starts_with("assigned but unused variable - ") => Verbose,
+        // A statement whose value nothing uses — "a variable", "a
+        // literal", "==", "self", "defined?" … prism leaves out the last
+        // statement of an eval, which is the eval's value.
+        _ if msg.starts_with("possibly useless use of ") && msg.ends_with(" in void context") => {
+            Verbose
+        }
+        _ if msg.starts_with("'when' clause on line ") && msg.ends_with(" and is ignored") => {
+            Verbose
+        }
+        // `a +1`, `a *b`, `a /1`, `a <<EOS` … after a local variable or
+        // a literal: "seems like unary operator", "argument prefix",
+        // "regexp literal", "string literal", "here document".
+        _ if msg.starts_with('\'')
+            && msg.contains(
+                "' after local variable or literal is interpreted as binary operator \
+                 even though it seems like ",
+            ) =>
+        {
+            Verbose
+        }
+        // `1 < a >= 0`.
+        _ if msg.starts_with("comparison '") && msg.ends_with("' after comparison") => Verbose,
+        _ if msg.starts_with("Float ") && msg.ends_with(" out of range") => Verbose,
+        _ if msg.starts_with("mismatched indentations at '") => Verbose,
+        // A magic comment prism knows with a value it does not:
+        // `# frozen_string_literal: foo`.
+        _ if msg.starts_with("invalid value for ") => Verbose,
+        // `if` / `elsif` with the condition on the next line.
+        _ if msg.starts_with('`')
+            && msg.ends_with("` at the end of line without an expression") =>
+        {
+            Verbose
+        }
+        _ => return None,
+    };
+    Some(level)
+}
+
+/// Where the interpolated regexp literals used as a condition start
+/// (`if /#{a}/`, a flip-flop's `/#{a}/../b/`): prism turns each into an
+/// `InterpolatedMatchLastLineNode`. See
+/// [`PrismWarningLevel::RegexpLiteral`].
+#[derive(Default)]
+struct InterpolatedRegexpConditions {
+    offsets: std::collections::HashSet<usize>,
+}
+
+impl<'pr> prism::Visit<'pr> for InterpolatedRegexpConditions {
+    fn visit_interpolated_match_last_line_node(
+        &mut self,
+        node: &prism::InterpolatedMatchLastLineNode<'pr>,
+    ) {
+        self.offsets.insert(node.location().start() as usize);
+        prism::visit_interpolated_match_last_line_node(self, node);
+    }
 }
 
 /// Whether `msg` is prism's duplicated-key warning for a Float zero key

@@ -187,6 +187,11 @@ fn ast_option_dumps_prisms_tree_and_its_errors() {
     assert!(out.status.success(), "{out:?}");
     assert!(out.stdout.is_empty(), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("prism error at 8..8: unexpected end-of-input"), "{err}");
+    // Each `-e` is a line, so the script ends with a newline and the
+    // end-of-input token spans it.
+    assert!(
+        err.contains("prism error at 8..9: unexpected end-of-input"),
+        "{err}"
+    );
     assert!(err.contains("ProgramNode"), "{err}");
 }

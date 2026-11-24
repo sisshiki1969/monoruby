@@ -201,6 +201,7 @@ mod pack_single_directive;
 mod pic_shared_target;
 mod predefined_gvar;
 mod prism_bridge;
+mod prism_parse_warnings;
 mod private_call_fcall;
 mod proc_compose;
 mod protected_callee_float_home;
