@@ -223,7 +223,8 @@ impl JitInheritance {
 
     /// The child's side: a child that runs Ruby needs the tails back
     /// before it emits code into them, at the very addresses the code
-    /// already written refers to.
+    /// already written refers to, and its thread in execute mode before
+    /// it returns into them.
     fn reset_child(&self) {
         if self.kind == ForkKind::Exec {
             return;
@@ -235,6 +236,42 @@ impl JitInheritance {
             if len > 0 && !unsafe { map_tail(start, len) } {
                 tail_lost(start, len);
             }
+        }
+        code_pages_executable_in_child();
+    }
+}
+
+/// Put the forked child's one thread in execute mode for the JIT's code
+/// pages, and tell monoasm so (#2151).
+///
+/// On Apple Silicon the code pages are `MAP_JIT`, and whether a thread
+/// may execute them or write them is per thread
+/// (`pthread_jit_write_protect_np`). The forking thread is in execute
+/// mode at the fork — it is in Rust code that compiled code called and
+/// returns into — but the child's thread does not reliably come up in
+/// that mode: now and then (27 and 41 of 2000 forks in two runs on an
+/// M1, more under load) the child's first fetch from the code pages,
+/// the return out of `Process._fork`, dies of `SIGBUS` with an
+/// instruction-abort permission fault. So the child sets the mode itself, as every new
+/// kernel thread does (`scheduler::native::jit_pages_executable_for_this_thread`).
+///
+/// It does so through monoasm's `set_executable`, which also clears the
+/// `writable` flag the child inherited: the flag decides whether the
+/// next emission flips the pages writable first, so it has to describe
+/// the thread's real mode — a stale "writable" would make the child's
+/// first compile write to pages it may only execute. An interpreter
+/// whose JIT is busy (already borrowed further up this thread's stack)
+/// cannot be reached; its thread is put in execute mode all the same.
+fn code_pages_executable_in_child() {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let synced = crate::codegen::CODEGEN.try_with(|c| {
+            c.try_borrow_mut()
+                .map(|mut c| c.jit.set_executable())
+                .is_ok()
+        }) == Some(true);
+        if !synced {
+            crate::scheduler::native::jit_pages_executable_for_this_thread();
         }
     }
 }
@@ -634,6 +671,68 @@ mod tests {
         }
         stop.store(true, Ordering::Relaxed);
         churn.join().unwrap();
+    }
+
+    /// #2151: the child of a fork sometimes comes up with its thread
+    /// unable to execute the `MAP_JIT` code pages, and dies of `SIGBUS`
+    /// on its first fetch from them. Here the child is put in that state
+    /// on purpose — its thread writable, and in the second round
+    /// monoasm's flag saying so as well — before `reset_child`, which
+    /// must leave it able to run the code it inherited *and* to emit and
+    /// run new code (the flag agrees with the thread, so the emission
+    /// flips the pages writable first).
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn a_forked_child_runs_and_emits_jit_code_whatever_mode_it_comes_up_in() {
+        use crate::codegen::CODEGEN;
+        /// `mov w0, #imm; ret`, emitted and published in the code pages.
+        fn emit_constant(imm: u16) -> extern "C" fn() -> u32 {
+            CODEGEN.with_borrow_mut(|c| {
+                c.jit.align4();
+                let entry = c.jit.get_current_address();
+                c.jit.emitl(0x5280_0000 | (u32::from(imm) << 5));
+                c.jit.emitl(0xd65f_03c0);
+                c.jit.finalize();
+                // SAFETY: the two instructions just written and published.
+                unsafe { std::mem::transmute::<_, extern "C" fn() -> u32>(entry.as_ptr()) }
+            })
+        }
+        let inherited = emit_constant(42);
+        assert_eq!(inherited(), 42);
+        for flag_too in [false, true] {
+            let guards = prepare(ForkKind::Continue);
+            // SAFETY: fork(2); the child calls into the code pages and
+            // `_exit`s, the parent waits for it.
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "fork failed: {}", std::io::Error::last_os_error());
+            if pid == 0 {
+                if flag_too {
+                    CODEGEN.with_borrow_mut(|c| c.jit.set_writable());
+                } else {
+                    // SAFETY: a per-thread mode switch.
+                    unsafe { libc::pthread_jit_write_protect_np(0) };
+                }
+                guards.reset_child();
+                let ok = inherited() == 42 && emit_constant(7)() == 7;
+                // SAFETY: ending the child.
+                unsafe { libc::_exit(if ok { 0 } else { 1 }) };
+            }
+            drop(guards);
+            let status = wait_or_kill(
+                pid,
+                std::time::Duration::from_secs(10),
+                "the child never exited",
+            );
+            assert!(
+                libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+                "flag_too={flag_too}: the child {}",
+                if libc::WIFSIGNALED(status) {
+                    format!("died of signal {}", libc::WTERMSIG(status))
+                } else {
+                    format!("exited with status {}", libc::WEXITSTATUS(status))
+                }
+            );
+        }
     }
 
     /// Reap `pid` and return its wait status; once `deadline` has passed

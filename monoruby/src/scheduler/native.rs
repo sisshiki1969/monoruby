@@ -463,8 +463,9 @@ fn block_async_signals() {
 /// kernel thread must start in that state too, whatever the platform's
 /// default for a fresh thread is — a thread that came up writable would
 /// fault on its first compiled instruction, and the lazy flip would not
-/// save it, since the flag already says so.
-fn jit_pages_executable_for_this_thread() {
+/// save it, since the flag already says so. The one thread of a forked
+/// child is in the same position (`fork::code_pages_executable_in_child`).
+pub(crate) fn jit_pages_executable_for_this_thread() {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     // SAFETY: a per-thread mode switch with no preconditions.
     unsafe {
