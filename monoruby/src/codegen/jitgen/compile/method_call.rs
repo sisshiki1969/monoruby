@@ -3799,6 +3799,7 @@ impl AbstractState {
             && !callinfo.forwarding
             && callinfo.block_fid.is_none()
             && callinfo.block_arg.is_none();
+        let simple = simple.then_some((callinfo.args, callinfo.pos_num));
         ir.push(AsmInst::Yield {
             callid,
             simple,

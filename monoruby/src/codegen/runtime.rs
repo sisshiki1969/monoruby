@@ -710,10 +710,30 @@ pub(super) extern "C" fn get_yield_data(vm: &mut Executor, globals: &mut Globals
             return ProcData::default();
         }
     };
+    // A Proc carries its own (heap) outer frame and a Symbol's frame is
+    // the shared per-symbol one, so neither needs `get_block_data`: that
+    // is for a block literal of a caller (a proxy: FuncId and depth),
+    // found by walking the frames at every yield because the caller's
+    // frame may have moved to the heap since the last one, and for an
+    // object that converts with `to_proc`.
+    //
+    // `&:sym` pushes no frame of its own, as in CRuby
+    // (`vm_yield_with_symbol`): the yield calls the named method directly
+    // from the yielding frame — see `yield_symbol_proc`.
+    if let Some(proc) = bh.try_proc()
+        && let Some(outer) = proc.outer_lfp()
+    {
+        let fid = proc.func_id();
+        return if fid == SYMBOL_TO_PROC_BODY_FUNCID {
+            ProcData::frameless_symbol(outer)
+        } else {
+            ProcData::new(outer, fid)
+        };
+    }
+    if let Some(symbol) = bh.try_symbol() {
+        return ProcData::frameless_symbol(globals.symbol_proc_frame(symbol));
+    }
     match vm.get_block_data(globals, bh) {
-        // `&:sym` pushes no frame of its own, as in CRuby
-        // (`vm_yield_with_symbol`): the yield calls the named method
-        // directly from the yielding frame — see `yield_symbol_proc`.
         Ok(data) if data.func_id() == Some(SYMBOL_TO_PROC_BODY_FUNCID) => {
             ProcData::frameless_symbol(data.outer().unwrap())
         }
@@ -782,6 +802,32 @@ pub(super) extern "C" fn yield_symbol_proc(
             })
     };
     res.map_err(|err| vm.set_error(err)).ok()
+}
+
+///
+/// `yield x` to a `&:sym` block found in the yielding method's own frame:
+/// `x.sym`. What `yield_symbol_proc` does for one plain argument, without
+/// the call site to read it from or `get_yield_data` before it.
+///
+pub(super) extern "C" fn yield_symbol_proc1(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    recv: Value,
+    symbol: Value,
+) -> Option<Value> {
+    let symbol = symbol.as_symbol();
+    if let Some(func_id) = vm.symbol_proc_method(globals, symbol, recv) {
+        // A failed call has already left its error in `vm`.
+        return vm.invoke_func(globals, func_id, recv, &[], None, None);
+    }
+    let outer = globals.symbol_proc_frame(symbol);
+    match vm.dispatch_symbol_proc(globals, symbol, outer, recv, &[], None, None) {
+        Ok(val) => Some(val),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
+    }
 }
 
 ///

@@ -124,13 +124,73 @@ impl Codegen {
     pub(super) fn gen_yield(
         &mut self,
         callid: CallSiteId,
-        simple: bool,
+        simple: Option<(SlotId, usize)>,
         error: &DestLabel,
     ) -> CodePtr {
         let symbol = self.jit.label();
         let done = self.jit.label();
+        let slow = self.jit.label();
+        let resolved = self.jit.label();
+        // The block of a method body sits in its own frame. A Proc there
+        // carries its outer frame (always a heap frame, so never an
+        // invalidated one) and FuncId, and a Symbol is called by name, so
+        // neither needs `get_yield_data`: that is for a block literal of
+        // the caller (found by walking the frames, at every yield since
+        // the caller's frame may have moved to the heap), for a `yield`
+        // written inside a block, and for the errors.
+        let symbol1 = match simple {
+            Some((args, 1)) => Some((args, self.jit.label())),
+            _ => None,
+        };
+        monoasm! { &mut self.jit,
+            movq rax, [r14 - (LFP_OUTER)];
+            testq rax, rax;
+            jnz  slow;
+            movq rax, [r14 - (LFP_BLOCK)];
+        }
+        if let Some((_, symbol1)) = &symbol1 {
+            monoasm! { &mut self.jit,
+                movzxb rdx, [r14 - (LFP_BLOCK)];
+                cmpq rdx, (TAG_SYMBOL);
+                jeq  symbol1;
+            }
+        }
+        monoasm! { &mut self.jit,
+            testq rax, rax;
+            jz   slow;
+            testq rax, 0b111;
+            jnz  slow;
+            cmpb [rax + (RVALUE_OFFSET_TY)], (ObjTy::PROC.get());
+            jne  slow;
+            movl rdx, [rax + (PROC_FUNCID_OFFSET)];
+            cmpl rdx, (SYMBOL_TO_PROC_BODY_FUNCID.get());
+            jeq  slow;
+            movq rax, [rax + (PROC_OUTER_OFFSET)];
+            testq rax, rax;
+            jz   slow;
+        resolved:
+        }
+        self.jit.select_page(1);
+        self.jit.bind_label(slow);
         self.get_proc_data();
         self.handle_error(&error);
+        monoasm! { &mut self.jit,
+            jmp  resolved;
+        }
+        if let Some((args, symbol1)) = symbol1 {
+            // `yield x` to `&:sym`: `x.sym`.
+            monoasm! { &mut self.jit,
+            symbol1:
+                movq rcx, rax;
+                movq rdx, [r14 - (conv(args))];
+                movq rdi, rbx;
+                movq rsi, r12;
+                movq rax, (runtime::yield_symbol_proc1);
+                call rax;
+                jmp  done;
+            }
+        }
+        self.jit.select_page(0);
         // rax <- outer, rdx <- FuncId
         // `&:sym` answers no FuncId, the symbol's frame in rax: the named
         // method is called straight from this frame, with no block frame
@@ -154,15 +214,55 @@ impl Codegen {
             movq [rsp - (RSP_LOCAL_FRAME + LFP_SELF)], rax;
         };
 
-        monoasm! { &mut self.jit,
-            movl r8, (callid.get()); // CallSiteId
+        match simple {
+            // A block taking exactly the values yielded, and nothing else
+            // (no optional, rest, keyword or block parameter): they are
+            // copied into its frame here. Any other block goes through
+            // the helper, which binds them the way a block does (nil
+            // fill, dropped extras, auto-splat of a single Array). This
+            // is the test the helper itself begins with.
+            Some((args, pos_num)) if pos_num <= 8 => {
+                let generic = self.jit.label();
+                let cont = self.jit.label();
+                monoasm! { &mut self.jit,
+                    movzxb rax, [r15 + ((FUNCDATA_META + META_KIND) as i32)];
+                    testq rax, 0b1_0000;
+                    jz   generic;
+                    movzxw rax, [r15 + (FUNCDATA_MIN)];
+                    cmpw rax, (pos_num);
+                    jne  generic;
+                }
+                for i in 0..pos_num {
+                    monoasm! { &mut self.jit,
+                        movq rax, [r14 - (conv(args + i))];
+                        movq [rsp - (RSP_LOCAL_FRAME + LFP_ARG0 + 8 * i as i32)], rax;
+                    }
+                }
+                self.jit.bind_label(cont.clone());
+                self.jit.select_page(1);
+                self.jit.bind_label(generic);
+                monoasm! { &mut self.jit,
+                    movl r8, (callid.get()); // CallSiteId
+                }
+                self.generic_handle_arguments(runtime::jit_handle_arguments_no_block_for_yield);
+                self.handle_error(error);
+                monoasm! { &mut self.jit,
+                    jmp  cont;
+                }
+                self.jit.select_page(0);
+            }
+            _ => {
+                monoasm! { &mut self.jit,
+                    movl r8, (callid.get()); // CallSiteId
+                }
+                self.generic_handle_arguments(if simple.is_some() {
+                    runtime::jit_handle_arguments_no_block_for_yield
+                } else {
+                    runtime::jit_handle_arguments_no_block
+                });
+                self.handle_error(error);
+            }
         }
-        self.generic_handle_arguments(if simple {
-            runtime::jit_handle_arguments_no_block_for_yield
-        } else {
-            runtime::jit_handle_arguments_no_block
-        });
-        self.handle_error(error);
         let return_addr = self.call_funcdata();
         monoasm! { &mut self.jit,
         done:

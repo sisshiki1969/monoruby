@@ -442,7 +442,7 @@ where
     /// Positional lookup with a caller-computed digest and plain `==` key
     /// equality (see [`Self::insert_prehashed`] for the soundness
     /// conditions).
-    #[inline]
+    #[inline(always)]
     pub fn get_prehashed(&self, hash: usize, key: &K, e: &mut E, g: &mut G) -> Result<Option<&V>, R>
     where
         K: PartialEq,
@@ -496,6 +496,7 @@ where
     /// Positional lookup twin of [`Self::insert_prehashed_with`]: a
     /// caller-computed digest probed with a caller-supplied equality
     /// predicate (same soundness conditions).
+    #[inline]
     pub fn get_prehashed_with(
         &self,
         hash: usize,

@@ -491,6 +491,9 @@ pub struct Globals {
     /// each time put a heap-frame allocation on every element of
     /// `ary.map(&:to_s)`.
     symbol_proc_frames: HashMap<IdentId, Lfp>,
+    /// The entry of `symbol_proc_frames` answered last: a loop yielding to
+    /// one `&:sym` block asks for the same frame at every yield.
+    last_symbol_proc_frame: Option<(IdentId, Lfp)>,
     /// One `Symbol#to_proc` *Proc* per symbol, over that symbol's frame.
     ///
     /// CRuby caches these too — `:x.to_proc.equal?(:x.to_proc)` is true —
@@ -758,7 +761,20 @@ impl Globals {
     /// The shared `Symbol#to_proc` outer frame for *symbol* (see
     /// [`Globals::symbol_proc_frames`]), built on first use.
     ///
+    #[inline]
     pub(crate) fn symbol_proc_frame(&mut self, symbol: IdentId) -> Lfp {
+        if let Some((last, lfp)) = self.last_symbol_proc_frame
+            && last == symbol
+        {
+            return lfp;
+        }
+        let lfp = self.symbol_proc_frame_slow(symbol);
+        self.last_symbol_proc_frame = Some((symbol, lfp));
+        lfp
+    }
+
+    #[inline(never)]
+    fn symbol_proc_frame_slow(&mut self, symbol: IdentId) -> Lfp {
         if let Some(lfp) = self.symbol_proc_frames.get(&symbol) {
             return *lfp;
         }
@@ -787,6 +803,7 @@ impl Globals {
     /// definition, a removal or a visibility change anywhere retires it
     /// (each of those bumps the version).
     ///
+    #[inline]
     pub(crate) fn cached_symbol_method(
         &self,
         symbol: IdentId,
@@ -1154,6 +1171,7 @@ impl Globals {
         let mut globals = Self {
             main_object,
             symbol_proc_frames: HashMap::default(),
+            last_symbol_proc_frame: None,
             symbol_procs: HashMap::default(),
             refined_symbol_procs: HashMap::default(),
             refined_symbol_frames: HashMap::default(),
