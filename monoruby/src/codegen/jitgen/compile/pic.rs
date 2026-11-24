@@ -205,7 +205,7 @@ impl<'a> JitContext<'a> {
                 dropped.push(class);
                 continue;
             };
-            if self.jit_visibility_blocks(callid, visibility)
+            if self.jit_visibility_blocks(callid, visibility, func_id)
                 || self.store[func_id].possibly_capture_without_block()
             {
                 #[cfg(feature = "deopt")]

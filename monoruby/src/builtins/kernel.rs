@@ -4666,11 +4666,33 @@ fn dispatched_name(store: &Store, method_cfp: Cfp) -> Option<Dispatched> {
             Some(ObjTy::UMETHOD) if recv.as_umethod().method_missing_name().is_none() => {
                 direct(recv.as_umethod().lookup_name(store))
             }
-            _ => None,
+            // A `&:sym` block dispatches by the Symbol's name (#2181): the
+            // general body of `Symbol#to_proc` (the Symbol is its outer
+            // `self`), `Proc#call` and its relatives on such a Proc, or a
+            // builtin yielding to the block it was given.
+            _ if caller_fid == SYMBOL_TO_PROC_BODY_FUNCID => {
+                direct(caller_lfp.outer()?.self_val().try_symbol()?)
+            }
+            _ => direct(
+                symbol_of_block(recv).or_else(|| symbol_of_block(caller_lfp.block()?.get()))?,
+            ),
         };
     }
     let iseq_id = caller_func.is_iseq()?;
-    let site = &store[call_site_id(store, iseq_id, method_cfp)?];
+    // A `yield` to a `&:sym` block is a call by the Symbol's name too
+    // (#2181). The block is the method's, whichever of its blocks yields.
+    // The VM's yield and the generic compiled one enter the method from a
+    // runtime helper (`yield_symbol_proc`), which leaves no call site in
+    // the frame; a yield compiled as a call leaves its own (opcodes 34
+    // and 35).
+    let block_symbol = || symbol_of_block(caller.outermost_lfp().block()?.get());
+    let Some((site, opcode)) = call_site_at(store, iseq_id, method_cfp) else {
+        return direct(block_symbol()?);
+    };
+    let site = &store[site];
+    if matches!(opcode, 34 | 35) {
+        return direct(block_symbol()?);
+    }
     let Some(name) = site.name else {
         // `super` looks the method it is written in up again, by that
         // method's own (definition) name.
@@ -4701,6 +4723,19 @@ fn dispatched_name(store: &Store, method_cfp: Cfp) -> Option<Dispatched> {
         }
     }
     direct(name)
+}
+
+/// The Symbol a `&:sym` block dispatches by: the block is the bare Symbol,
+/// or a Proc with `Symbol#to_proc`'s body over a frame whose `self` is it.
+fn symbol_of_block(block: Value) -> Option<IdentId> {
+    if let Some(sym) = block.try_symbol() {
+        return Some(sym);
+    }
+    let proc = Proc::try_new(block)?;
+    if proc.func_id() != SYMBOL_TO_PROC_BODY_FUNCID {
+        return None;
+    }
+    proc.outer_lfp()?.self_val().try_symbol()
 }
 
 /// A method name given as a value, the way `send` accepts one.
@@ -4765,31 +4800,36 @@ pub(super) fn invoked_name(
 }
 
 ///
-/// The call site in `iseq_id` that entered `method_cfp`. The VM saves
-/// the pc one word past the call instruction (at the inline-cache
-/// word), the JIT saves the instruction itself; a `MethodCall` occupies
-/// both words, so exactly one of the two candidates can be a
-/// call-instruction index and the ISeq's `callsite_map` — which only
-/// holds real ones — tells them apart without decoding anything.
+/// The call site in `iseq_id` that entered `method_cfp`. The frame holds
+/// the pc of the call instruction, or of the inline-cache word after it
+/// (opcode 130, which only follows a call, `super` or `yield`). The
+/// instruction *before* the saved pc is never tried otherwise: it can be
+/// a one-word instruction with a call site of its own (`a + b`, `a[i]`),
+/// which is not the one that entered the frame.
 ///
 pub(super) fn call_site_id(store: &Store, iseq_id: ISeqId, method_cfp: Cfp) -> Option<CallSiteId> {
+    call_site_at(store, iseq_id, method_cfp).map(|(id, _)| id)
+}
+
+/// [`call_site_id`], with the opcode of the instruction at the site.
+fn call_site_at(store: &Store, iseq_id: ISeqId, method_cfp: Cfp) -> Option<(CallSiteId, u8)> {
     let info = &store[iseq_id];
-    let slot = method_cfp.caller_pc_slot();
-    if slot == 0 || slot as usize % std::mem::align_of::<Bytecode>() != 0 {
+    let slot = method_cfp.caller_pc_slot() as usize;
+    if slot == 0 || slot % std::mem::align_of::<Bytecode>() != 0 {
         return None;
     }
-    let size = std::mem::size_of::<Bytecode>();
-    [size, 0].into_iter().find_map(|back| {
-        let addr = (slot as usize).checked_sub(back)?;
-        // SAFETY: the pointer is never dereferenced — `contains_pc`
-        // only range-checks it against this ISeq's bytecode buffer so
-        // the derived index is meaningful.
+    let inside = |addr: usize| {
+        // SAFETY: the pointer is dereferenced only once `contains_pc` has
+        // range-checked it against this ISeq's bytecode buffer.
         let pc = unsafe { BytecodePtr::from_raw(addr as *mut Bytecode) }?;
-        if !info.contains_pc(pc) {
-            return None;
-        }
-        store.get_callsite_id(iseq_id, info.get_pc_index(Some(pc)))
-    })
+        info.contains_pc(pc).then_some(pc)
+    };
+    let mut pc = inside(slot)?;
+    if pc.opcode() == 130 {
+        pc = inside(slot.checked_sub(std::mem::size_of::<Bytecode>())?)?;
+    }
+    let id = store.get_callsite_id(iseq_id, info.get_pc_index(Some(pc)))?;
+    Some((id, pc.opcode()))
 }
 
 ///

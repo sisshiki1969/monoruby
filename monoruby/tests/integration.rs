@@ -203,6 +203,7 @@ mod predefined_gvar;
 mod prism_bridge;
 mod private_call_fcall;
 mod proc_compose;
+mod protected_callee_float_home;
 mod psych;
 mod public_send_visibility;
 mod r#yield;

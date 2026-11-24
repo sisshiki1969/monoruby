@@ -1896,40 +1896,41 @@ impl SlotState {
     ///
     /// The read twin of `forget_constants`. A `C` claim says the slot
     /// need not be read; a deferred home says the same about a float, and
-    /// both are false the moment the block can run outside this unit — it
+    /// both are false the moment something can run outside this unit — it
     /// reads the caller's local through its outer chain, off the stack
     /// slot, which the deferral left holding whatever was there before
     /// (`nil`, for a local whose only write was the deferred store).
     ///
-    /// The binding itself survives unless *widen*, because the callee's
-    /// already-emitted stores write the *home*: dropping it would make
-    /// the continuation read a slot the compiled block never refreshes,
-    /// losing every `a += ...` the block performed. A deopt under the
-    /// call cannot read a stale slot either — chain escalation means the
-    /// continuation never runs compiled, and the deopt write-back boxes
-    /// the home. *widen* is for the generic-yield case, where the block
-    /// is not compiled here at all: its stores land in the slot, so the
-    /// continuation has to read the slot too.
+    /// The binding itself survives, because the callee's already-emitted
+    /// stores write the *home*: dropping it would make the continuation
+    /// read a slot the compiled block never refreshes, losing every `a +=
+    /// ...` the block performed. A deopt under the call cannot read a
+    /// stale slot either — chain escalation means the continuation never
+    /// runs compiled, and the deopt write-back boxes the home.
+    ///
+    /// That holds for a generic `yield` under the call as well (#2184).
+    /// The mark says some block ran outside the unit, not which: in `s =
+    /// 0.0; a.each { |e| s += yield(e) }; s` it is the method's own block,
+    /// which cannot reach `s`, while the block that does store `s` is
+    /// compiled here and wrote the home. A block that leaves the unit and
+    /// *can* reach the local ended the deferral where it left
+    /// (`AbstractState::unbox_to_S_for_outgoing_block` boxes the home and
+    /// widens the slot on that path), and is skipped below.
     ///
     pub(in crate::codegen::jitgen) fn home_deferred_floats(
         &mut self,
         ir: &mut AsmIr,
         deferred: &[(SlotId, FPReg)],
-        widen: bool,
     ) {
         for &(slot, fpr) in deferred {
             // A path inside the callee's compile may already have widened
-            // the slot (a `StoreDynVar` the compiler saw), in which case
-            // the store that widened it made the slot current.
+            // the slot (a `StoreDynVar` the compiler saw, a block handed
+            // out of the unit), in which case what widened it made the
+            // slot current.
             if self.mode(slot) != LinkMode::F(fpr) {
                 continue;
             }
             ir.spill(Spill::Fpr(fpr, slot));
-            if widen {
-                let guarded = self.guarded(slot);
-                self.clear(slot);
-                self.set_mode(slot, LinkMode::S(guarded));
-            }
         }
     }
 

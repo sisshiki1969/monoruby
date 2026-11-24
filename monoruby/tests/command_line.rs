@@ -421,8 +421,9 @@ fn inplace_edit_without_backup() {
 
 #[test]
 fn argf_filename_global_tracks_walk() {
-    // `$FILENAME` follows the file `Kernel#gets` is reading; ARGF.printf
-    // exercises the un-redirected write path.
+    // `$FILENAME` follows the file `Kernel#gets` is reading. Once the
+    // walk is over the last file is closed, and ARGF's write family,
+    // which writes to the current file, raises as CRuby's does.
     let dir = std::env::temp_dir().join(format!("cli_filename_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let f1 = dir.join("n1.txt");
@@ -433,14 +434,143 @@ fn argf_filename_global_tracks_walk() {
         monoruby().args([
             "-e",
             "names = []; while gets; names << File.basename($FILENAME); end; \
-             ARGF.printf(\"%s\", names.join(','))",
+             print names.join(','); \
+             print((ARGF.printf(\"%s\", 1) rescue \" #{$!.class}: #{$!.message}\"))",
             f1.to_str().unwrap(),
             f2.to_str().unwrap(),
         ]),
         "",
     );
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "n1.txt,n2.txt");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "n1.txt,n2.txt IOError: closed stream"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// ARGF's write family (#2175) writes to the *current file*, not to
+/// `$stdout`: nothing to write to before the walk starts, a file opened
+/// for reading while it is on, a closed one after it.
+#[test]
+fn argf_write_family_writes_to_the_current_file() {
+    let dir = std::env::temp_dir().join(format!("cli_argf_write_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f1 = dir.join("d.txt");
+    std::fs::write(&f1, "y1\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args([
+            "-e",
+            "p((ARGF.putc(\"a\") rescue $!)); p((ARGF.printf(\"a\") rescue $!)); \
+             p((ARGF.print(\"a\") rescue $!)); p((ARGF.puts(\"a\") rescue $!)); \
+             p ARGF.respond_to?(:putc); \
+             ARGF.gets; p((ARGF.write(\"a\") rescue $!)); \
+             ARGF.read; p((ARGF.write(\"a\") rescue $!)); \
+             (ARGF.close rescue p $!); p((ARGF.write(\"a\") rescue $!))",
+            f1.to_str().unwrap(),
+        ]),
+        "",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "#<IOError: not opened for writing>\n\
+         #<IOError: not opened for writing>\n\
+         #<IOError: not opened for writing>\n\
+         #<IOError: not opened for writing>\n\
+         true\n\
+         #<IOError: not opened for writing>\n\
+         #<IOError: closed stream>\n\
+         #<IOError: closed stream>\n"
+    );
+    // The same over stdin, which is never closed by the walk.
+    let out = run_with_stdin(
+        monoruby().args([
+            "-e",
+            "ARGF.gets; p((ARGF.write(\"a\") rescue $!)); p ARGF.read; \
+             p((ARGF.write(\"a\") rescue $!))",
+        ]),
+        "zz\n",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "#<IOError: not opened for writing>\n\"\"\n#<IOError: not opened for writing>\n"
+    );
+    // Uncaught, it ends the program.
+    let out = run_with_stdin(monoruby().args(["-e", "ARGF.puts 'x'"]), "");
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("not opened for writing (IOError)"),
+        "stderr: {err}"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Under `-i` the file being edited is where ARGF writes (#2175), whatever
+/// `$stdout` has been set to since; and before the first read there is no
+/// such file yet.
+#[test]
+fn inplace_argf_writes_to_the_edited_file() {
+    let dir = std::env::temp_dir().join(format!("cli_inplace_argf_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f1 = dir.join("c.txt");
+    let f2 = dir.join("d.txt");
+    std::fs::write(&f1, "x1\nx2\n").unwrap();
+    std::fs::write(&f2, "y1\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args([
+            "-i.bak",
+            "-e",
+            "o = nil; \
+             while l = ARGF.gets do \
+               o ||= $stdout; $stdout = STDOUT; \
+               ARGF.write l.upcase; ARGF.printf(\"%s!\", l.chomp); ARGF.putc ?\\n; \
+               ARGF.puts 1, 2; ARGF.putc 65; \
+             end; \
+             p o.closed?",
+            f1.to_str().unwrap(),
+            f2.to_str().unwrap(),
+        ]),
+        "",
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "false\n");
+    assert_eq!(
+        std::fs::read_to_string(&f1).unwrap(),
+        "X1\nx1!\n1\n2\nAX2\nx2!\n1\n2\nA"
+    );
+    assert_eq!(std::fs::read_to_string(&f2).unwrap(), "Y1\ny1!\n1\n2\nA");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("c.txt.bak")).unwrap(),
+        "x1\nx2\n"
+    );
+
+    std::fs::write(&f1, "x1\nx2\n").unwrap();
+    let out = run_with_stdin(
+        monoruby().args(["-i", "-e", "ARGF.puts 'x'", f1.to_str().unwrap()]),
+        "",
+    );
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("not opened for writing (IOError)"),
+        "stderr: {err}"
+    );
+    assert_eq!(std::fs::read_to_string(&f1).unwrap(), "x1\nx2\n");
     std::fs::remove_dir_all(&dir).ok();
 }
 

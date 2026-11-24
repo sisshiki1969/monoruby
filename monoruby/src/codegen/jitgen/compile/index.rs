@@ -50,7 +50,7 @@ impl<'a> JitContext<'a> {
         // A private `#[]` reached without an explicit `self` receiver, and a
         // callee that could capture the frame, both belong on the ordinary
         // path (which raises / refuses exactly as before).
-        if self.jit_visibility_blocks(callid, visibility)
+        if self.jit_visibility_blocks(callid, visibility, fid)
             || self.store[fid].possibly_capture_without_block()
             || self.store[callid].block_fid.is_some()
         {
@@ -124,7 +124,7 @@ impl<'a> JitContext<'a> {
             // without a class-version guard, so a redefinition has to reach
             // it through the recorded bop dependency.
             if !self.basic_op_assumable(class, name)
-                || self.jit_visibility_blocks(callid, visibility)
+                || self.jit_visibility_blocks(callid, visibility, fid)
                 || self.store[fid].possibly_capture_without_block()
             {
                 continue;

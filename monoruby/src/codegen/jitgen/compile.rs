@@ -2104,20 +2104,44 @@ impl<'a> JitContext<'a> {
     /// `NoMethodError`. `Public` methods, func-call sites, and `super` (which
     /// `jit_check_call` resolves as `Public`) are always inlinable.
     ///
-    /// `Protected` is intentionally *not* blocked here: the protected receiver
-    /// `kind_of?` test depends on the runtime `self`, which the compiler cannot
-    /// pin (the same method body may run with different `self`s), and a hot
-    /// site was already validated by the VM. Deopting every protected call
-    /// would regress valid protected dispatch for no correctness gain the JIT
-    /// can guarantee statically; protected enforcement stays with the VM.
+    /// A `Protected` method reached without a func-call receiver is decided
+    /// as the VM decides it (`Executor::find_method`, CRuby's
+    /// `vm_call_method_each_type`): the call is valid when the caller's
+    /// `self` is a kind of one of the method's owners. The unit is compiled
+    /// for one class of `self`, so that is a compile-time answer; when it is
+    /// "no" the site is the VM's, which raises `NoMethodError` (or accepts
+    /// a `self` whose singleton class includes the owner). This is not left
+    /// to "a hot site was already validated by the VM": a method re-scoped
+    /// with `protected :name` after the site warmed up resolves to the same
+    /// `FuncId` with the new visibility (#2183).
     ///
-    /// *visibility* is the target method's visibility resolved alongside its
-    /// `FuncId` (see `jit_check_method`), so this gate performs no lookup.
+    /// *visibility* is the target method's visibility resolved alongside
+    /// *fid* (see `jit_check_method`), so this gate performs no lookup.
     ///
-    fn jit_visibility_blocks(&self, callid: CallSiteId, visibility: Visibility) -> bool {
+    fn jit_visibility_blocks(
+        &self,
+        callid: CallSiteId,
+        visibility: Visibility,
+        fid: FuncId,
+    ) -> bool {
         // A func-call receiver (literal `self` / visibility-bypassing send)
         // may call private and protected methods.
-        visibility == Visibility::Private && !self.store[callid].is_func_call()
+        if visibility == Visibility::Public || self.store[callid].is_func_call() {
+            return false;
+        }
+        if visibility == Visibility::Private {
+            return true;
+        }
+        // `Value::is_kind_of`, on the class the unit was compiled for.
+        let owners = self.store[fid].owner_class();
+        let mut class = Some(self.store[self.self_class()].get_module());
+        while let Some(c) = class {
+            if owners.contains(&c.id()) {
+                return false;
+            }
+            class = c.superclass();
+        }
+        true
     }
 
     ///
