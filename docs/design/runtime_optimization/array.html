@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-a399d385.js";
+            window.path_to_searchindex_js = "../../searchindex-a042514b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -440,7 +440,10 @@ Float / Range と<strong>証明された</strong>スロットだけ断る）と�
 <code>js slow</code>、自己代入（<code>cmpq rdi, rdx</code>）→ slow、<code>rdx</code> がちょうど <code>len</code>
 要素の Array で、レシーバの run がその内側に収まるときだけ <code>len</code> 個の
 <code>mov</code> 対を展開し、<code>emit_write_barrier_bulk_rdi</code>、<code>rax = rdx</code>。それ以外は
-<code>set_array_slice</code> が builtin と同じ規則（添字正規化、<code>#to_ary</code>）で処理。</li>
+<code>set_array_slice_pure</code> が、右辺が Array なら builtin と同じ規則（添字
+正規化）で処理する。右辺が Array でない（<code>#to_ary</code> を呼ぶ）場合と builtin
+が例外を出す場合は 0 を返して deopt し、インタプリタがフレーム付きで呼ぶ
+（JIT から呼ぶヘルパは Ruby を実行しない、#2156）。</li>
 <li><strong><code>size</code> / <code>length</code></strong>: <code>ir.array_len_fixnum(Rax, Rdi)</code> の純 LIR。x86 は
 <code>cmov</code> + <code>salq/orq</code>、aarch64 は <code>csel</code>（<a href="../lir.html"><code>../lir.md</code></a> の
 「container length」族）。</li>

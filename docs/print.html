@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a399d385.js";
+            window.path_to_searchindex_js = "searchindex-a042514b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -15368,7 +15368,7 @@ class-version ガード無しの直接発火経路を取れ、再定義は記録
 （<a href="#chain-deopt--handoff-note"><code>../chain_deopt.md</code></a>、<a href="#reading-the-deopt-log---features-deopt"><code>../deopt_log.md</code></a>）。
 そのため各文書に出てくる高速経路は、形が合わないケースを <strong>deopt でなく
 builtin への call</strong> で逃がす設計を繰り返し選んでいる: Hash の probe が
-inline / identity / 索引の表現を <code>hashindex</code> に渡す、<code>Array#[]</code> の多相
+inline / identity / 索引の表現を <code>hashindex_pure</code> に渡す、<code>Array#[]</code> の多相
 サイトが 2 腕の dispatch を出す、<code>String#&lt;&lt;</code> が fallback を末尾呼び出しする、
 <code>String#setbyte</code> が共有レシーバを detach して再試行する、など。</p>
 <h3 id="ruby-で書かれた組み込み"><a class="header" href="#ruby-で書かれた組み込み">Ruby で書かれた組み込み</a></h3>
@@ -15647,7 +15647,10 @@ Float / Range と<strong>証明された</strong>スロットだけ断る）と�
 <code>js slow</code>、自己代入（<code>cmpq rdi, rdx</code>）→ slow、<code>rdx</code> がちょうど <code>len</code>
 要素の Array で、レシーバの run がその内側に収まるときだけ <code>len</code> 個の
 <code>mov</code> 対を展開し、<code>emit_write_barrier_bulk_rdi</code>、<code>rax = rdx</code>。それ以外は
-<code>set_array_slice</code> が builtin と同じ規則（添字正規化、<code>#to_ary</code>）で処理。</li>
+<code>set_array_slice_pure</code> が、右辺が Array なら builtin と同じ規則（添字
+正規化）で処理する。右辺が Array でない（<code>#to_ary</code> を呼ぶ）場合と builtin
+が例外を出す場合は 0 を返して deopt し、インタプリタがフレーム付きで呼ぶ
+（JIT から呼ぶヘルパは Ruby を実行しない、#2156）。</li>
 <li><strong><code>size</code> / <code>length</code></strong>: <code>ir.array_len_fixnum(Rax, Rdi)</code> の純 LIR。x86 は
 <code>cmov</code> + <code>salq/orq</code>、aarch64 は <code>csel</code>（<a href="#unified-low-level-ir-lir"><code>../lir.md</code></a> の
 「container length」族）。</li>
@@ -15924,8 +15927,18 @@ boxed map を作らない</strong>。</p>
 エントリを <strong>tombstone</strong>（キーを <code>None</code>）にして位置を保ち、<code>Option&lt;Value&gt;</code> の
 niche によりキーワードがゼロなら死んだエントリ、という判定が機械語からも
 できる。反復が終わった後の最初の変更操作が <code>compact_if_dirty</code> で詰める。</p>
+<p><strong>Rust 側の走査は 2 種類ある（#2155）。</strong> ステップの間に Ruby コード（ブロック、
+キーの <code>#hash</code> / <code>#eql?</code>、値の <code>#==</code> / <code>#inspect</code>）が走りうる走査は
+<code>Hashmap::walk</code> を使う。CRuby の <code>rb_hash_foreach</code> と同じく、反復ガードの下で
+<strong>位置</strong>で進み、毎ステップ格納を読み直して tombstone を飛ばし、現在のペアを
+temp スタックに root する。<code>select!</code> / <code>delete_if</code> などは到達したペアをその場で
+<code>delete_at</code>（tombstone 化）し、反復中の <code>clear</code> は格納を手放さず全ペアを
+tombstone にする（<code>clear_during_iteration</code>）ので、走査中に Hash が変えられても
+解放済みの領域を読むことはない。新しいキーの追加は従来どおり RuntimeError。
+<code>Hashmap::iter</code> は借用したままの走査で、ステップの間に Ruby が走らない
+（か、root 済みのスナップショットを回す）場所だけで使う。</p>
 <h3 id="13-探索経路"><a class="header" href="#13-探索経路">1.3 探索経路</a></h3>
-<pre><code>JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex(vm, globals, recv, key)
+<pre><code>JIT: Hash#[]  ──inline gen (hash_index)──►  hashindex_pure(vm, globals, recv, key)
                                                   │
 VM:  Hash#[]  ──builtin index───────────────────►  Hashmap::index
                                                   │  （ミス時のみ default / default_proc）
@@ -16126,7 +16139,7 @@ Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそ
 <p>構造ハッシュ用（Ruby から見える <code>#hash</code> 値）とバケッティング用を分ければ、
 Integer キーの参照が Symbol キーと同じところまで来るはず。</p>
 <h3 id="42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405"><a class="header" href="#42-probe-を-jit-でインライン展開する大最大の残り段階-13-実装済み2026-09-0405">4.2 probe を JIT でインライン展開する（大・最大の残り。<strong>段階 1〜3 実装済み</strong>、2026-09-04/05）</a></h3>
-<p>いまは <code>Hash#[]</code> のインライン生成が <code>hashindex</code> への直接呼び出しまでしか
+<p>いまは <code>Hash#[]</code> のインライン生成が <code>hashindex_pure</code> への直接呼び出しまでしか
 やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
 <code>Hash</code> ちょうどで boxed 表現だと分かっている呼び出しサイトなら、
 ダイジェスト → インデックステーブル引き → エントリ比較を機械語で出せる。
@@ -16164,7 +16177,7 @@ Integer キーの参照が Symbol キーと同じところまで来るはず。<
 下位 64 ビットのみ）。aarch64 には <code>umulh</code> がある。monoasm に足したら
 ヘルパをその命令列に置き換えるだけで、他は変わらない。</li>
 <li><strong>形の不一致は deopt ではなく builtin 呼び出し。</strong> inline 表現・identity
-マップ・索引領域はすべて <code>hashindex</code> への合流で、exit しない。最初は deopt に
+マップ・索引領域はすべて <code>hashindex_pure</code> への合流で、exit しない。最初は deopt に
 していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
 Hash のサイトが<strong>毎回 deopt</strong>することになる（4.5 の ic ゲートで踏んだのと
 同型）。builtin 呼び出しなら現状と同コストで退行しない。</li>
@@ -16190,7 +16203,7 @@ key+16）ので、既存どおり実測で取る。</li>
 </tbody>
 </table>
 </div>
-<p>hit 経路の call は <code>packed_digest_c</code> の 1 つだけになり、<code>hashindex</code> の call は
+<p>hit 経路の call は <code>packed_digest_c</code> の 1 つだけになり、<code>hashindex_pure</code> の call は
 miss 側にしか残らない（<code>emit-asm</code> で確認）。<code>tests/hash_probe_jit.rs</code> が
 hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
 索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
@@ -16245,7 +16258,7 @@ Symbol guard も同じ。receiver 側の <code>BecamePolymorphic</code> 再コ�
 <li><code>Hash#[]</code> のインライン生成 <code>hash_index</code> は <code>fire_index_inline</code> から呼ばれ、
 受信側クラスが<strong>ちょうど <code>Hash</code></strong> のときだけ probe を出す。理由は builtin
 の <code>Hash#[]</code> がミス時に <code>default</code> <strong>メソッド</strong>を dispatch する（サブクラスや
-特異メソッドで上書きできる）のに対し、<code>hashindex</code> は格納されたデフォルトを
+特異メソッドで上書きできる）のに対し、<code>hashindex_pure</code> は格納されたデフォルトを
 直接読むからで、サブクラスは通常の class-version ガード付き呼び出しに残す。
 <code>Hash#[]</code> は <code>BASIC_OP_DEFS</code> に入っているので class-version ガードは省き、
 <code>record_bop_dep</code> で再定義を捕まえる。<code>Hash#[]=</code> は意図的に BOP に<strong>入って
@@ -16258,9 +16271,23 @@ Symbol guard も同じ。receiver 側の <code>BecamePolymorphic</code> 再コ�
 Symbol / nil / true / false は <code>packed_digest_c</code>、String は <code>string_digest_c</code>
 <ul>
 <li><code>string_key_eq_c</code>、それ以外（Integer を含む）は probe を出さず
-<code>hashindex</code> の直接呼び出しに落ちる。</li>
+<code>hashindex_pure</code> の直接呼び出しに落ちる。</li>
 </ul>
 </li>
+<li><strong>ヘルパは Ruby を実行しない（#2156）。</strong> JIT コードから直接呼ぶヘルパは
+フレームを持たない。そこで Ruby コードが走ると、(1) メソッド・定数・基本
+演算の再定義や ivar の型変化がヘルパより後ろのコード（ガード済みの前提）に
+伝わらず、(2) chain deopt がそのフレームを変換できない。そこで
+<code>hashindex_pure</code> が答えるのは、探索が Ruby を走らせないと分かっている場合
+だけである: キーが packed 値か、クラスがちょうど <code>String</code> の文字列か、
+受信側が identity Hash のとき。ミス時は default proc が無ければ格納された
+デフォルトを返す。それ以外（<code>#hash</code> / <code>#eql?</code> を dispatch するキー、default
+proc の実行）では 0 を返し、JIT コードは deopt して、インタプリタがフレーム
+付きで builtin を呼ぶ。deopt を繰り返すサイトは
+<code>RecompileReason::ImpureHelper</code> で印が付き、再コンパイル後は通常のメソッド
+呼び出しになる（1 回あたり約 +37 命令）。<code>Hash#[]=</code>
+（<code>hashindex_assign_pure</code>）、<code>Hash#__get_or_key</code>（<code>hashgetorkey_pure</code>）、
+<code>Hash#include?</code>（<code>hashinclude_pure</code>、#2147）も同じ規則に従う。</li>
 <li><code>hash_entries_layout()</code> が <code>None</code>（2 つのマップ型でレイアウトが一致しない
 構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
 <code>miss</code> へ飛ばす。いずれも性能上の後退で、正しさには関わらない。</li>
@@ -16299,7 +16326,7 @@ String → Symbol のクラス変化を追加。</p>
 shape に相当する仕組みを Hash に持ち込むことになるので、キーセットの同一性を
 安く判定する仕掛け（挿入順の版番号など）の設計が要る。</p>
 <h3 id="44-ディスパッチ段数を減らす小中"><a class="header" href="#44-ディスパッチ段数を減らす小中">4.4 ディスパッチ段数を減らす（小〜中）</a></h3>
-<p><code>hashindex</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code> の 4 段で、
+<p><code>hashindex_pure</code> → <code>Hashmap::index</code> → <code>HashRef::get</code> → <code>IndexMapCore</code> の 4 段で、
 それぞれが <code>vm</code> / <code>globals</code> を引き回している。<code>Hashmap::index</code> はミス時の
 default 処理のためだけに 1 段あり、<code>HashRef::get</code> は表現の分岐をしている。
 表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
@@ -16349,7 +16376,7 @@ true になる）。空でない Hash 同士では identity モードが違え�
 <tr><td>String キーの比較・ハッシュ</td><td>内容のみ、<code>String#hash</code> は dispatch しない。クラスが <code>String</code> ちょうどのときだけバイト比較で短絡（<code>rb_any_cmp</code> / <code>any_hash</code>）</td><td>同じ規則（<code>Value::eql</code>、<code>string_key_eq</code>）。ただしバイト比較は <code>RStringInner::eq</code> で<strong>エンコーディングを見ない</strong>。CRuby の <code>rb_str_hash</code> は非 ASCII 文字列でエンコーディング index を混ぜる</td></tr>
 <tr><td><code>compare_by_identity</code></td><td><code>st_table</code> の型を <code>identhash</code> に切り替えて再ハッシュ</td><td>inline は <code>IDENT_BIT</code> を立てるだけ（packed キーは <code>eql?</code> と同一性が一致するので inline のまま）。boxed は<strong>別型</strong>の <code>RubyMap&lt;Option&lt;IdentKey&gt;, Value&gt;</code> に作り直す。空マップ限定で双方向に切り替える <code>set_compare_by_identity_empty</code> があり、<code>Hash#replace</code> / <code>Set</code> が使う</td></tr>
 <tr><td>デフォルト値／proc</td><td><code>ifnone</code> スロット</td><td><code>Option&lt;Box&lt;HashDefault&gt;&gt;</code>。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（<code>Hash.new(7)</code> は確保する）。<code>clear</code> はデフォルトを保つ（CRuby と同じ）</td></tr>
-<tr><td>ミス時の <code>default</code></td><td><code>rb_funcall(id_default)</code></td><td>builtin の <code>Hash#[]</code> は同じく dispatch。<code>hashindex</code> / <code>runtime::get_index</code> は格納値を直接読むので、対象を <code>Hash</code> ちょうどに限定</td></tr>
+<tr><td>ミス時の <code>default</code></td><td><code>rb_funcall(id_default)</code></td><td>builtin の <code>Hash#[]</code> は同じく dispatch。<code>hashindex_pure</code> / <code>runtime::get_index</code> は格納値を直接読むので、対象を <code>Hash</code> ちょうどに限定</td></tr>
 <tr><td>Ruby から見える <code>#hash</code></td><td><code>rb_hash_start</code> 系（SipHash-1-3、seeded）</td><td><code>HASH_STATE</code>（std <code>RandomState</code> = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5）</td></tr>
 <tr><td>String ハッシュのキャッシュ</td><td>無し</td><td>無し（§4.5 に候補として残す）</td></tr>
 <tr><td>GC</td><td><code>rb_gc_mark</code></td><td><code>HashRef::mark</code> がデフォルトと生きたエントリを mark。<code>young_child_exists</code> が世代別の remember 判定、mutator と JIT の <code>emit_hash_default_assign</code> が write barrier を出す（<a href="#monoruby-の-gc--機構と実装"><code>../gc.md</code></a>）</td></tr>
