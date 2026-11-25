@@ -153,6 +153,7 @@ mod jit_method_missing;
 mod jit_send;
 mod json;
 mod kernel_warn;
+mod key_search_protocol;
 mod kwargs_forward;
 mod kwargs_source_order;
 mod language_fixes;

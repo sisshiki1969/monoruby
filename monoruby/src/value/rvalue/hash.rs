@@ -769,7 +769,7 @@ fn inline_string_key_eq(ek: Value, k: Value, s: &RStringInner) -> bool {
 /// defines either method — and `-0.0`, the one heap value `eql?` to an
 /// immediate.
 #[inline(always)]
-fn is_observed_key(k: Value, globals: &Globals) -> bool {
+pub(crate) fn is_observed_key(k: Value, globals: &Globals) -> bool {
     let Some(rv) = k.try_rvalue() else {
         return false;
     };
@@ -1322,6 +1322,97 @@ impl<'a> HashRef<'a> {
             }
             ContentRef::Ident(m) => m.get(&IdentKey(k), vm, globals)?.copied(),
         })
+    }
+
+    /// [`Self::contains_key`] for a `Set`, whose table hashes the element
+    /// whatever it holds: an empty Set's membership test still sends
+    /// `#hash` (#2207), where an empty Hash's lookup sends nothing
+    /// (`ar_lookup`, #2127). An identity table hashes nothing either way.
+    #[inline]
+    pub(crate) fn contains_key_hashing(
+        &self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<bool> {
+        if self.entry_count() == 0 {
+            return self.hash_for_empty(k, vm, globals);
+        }
+        self.contains_key(k, vm, globals)
+    }
+
+    /// The empty half of [`Self::contains_key_hashing`], out of line so
+    /// that the lookup of a Set that holds something stays a length test
+    /// in front of [`Self::contains_key`].
+    #[cold]
+    #[inline(never)]
+    fn hash_for_empty(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
+        if !self.is_compare_by_identity() && is_observed_key(k, globals) {
+            // The answer is `false` whatever the number is; what the
+            // method does — raise, or change the Set — is the point.
+            k.hash_value(vm, globals)?;
+        }
+        Ok(false)
+    }
+
+    /// `rb_hash_assoc`'s table lookup: the value of the pair whose key
+    /// is `rb_equal(k, stored key)` *and* filed under `k`'s hash value,
+    /// or `None` when no pair filed there is.
+    ///
+    /// `#hash` is sent once, then the pairs filed under it are compared
+    /// with `k`'s own `==`, never `eql?`, and a stored key that *is* `k`
+    /// is accepted without a call. The probe is taken apart as
+    /// [`Self::pos_with_hash`] takes it apart, since `==` may change the
+    /// Hash: the candidates are collected first and rooted, and the
+    /// accepted pair is read again from the table as it is by then.
+    pub(crate) fn assoc_value(
+        &self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Value>> {
+        let hash_value = k.hash_value(vm, globals)?;
+        // (position, key, value)
+        let mut cands: SmallVec<[(usize, Value, Value); 2]> = SmallVec::new();
+        match self.content() {
+            ContentRef::Map(m) => m.each_filed_under(
+                digest_of(hash_value),
+                // A key is `None` only in an entry a traversal has
+                // tombstoned, and those are out of the index table.
+                |i, ek, ev| {
+                    let Some(ek) = ek else { return };
+                    cands.push((i, *ek, *ev));
+                },
+                vm,
+                globals,
+            ),
+            // The caller asks only past the size an ar table holds, where
+            // the representation is the boxed one, and never for a Hash
+            // that compares by identity — `rb_hash_assoc` leaves an
+            // identity table to the linear scan.
+            ContentRef::Inline(_) | ContentRef::Ident(_) => return Ok(None),
+        }
+        let accepted = vm.with_temp_scope(|vm| {
+            for (_, ek, ev) in &cands {
+                vm.temp_push(*ek);
+                vm.temp_push(*ev);
+            }
+            for &(i, ek, ev) in &cands {
+                if vm.rb_equal(globals, k, ek)? {
+                    return Ok(Some((i, ek, ev)));
+                }
+            }
+            Ok(None)
+        })?;
+        let Some((i, ek, ev)) = accepted else {
+            return Ok(None);
+        };
+        // The value as the table has it now, unless `==` moved or deleted
+        // the pair — then the one the probe read.
+        Ok(Some(match self.entry_at(i) {
+            Some((sk, sv)) if sk.id() == ek.id() => sv,
+            _ => ev,
+        }))
     }
 
     pub(crate) fn contains_key(
@@ -2748,6 +2839,16 @@ impl Hashmap {
 
     pub fn contains_key(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         self.inner().contains_key(k, vm, globals)
+    }
+
+    /// See [`HashRef::assoc_value`].
+    pub(crate) fn assoc_value(
+        &self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<Value>> {
+        self.inner().assoc_value(k, vm, globals)
     }
 
     pub fn len(&self) -> usize {
