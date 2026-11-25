@@ -195,7 +195,9 @@ pub(crate) fn parse_exec_args(
             && let Some(opts) = last.try_hash_ty()
         {
             items.pop();
-            for (k, v) in opts.iter() {
+            // Walked, not iterated: `#to_path` / `#to_int` / `#to_io` of
+            // an option's value may change the Hash (`Hashmap::walk`).
+            opts.walk(vm, globals, |vm, globals, _, k, v| {
                 if let Some(sym) = k.try_symbol() {
                     match sym.get_name().as_str() {
                         "chdir" => {
@@ -287,7 +289,8 @@ pub(crate) fn parse_exec_args(
                         k.inspect(&globals.store)
                     )));
                 }
-            }
+                Ok(false)
+            })?;
         }
     }
 

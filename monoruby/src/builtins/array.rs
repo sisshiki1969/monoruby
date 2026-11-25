@@ -1683,8 +1683,12 @@ fn array_index_assign(
 /// rest at run time (`other` is an `Array`, `other.len() == len`,
 /// `0 <= start` and `start + len <= self.len()`), copying `len` values when
 /// they all hold. Anything else — a growing/shrinking splice, a negative
-/// index, a non-Array right-hand side — falls into `set_array_slice`, which
-/// reproduces the builtin exactly.
+/// index — falls into `set_array_slice_pure`, which performs the builtin's
+/// splice for an Array right-hand side. It runs no Ruby: for a right-hand
+/// side that is not an Array (`#to_ary`), or where the builtin raises, it
+/// declines, the JIT code deopts and the interpreter makes the call in a
+/// frame; a site that keeps declining is stamped and takes the ordinary
+/// call from its recompile on (#2156).
 ///
 fn array_slice_assign(
     state: &mut AbstractState,
@@ -1700,6 +1704,9 @@ fn array_slice_assign(
         recv, args, dst, ..
     } = *callsite;
     assert!(dst.is_none());
+    if state.pc().impure_helper() {
+        return false;
+    }
     let start = args;
     let count = args + 1usize;
     let src = args + 2usize;
@@ -1728,79 +1735,25 @@ fn array_slice_assign(
     state.load_fixnum(ir, start, GP::Rsi);
     state.load(ir, src, GP::Rdx);
     let using_fpr = state.get_using_fpr(ir);
-    // In a frameless body, the pure helper (`JitContext::wants_pure_helper`).
-    let pure = ctx.wants_pure_helper(state);
-    let helper = if pure {
-        set_array_slice_pure as *const () as u64
-    } else {
-        set_array_slice as *const () as u64
-    };
+    let helper = set_array_slice_pure as *const () as u64;
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_array_slice_assign(helper, len));
     ir.fpr_restore(using_fpr);
-    if pure {
-        ctx.pure_helper_exit(state, ir);
-    } else {
-        let error = ir.new_error(state);
-        ir.handle_error(error);
-    }
+    ctx.pure_helper_exit(state, ir);
     true
 }
 
 ///
-/// The out-of-line half of `array_slice_assign`: `ary[start, len] = val` with
-/// the full builtin semantics. Mirrors the 3-argument branch of
-/// [`index_assign`]; the receiver's class and unfrozen-ness are already
-/// guarded by the JIT, and `len` comes from the literal `array_slice_assign`
-/// bounded to `0..=MAX_INLINE_SLICE` (so the builtin's negative-length error
-/// cannot arise here), but everything else — index normalization, `#to_ary` —
-/// still has to happen.
-///
-extern "C" fn set_array_slice(
-    base: Value,
-    start: i64,
-    len: usize,
-    val: Value,
-    vm: &mut Executor,
-    globals: &mut Globals,
-) -> Option<Value> {
-    fn inner(
-        base: Value,
-        mut start: i64,
-        len: usize,
-        val: Value,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<Value> {
-        let mut ary = base.as_array();
-        if start < 0 {
-            let size = ary.len() as i64;
-            if start + size < 0 {
-                return Err(MonorubyErr::index_too_small(start, -size));
-            }
-            start += size;
-        }
-        let val = if val.try_array_ty().is_some() {
-            val
-        } else if let Some(a) = val.check_array_type(vm, globals)? {
-            a.peel()
-        } else {
-            val
-        };
-        ary.set_index2(start as usize, len, val)
-    }
-    inner(base, start, len, val, vm, globals)
-        .map_err(|err| vm.set_error(err))
-        .ok()
-}
-
-///
-/// [`set_array_slice`] for a frameless body: the same splice when the
-/// right-hand side is an Array (so no `#to_ary` is called), and 0 — with
-/// no error set and the receiver untouched — otherwise, and where the
+/// The out-of-line half of `array_slice_assign`: `ary[start, len] = val`
+/// when the right-hand side is an Array, so that no `#to_ary` is called —
+/// a helper called from JIT code has no frame and must not run Ruby
+/// (#2156). The receiver's class and unfrozen-ness are already guarded by
+/// the JIT, and `len` comes from the literal `array_slice_assign` bounded
+/// to `0..=MAX_INLINE_SLICE`. It answers 0 — with no error set and the
+/// receiver untouched — for any other right-hand side, and where the
 /// builtin would raise (an index out of range, detected before anything
-/// is stored): the interpreter then performs the assignment again in a
-/// frame.
+/// is stored): the JIT code deopts and the interpreter performs the
+/// assignment in a frame.
 ///
 extern "C" fn set_array_slice_pure(
     base: Value,
@@ -7645,8 +7598,9 @@ mod tests {
     /// replacement by an equally long `Array` is a plain copy. Covers the
     /// inline copy in all four buffer combinations (inline/spilled × source,
     /// receiver), and every run-time condition that has to fall back to
-    /// `set_array_slice` — a negative start (in and out of range), a
-    /// non-`Array` right-hand side, one that answers `#to_ary`, a length
+    /// `set_array_slice_pure` or, past it, the interpreter — a negative
+    /// start (in and out of range), a non-`Array` right-hand side, one
+    /// that answers `#to_ary`, a length
     /// mismatch, a run that reaches past the end, and self-assignment —
     /// plus the compile-time refusals (a start proven non-Integer, a
     /// non-literal or out-of-range length, a splat call site).
@@ -7680,7 +7634,7 @@ mod tests {
         res << (a = [*0..9]; sl6(a, 1, [*:a..:f]); a)                  # spilled/spilled
         res << (a = [0, 1, 2]; sl0(a, 1, []); a)                       # zero-length
         res << (a = [*0..9]; sl4(a, 6, [:a, :b, :c, :d]); a)           # ends exactly at len
-        # --- run-time fall-backs into `set_array_slice` ---
+        # --- run-time fall-backs into `set_array_slice_pure` ---
         res << (a = [*0..9]; sl4(a, -5, [:a, :b, :c, :d]); a)          # negative start
         res << (a = [*0..9]; sl4(a, 0, [:a, :b]); a)                   # shorter -> shrinks
         res << (a = [*0..9]; sl4(a, 0, [*:a..:f]); a)                  # longer -> grows
@@ -7725,7 +7679,8 @@ mod tests {
 
     /// Issue #1838: an out-of-range negative start in the `[start, len] =`
     /// form reports `minimum: -size`, as the single-index form does — both
-    /// from the builtin and from the JIT's out-of-line `set_array_slice`.
+    /// from the builtin and from the JIT-compiled site, whose helper
+    /// (`set_array_slice_pure`) leaves the raise to the interpreter.
     #[test]
     fn index_assign_slice_too_small_message() {
         run_test(

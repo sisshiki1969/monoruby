@@ -169,6 +169,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "clear", clear, 0);
     globals.define_builtin_func(HASH_CLASS, "replace", replace, 1);
     globals.define_builtin_func(HASH_CLASS, "compare_by_identity", compare_by_identity, 0);
+    globals.define_builtin_func(HASH_CLASS, "rehash", rehash, 0);
     globals.define_builtin_func(HASH_CLASS, "delete", delete, 1);
     // collect/map: implemented in Ruby (builtins/hash.rb) for arity adaptation and subclass support
     globals.define_builtin_funcs(HASH_CLASS, "each", &["each_pair"], each, 0);
@@ -450,7 +451,6 @@ fn hash_bracket(
     vm.with_temp_scope(|vm| {
         let mut result = Value::hash_from_inner(HashmapInner::default());
         vm.temp_push(result);
-        let mut map = result.as_hash();
         match len {
             0 => {}
             1 => {
@@ -458,10 +458,10 @@ fn hash_bracket(
                 if arg.try_hash_ty().is_some() {
                     // Single hash argument: return a fresh hash with copied entries
                     // (do NOT carry over default value/proc or compare_by_identity).
-                    aset_pairs(map, arg.as_hash(), vm, globals)?;
+                    result = copy_pairs(result, arg.as_hash(), vm, globals)?;
                 } else if let Some(ary) = arg.try_array_ty() {
                     // Single array argument: try to convert [[k,v], ...] to hash
-                    hash_from_array_pairs(map, ary, vm, globals)?;
+                    hash_from_array_pairs(result.as_hash(), ary, vm, globals)?;
                 } else {
                     // Try to_hash first. What `to_hash` / `to_ary` answers is
                     // referenced from nowhere else, so it goes on the temp
@@ -472,13 +472,13 @@ fn hash_bracket(
                         && coerced.try_hash_ty().is_some()
                     {
                         vm.temp_push(coerced);
-                        aset_pairs(map, coerced.as_hash(), vm, globals)?;
+                        result = copy_pairs(result, coerced.as_hash(), vm, globals)?;
                     } else if let Some(coerced) =
                         crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)?
                         && let Some(ary) = coerced.try_array_ty()
                     {
                         vm.temp_push(coerced);
-                        hash_from_array_pairs(map, ary, vm, globals)?;
+                        hash_from_array_pairs(result.as_hash(), ary, vm, globals)?;
                     } else {
                         return Err(MonorubyErr::argumenterr(
                             "odd number of arguments for Hash".to_string(),
@@ -492,6 +492,7 @@ fn hash_bracket(
                         "odd number of arguments for Hash".to_string(),
                     ));
                 }
+                let mut map = result.as_hash();
                 for i in (0..len).step_by(2) {
                     map.aset(args[i], args[i + 1], vm, globals)?;
                 }
@@ -506,27 +507,42 @@ fn hash_bracket(
     })
 }
 
+/// `Hash[hash]`: the Hash that takes the place of the empty *dst* as a
+/// copy of *src*'s pairs, without its default or its compare_by_identity
+/// mode. CRuby's `rb_hash_s_create` copies the table as it stands
+/// (`hash_copy`), so no key is hashed again and no Ruby code runs; only a
+/// Hash that compares by identity is stored pair by pair, since the copy
+/// keys on `hash` / `eql?`. Both Hashes must be rooted.
+fn copy_pairs(dst: Value, src: Hashmap, vm: &mut Executor, globals: &mut Globals) -> Result<Value> {
+    if src.is_empty() {
+        return Ok(dst);
+    }
+    if src.is_compare_by_identity() {
+        aset_pairs(dst.as_hash(), src, vm, globals)?;
+        return Ok(dst);
+    }
+    let mut inner = src.inner().clone_inner();
+    // `clone_inner` copies the default (`Hash#dup` semantics); drop it.
+    inner
+        .as_mut()
+        .set_defalut_value(Value::nil(), vm, globals)?;
+    Ok(Value::hash_from_inner(inner))
+}
+
 /// Store every pair of `src` into `dst` with `aset`, in order. Both must
-/// be rooted. Each pair waits on the temp stack (in two slots kept for
-/// the walk) while it is stored: the key's `hash` / `eql?` may take it out
-/// of `src`, and a collection would then free what is about to be stored.
+/// be rooted. `src` is walked as CRuby's `rb_hash_foreach` walks it
+/// (`Hashmap::walk`): the keys' `hash` / `eql?` may change it meanwhile.
 fn aset_pairs(
     mut dst: Hashmap,
     src: Hashmap,
     vm: &mut Executor,
     globals: &mut Globals,
 ) -> Result<()> {
-    vm.with_temp_scope(|vm| {
-        let slot = vm.temp_len();
-        vm.temp_push(Value::nil());
-        vm.temp_push(Value::nil());
-        for (k, v) in src.iter() {
-            vm.temp_set(slot, k);
-            vm.temp_set(slot + 1, v);
-            dst.aset(k, v, vm, globals)?;
-        }
-        Ok(())
-    })
+    src.walk(vm, globals, |vm, globals, _, k, v| {
+        dst.aset(k, v, vm, globals)?;
+        Ok(false)
+    })?;
+    Ok(())
 }
 
 /// Store the elements of `ary` (expected to be [k,v] pairs) into `map`.
@@ -819,19 +835,18 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         return Ok(Value::bool(false));
     }
     crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
-        for (k, lhs_value) in lhs.iter() {
+        // Walked as `rb_hash_foreach(hash1, eql_i)` walks it: the keys'
+        // `hash` / `eql?` and the values' `==` may change the receiver.
+        let differ = lhs.walk(vm, globals, |vm, globals, _, k, lhs_value| {
             // `rb_equal` per value, identity included: that is what makes
             // `{ x: Float::NAN } == { x: Float::NAN }` true, since both
             // hold the same NaN.
-            if let Some(rhs_value) = rhs.get(k, vm, globals)?
-                && vm.rb_equal(globals, lhs_value, rhs_value)?
-            {
-                continue;
-            } else {
-                return Ok(Value::bool(false));
-            }
-        }
-        Ok(Value::bool(true))
+            Ok(match rhs.get(k, vm, globals)? {
+                Some(rhs_value) => !vm.rb_equal(globals, lhs_value, rhs_value)?,
+                None => true,
+            })
+        })?;
+        Ok(Value::bool(!differ))
     }, Value::bool(true))
 }
 
@@ -868,14 +883,15 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     }
     let eql_id = IdentId::EQL_;
     crate::value::exec_recursive_paired(self_val.id(), rhs_v.id(), || {
-        for (k, lhs_value) in lhs.iter() {
+        // Walked, as in `==` above.
+        let differ = lhs.walk(vm, globals, |vm, globals, _, k, lhs_value| {
             let Some(rhs_value) = rhs.get(k, vm, globals)? else {
-                return Ok(Value::bool(false));
+                return Ok(true);
             };
             // `rb_eql` checks identity before dispatching, so a value that
             // is not `eql?` to itself (a NaN) still matches itself.
             if lhs_value.id() == rhs_value.id() {
-                continue;
+                return Ok(false);
             }
             let result = vm.invoke_method_inner(
                 globals,
@@ -885,11 +901,9 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
                 None,
                 None,
             )?;
-            if !result.as_bool() {
-                return Ok(Value::bool(false));
-            }
-        }
-        Ok(Value::bool(true))
+            Ok(!result.as_bool())
+        })?;
+        Ok(Value::bool(!differ))
     }, Value::bool(true))
 }
 
@@ -924,7 +938,9 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
             let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
             let hash_id = IdentId::HASH;
-            for (k, v) in h.iter() {
+            // Walked as `rb_hash_foreach(hash, hash_i)` walks it: a key's
+            // or a value's `hash` may change the receiver.
+            h.walk(vm, globals, |vm, globals, _, k, v| {
                 let kh = vm
                     .invoke_method_inner(globals, hash_id, k, &[], None, None)?
                     .try_fixnum()
@@ -936,7 +952,8 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let kpart = kh.wrapping_add(KEY_OFFSET).wrapping_mul(KEY_MIX);
                 let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
                 acc = acc.wrapping_add(kpart ^ vpart);
-            }
+                Ok(false)
+            })?;
             // Fold into Fixnum range: a Bignum digest would degrade to 0
             // when this hash is itself an element of an outer Hash.
             Ok(Value::from_hash_digest(acc as u64))
@@ -959,24 +976,16 @@ fn hash_subset(
     vm.with_temp_scope(|vm| {
         vm.temp_push(sub.as_val());
         vm.temp_push(sup.as_val());
-        let slot = vm.temp_len();
-        vm.temp_push(Value::nil());
-        vm.temp_push(Value::nil());
-        for (k, sub_value) in sub.iter() {
-            // The pair, too, in two slots kept for the walk: the key's
-            // `hash` / `eql?` may take it out of `sub`, and `sub_value` is
-            // compared after.
-            vm.temp_set(slot, k);
-            vm.temp_set(slot + 1, sub_value);
-            if let Some(sup_value) = sup.get(k, vm, globals)?
-                && vm.eq_values_bool(globals, sub_value, sup_value)?
-            {
-                continue;
-            } else {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        // Walked as `rb_hash_foreach(hash, hash_le_i)` walks it: the key's
+        // `hash` / `eql?` may take the pair out of `sub`, and `sub_value`
+        // is compared after.
+        let differ = sub.walk(vm, globals, |vm, globals, _, k, sub_value| {
+            Ok(match sup.get(k, vm, globals)? {
+                Some(sup_value) => !vm.eq_values_bool(globals, sub_value, sup_value)?,
+                None => true,
+            })
+        })?;
+        Ok(!differ)
     })
 }
 
@@ -1202,15 +1211,24 @@ fn hash_default_assign(
 }
 
 ///
-/// Inline `Hash#[]` as a direct call to `hashindex`, skipping the Ruby method
+/// Inline `Hash#[]` as a direct call to `hashindex_pure`, skipping the Ruby method
 /// frame.
 ///
 /// Only a receiver whose class is exactly `Hash` inlines. `Hash#[]` consults
 /// the `#default` *method* on a miss (CRuby's `rb_funcall(id_default)`), which
-/// a subclass — or a singleton — may override; `hashindex` reads the stored
+/// a subclass — or a singleton — may override; `hashindex_pure` reads the stored
 /// default directly, so for those receivers the generic path must stay in
 /// charge. A redefinition of `Hash#default` itself is covered by the class
 /// version guard emitted ahead of the inliner.
+///
+/// The helper behind the call (and behind the probe's slow path) is the
+/// pure one, [`hashindex_pure`]: a helper called from JIT code has no
+/// frame, so it must not run Ruby (see [`inline_helper_call`]), and a
+/// key's `#hash` / `#eql?` or the Hash's default proc may be Ruby code.
+/// Where it declines, the JIT code deopts and the interpreter calls the
+/// builtin in a frame of its own; a site that keeps declining is stamped
+/// (`RecompileReason::ImpureHelper`) and takes the ordinary call from its
+/// recompile on (#2156).
 ///
 fn hash_index(
     state: &mut AbstractState,
@@ -1233,18 +1251,10 @@ fn hash_index(
     if callsite.pos_num != 1 {
         return false;
     }
-    if !recv_class.is(HASH_CLASS) {
+    if !recv_class.is(HASH_CLASS) || state.pc().impure_helper() {
         return false;
     }
-    // In a frameless body, the helper behind the call / the probe's slow
-    // path is the pure one, so the body needs no error exit
-    // (`JitContext::wants_pure_helper`).
-    let pure = ctx.wants_pure_helper(state);
-    let helper = if pure {
-        hashindex_pure as *const () as u64
-    } else {
-        hashindex as *const () as u64
-    };
+    let helper = hashindex_pure as *const () as u64;
     state.load(ir, callsite.args, GP::Rcx);
     state.load(ir, callsite.recv, GP::Rdx);
     // A compile-time key (`LinkMode::C`: a frozen String literal, a folded
@@ -1276,7 +1286,7 @@ fn hash_index(
             ir.fpr_save(using_fpr);
             ir.hash_probe(layout, helper, digest, key_eq);
             ir.fpr_restore(using_fpr);
-            hash_index_exit(state, ir, ctx, pure);
+            ctx.pure_helper_exit(state, ir);
             state.def_rax2acc(ir, callsite.dst);
             return true;
         }
@@ -1345,7 +1355,7 @@ fn hash_index(
         ir.fpr_save(using_fpr);
         ir.hash_probe(layout, helper, digest, key_eq);
         ir.fpr_restore(using_fpr);
-        hash_index_exit(state, ir, ctx, pure);
+        ctx.pure_helper_exit(state, ir);
         state.def_rax2acc(ir, callsite.dst);
         return true;
     }
@@ -1353,32 +1363,20 @@ fn hash_index(
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_call_2args(helper));
     ir.fpr_restore(using_fpr);
-    hash_index_exit(state, ir, ctx, pure);
+    ctx.pure_helper_exit(state, ir);
     state.def_rax2acc(ir, callsite.dst);
     true
 }
 
 ///
-/// The exit after `Hash#[]`'s helper call: the error exit of `hashindex`,
-/// or the deopt of `hashindex_pure` declining.
-///
-fn hash_index_exit(state: &AbstractState, ir: &mut AsmIr, ctx: &JitContext, pure: bool) {
-    if pure {
-        ctx.pure_helper_exit(state, ir);
-    } else {
-        let error = ir.new_error(state);
-        ir.handle_error(error);
-    }
-}
-
-///
-/// Inline `Hash#__get_or_key` as a direct call to `hashgetorkey`, skipping
-/// the Ruby method frame — the same shape (and emitter) as `Hash#[]`.
+/// Inline `Hash#__get_or_key` as a direct call to `hashgetorkey_pure`,
+/// skipping the Ruby method frame — the same shape (and emitter) as
+/// `Hash#[]`, pure helper and deopt included.
 ///
 fn hash_get_or_key(
     state: &mut AbstractState,
     ir: &mut AsmIr,
-    _: &JitContext,
+    ctx: &JitContext,
     store: &Store,
     callid: CallSiteId,
     recv_class: Option<CachedClass>,
@@ -1390,7 +1388,7 @@ fn hash_get_or_key(
         return false;
     };
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 1 {
+    if !callsite.is_simple() || callsite.pos_num != 1 || state.pc().impure_helper() {
         return false;
     }
     if !recv_class.is(HASH_CLASS) {
@@ -1400,17 +1398,16 @@ fn hash_get_or_key(
     state.load(ir, callsite.recv, GP::Rdx);
     let using_fpr = state.get_using_fpr(ir);
     ir.fpr_save(using_fpr);
-    ir.inline(|r#gen, _, _, _| r#gen.emit_call_2args(hashgetorkey as *const () as u64));
+    ir.inline(|r#gen, _, _, _| r#gen.emit_call_2args(hashgetorkey_pure as *const () as u64));
     ir.fpr_restore(using_fpr);
-    let error = ir.new_error(state);
-    ir.handle_error(error);
+    ctx.pure_helper_exit(state, ir);
     state.def_rax2acc(ir, callsite.dst);
     true
 }
 
 ///
 /// A builtin with at most one argument, compiled as a direct call to a
-/// runtime helper `f(vm, globals, recv, arg)` of the [`hashindex`] ABI,
+/// runtime helper `f(vm, globals, recv, arg)` of the [`hashindex_pure`] ABI,
 /// skipping the Ruby method frame (the builtin's native wrapper and its
 /// frame). `may_fail` puts the error exit behind the call: the helper
 /// returns 0 with the error set.
@@ -1526,7 +1523,7 @@ fn hash_iter_end_gen(
     )
 }
 
-/// [`include`] for the JIT, in the [`hashindex`] ABI: the answer wherever
+/// [`include`] for the JIT, in the [`hashindex_pure`] ABI: the answer wherever
 /// finding it runs no Ruby code, and 0 — with no error set — where it
 /// would. As for [`hashindex_pure`], that is a packed key, a String of
 /// class `String` itself, or any key of an identity-keyed Hash: those are
@@ -1550,7 +1547,7 @@ extern "C" fn hashinclude_pure(
     h.contains_key(key, vm, globals).ok().map(Value::bool)
 }
 
-/// [`iter_begin`] for the JIT, in the [`hashindex`] ABI.
+/// [`iter_begin`] for the JIT, in the [`hashindex_pure`] ABI.
 extern "C" fn hash_iter_begin_c(
     _: &mut Executor,
     _: &mut Globals,
@@ -1560,7 +1557,7 @@ extern "C" fn hash_iter_begin_c(
     Some(Value::bool(base.as_hash().iter_incr()))
 }
 
-/// [`iter_end`] for the JIT, in the [`hashindex`] ABI.
+/// [`iter_end`] for the JIT, in the [`hashindex_pure`] ABI.
 extern "C" fn hash_iter_end_c(
     _: &mut Executor,
     _: &mut Globals,
@@ -1572,7 +1569,7 @@ extern "C" fn hash_iter_end_c(
 }
 
 ///
-/// Inline `Hash#[]=` as a direct call to `hashindex_assign`, skipping the Ruby
+/// Inline `Hash#[]=` as a direct call to `hashindex_assign_pure`, skipping the Ruby
 /// method frame.
 ///
 /// Unlike `Hash#[]` this needs no `Hash`-class restriction: the builtin
@@ -1589,19 +1586,15 @@ fn hash_index_assign(
     _: Option<CachedClass>,
 ) -> bool {
     let callsite = &store[callid];
-    if !callsite.is_simple() || callsite.pos_num != 2 {
+    if !callsite.is_simple() || callsite.pos_num != 2 || state.pc().impure_helper() {
         return false;
     }
     let CallSiteInfo {
         recv, args, dst, ..
     } = *callsite;
-    // In a frameless body, the pure helper (`JitContext::wants_pure_helper`).
-    let pure = ctx.wants_pure_helper(state);
-    let helper = if pure {
-        hashindex_assign_pure as *const () as u64
-    } else {
-        hashindex_assign as *const () as u64
-    };
+    // The pure helper, as for `Hash#[]` (`hash_index`): the store runs a
+    // new key's `#hash` / `#eql?`.
+    let helper = hashindex_assign_pure as *const () as u64;
     state.load(ir, args, GP::Rsi);
     state.load(ir, args + 1usize, GP::Rdx);
     state.load(ir, recv, GP::Rdi);
@@ -1609,7 +1602,7 @@ fn hash_index_assign(
     ir.fpr_save(using_fpr);
     ir.inline(move |r#gen, _, _, _| r#gen.emit_hash_index_assign(helper));
     ir.fpr_restore(using_fpr);
-    hash_index_exit(state, ir, ctx, pure);
+    ctx.pure_helper_exit(state, ir);
     state.def_rax2acc(ir, dst);
     true
 }
@@ -1846,7 +1839,9 @@ fn get_or_key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 fn dup_table(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut inner = lfp.self_val().as_hashmap_inner().clone_inner();
     // clone_inner copies the default (`Hash#dup` semantics); drop it.
-    inner.as_mut().set_defalut_value(Value::nil(), vm, globals)?;
+    inner
+        .as_mut()
+        .set_defalut_value(Value::nil(), vm, globals)?;
     Ok(Value::hash_from_inner(inner))
 }
 
@@ -2158,25 +2153,9 @@ fn hash_value_at(
     hash_entry_at_inline(state, ir, store, callid, idx_class, false)
 }
 
-extern "C" fn hashindex(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    base: Value,
-    key: Value,
-) -> Option<Value> {
-    let h = base.as_hash();
-    match h.index(vm, globals, key) {
-        Ok(v) => Some(v),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
-}
-
 ///
-/// [`hashindex`] for a frameless body: the same answer wherever finding it
-/// runs no Ruby code, and 0 — with no error set — where it would.
+/// `Hash#[]` for the JIT: the answer wherever finding it runs no Ruby
+/// code, and 0 — with no error set — where it would.
 ///
 /// The lookup itself runs none for a packed key, a String of class
 /// `String` itself, or any key of an identity-keyed Hash: those are
@@ -2211,52 +2190,33 @@ extern "C" fn hashindex_pure(
     }
 }
 
-/// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex`], so the
-/// inliner reuses `emit_call_2args` with this address. One probe, the
-/// key itself on a miss, the default never consulted.
-extern "C" fn hashgetorkey(
+/// `Hash#__get_or_key` for the JIT: same ABI as [`hashindex_pure`], so
+/// the inliner reuses `emit_call_2args` with this address. One probe, the
+/// key itself on a miss, the default never consulted; the keys
+/// [`hashindex_pure`] declines are declined here too.
+extern "C" fn hashgetorkey_pure(
     vm: &mut Executor,
     globals: &mut Globals,
     base: Value,
     key: Value,
 ) -> Option<Value> {
-    match base.as_hash().get(key, vm, globals) {
-        Ok(v) => Some(v.unwrap_or(key)),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
+    let h = base.as_hash();
+    if !(key.is_packed_value()
+        || key.is_plain_rstring_inner().is_some()
+        || h.is_compare_by_identity())
+    {
+        return None;
     }
-}
-
-/// `Hash#[]=` for the shapes its inline fast path leaves alone: insertion
-/// (which may promote the representation), the boxed map, an eql?-keyed heap
-/// key, and the raising cases (frozen receiver, new key during iteration).
-/// Mirrors the `index_assign` builtin, including the fresh-String-key
-/// dup/freeze, and answers the assigned value.
-extern "C" fn hashindex_assign(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    base: Value,
-    key: Value,
-    val: Value,
-) -> Option<Value> {
-    let res = base
-        .as_hash_mut(&globals.store)
-        .and_then(|mut h| h.aset(key, val, vm, globals));
-    match res {
-        Ok(()) => Some(val),
-        Err(err) => {
-            vm.set_error(err);
-            None
-        }
-    }
+    h.get(key, vm, globals).ok().map(|v| v.unwrap_or(key))
 }
 
 ///
-/// [`hashindex_assign`] for a frameless body: the same store wherever it
-/// runs no Ruby code, and 0 — with no error set and the Hash untouched —
-/// where it would run some or would raise.
+/// `Hash#[]=` for the JIT, for the shapes its inline fast path leaves
+/// alone (insertion, which may promote the representation, and the boxed
+/// map): the store wherever it runs no Ruby code, and 0 — with no error
+/// set and the Hash untouched — where it would run some or would raise.
+/// Mirrors the `index_assign` builtin, including the fresh-String-key
+/// dup/freeze, and answers the assigned value.
 ///
 /// The probe runs none for the keys [`hashindex_pure`] admits (and
 /// neither does promoting an inline Hash, whose stored keys are all of
@@ -2272,8 +2232,10 @@ extern "C" fn hashindex_assign_pure(
     key: Value,
     val: Value,
 ) -> Option<Value> {
-    let ident = base.as_hash().is_compare_by_identity();
-    if !(ident || key.is_packed_value() || key.is_plain_rstring_inner().is_some()) {
+    if !(key.is_packed_value()
+        || key.is_plain_rstring_inner().is_some()
+        || base.as_hash().is_compare_by_identity())
+    {
         return None;
     }
     let mut h = base.as_hash_mut(&globals.store).ok()?;
@@ -2288,8 +2250,18 @@ extern "C" fn hashindex_assign_pure(
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/clear.html]
 #[monoruby_builtin]
-fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().as_hash_mut(&globals.store)?.clear()?;
+fn clear(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
+    if h.iter_active() {
+        // A walk of this Hash is under way (`Hashmap::walk`, or `each`):
+        // delete the pairs where they stand, as CRuby's `rb_hash_clear`
+        // does then (`rb_hash_foreach(hash, clear_i, 0)`), which leaves
+        // their positions to the walk as tombstones instead of dropping
+        // the table under it.
+        h.clear_during_iteration(vm, globals)?;
+    } else {
+        h.clear()?;
+    }
     Ok(lfp.self_val())
 }
 
@@ -2302,10 +2274,55 @@ fn clear(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_ = lfp.self_val().as_hash_mut(&globals.store)?;
+    if lfp.arg(0).id() == lfp.self_val().id() {
+        return Ok(lfp.self_val());
+    }
+    // The table is swapped whole, which a walk of it could not survive
+    // (unlike `clear`, which empties it in place then).
+    if self_.iter_active() {
+        return Err(MonorubyErr::runtimeerr(
+            "can't replace hash during iteration",
+        ));
+    }
     let arg = lfp.arg(0).coerce_to_hash(vm, globals)?;
     self_.replace_inner(arg.inner().clone_inner());
 
     Ok(lfp.self_val())
+}
+
+///
+/// ### Hash#rehash
+///
+/// - rehash -> self
+///
+/// The pairs are entered again into a table of their own, which replaces
+/// the receiver's once every key has been hashed — so a `#hash` that
+/// raises leaves the receiver as it was, as in CRuby.
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/rehash.html]
+#[monoruby_builtin]
+fn rehash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let self_val = lfp.self_val();
+    let hash = self_val.as_hash();
+    if hash.iter_active() {
+        return Err(MonorubyErr::runtimeerr("rehash during iteration"));
+    }
+    self_val.ensure_not_frozen(&globals.store)?;
+    // A copy for its default, default proc and comparison mode.
+    let mut inner = hash.inner().clone_inner();
+    inner.as_mut().clear()?;
+    let tmp = Value::hash_from_inner(inner);
+    vm.with_temp_scope(|vm| {
+        vm.temp_push(tmp);
+        hash.walk(vm, globals, |vm, globals, _, k, v| {
+            tmp.as_hash().insert(k, v, vm, globals)?;
+            Ok(false)
+        })?;
+        self_val
+            .as_hash_mut(&globals.store)?
+            .replace_inner(tmp.as_hash().inner().clone_inner());
+        Ok(self_val)
+    })
 }
 
 ///
@@ -2472,29 +2489,45 @@ fn select_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let data = vm.get_block_data(globals, bh)?;
-    let mut remove = vec![];
-    let self_val = lfp.self_val();
-    let hash = self_val.as_hash();
-    {
-        let _iter_guard = hash.iter_guard();
-        for (k, v) in hash.iter() {
-            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-                remove.push(k);
-            }
-        }
-    }
-    let changed = !remove.is_empty();
-    let mut h = lfp.self_val().as_hash();
-    for k in remove {
-        h.remove(k, vm, globals)?;
-    }
+    let changed = hash_delete_where(vm, globals, lfp, bh, false)?;
     Ok(if changed {
         lfp.self_val()
     } else {
         Value::nil()
     })
+}
+
+/// `delete_if` / `keep_if` / `reject!` / `select!`: delete, as they are
+/// reached, the pairs for which the block answers `delete_when`. Whether
+/// the Hash shrank, by these deletions or by the block's own.
+///
+/// As `rb_hash_foreach(hash, delete_if_i / keep_if_i, hash)`: the walk is
+/// `Hashmap::walk`, and each deletion is made when its pair is reached
+/// (the block sees the Hash without the pairs deleted so far, and a
+/// `break` or an exception keeps them deleted), by position, after the
+/// `rb_hash_modify` check the block may have made fail by freezing the
+/// receiver.
+#[inline(always)]
+fn hash_delete_where(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    bh: BlockHandler,
+    delete_when: bool,
+) -> Result<bool> {
+    let self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    let data = vm.get_block_data(globals, bh)?;
+    let hash = self_val.as_hash();
+    let size = hash.len();
+    hash.walk(vm, globals, |vm, globals, i, k, v| {
+        if vm.invoke_block(globals, &data, &[k, v])?.as_bool() == delete_when {
+            self_val.ensure_not_frozen(&globals.store)?;
+            self_val.as_hash().delete_at(i, vm, globals)?;
+        }
+        Ok(false)
+    })?;
+    Ok(hash.len() != size)
 }
 
 ///
@@ -2557,7 +2590,10 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             let escape = globals.store.inspect_escape();
             let mut buf = InspectBuf::new("{");
             let mut first = true;
-            for (k, v) in self_val.as_hash().iter() {
+            // Walked as `rb_hash_foreach(hash, inspect_i)` walks it: a
+            // key's or a value's `inspect` may change the receiver.
+            let hash = self_val.as_hash();
+            hash.walk(vm, globals, |vm, globals, _, k, v| {
                 if let Some(sym) = k.try_symbol() {
                     // `rb_sym2str(key)` gives the encoding; the label is
                     // the bare name, or `"name"` when it needs quoting
@@ -2596,7 +2632,8 @@ fn inspect(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 first = false;
                 let vs = rb_inspect_in(vm, globals, v, resenc)?;
                 buf.append(&globals.store, vs.as_rstring_inner())?;
-            }
+                Ok(false)
+            })?;
             buf.cat("}");
             Ok(buf.into_value())
         },
@@ -2658,23 +2695,7 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         }
         Some(block) => block,
     };
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let data = vm.get_block_data(globals, bh)?;
-    let mut remove = vec![];
-    let self_val = lfp.self_val();
-    let hash = self_val.as_hash();
-    {
-        let _iter_guard = hash.iter_guard();
-        for (k, v) in hash.iter() {
-            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-                remove.push(k);
-            }
-        }
-    }
-    let mut h = lfp.self_val().as_hash();
-    for k in remove {
-        h.remove(k, vm, globals)?;
-    }
+    hash_delete_where(vm, globals, lfp, bh, true)?;
     Ok(lfp.self_val())
 }
 
@@ -2694,24 +2715,7 @@ fn reject_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let data = vm.get_block_data(globals, bh)?;
-    let mut remove = vec![];
-    let self_val = lfp.self_val();
-    let hash = self_val.as_hash();
-    {
-        let _iter_guard = hash.iter_guard();
-        for (k, v) in hash.iter() {
-            if vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-                remove.push(k);
-            }
-        }
-    }
-    let changed = !remove.is_empty();
-    let mut h = lfp.self_val().as_hash();
-    for k in remove {
-        h.remove(k, vm, globals)?;
-    }
+    let changed = hash_delete_where(vm, globals, lfp, bh, true)?;
     Ok(if changed {
         lfp.self_val()
     } else {
@@ -2775,12 +2779,16 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
     let hash = lfp.self_val().as_hash();
-    for (k, v) in hash.iter() {
-        if vm.eq_values_bool(globals, key, k)? {
-            return Ok(Value::array_from_vec(vec![k, v]));
+    // Walked (`Hashmap::walk`): a key's `==` may change the receiver.
+    let mut found = Value::nil();
+    hash.walk(vm, globals, |vm, globals, _, k, v| {
+        let hit = vm.eq_values_bool(globals, key, k)?;
+        if hit {
+            found = Value::array2(k, v);
         }
-    }
-    Ok(Value::nil())
+        Ok(hit)
+    })?;
+    Ok(found)
 }
 
 ///
@@ -2793,12 +2801,16 @@ fn assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let value = lfp.arg(0);
     let hash = lfp.self_val().as_hash();
-    for (k, v) in hash.iter() {
-        if vm.eq_values_bool(globals, value, v)? {
-            return Ok(Value::array_from_vec(vec![k, v]));
+    // Walked (`Hashmap::walk`): a value's `==` may change the receiver.
+    let mut found = Value::nil();
+    hash.walk(vm, globals, |vm, globals, _, k, v| {
+        let hit = vm.eq_values_bool(globals, value, v)?;
+        if hit {
+            found = Value::array2(k, v);
         }
-    }
-    Ok(Value::nil())
+        Ok(hit)
+    })?;
+    Ok(found)
 }
 
 ///
@@ -2824,45 +2836,55 @@ fn invert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // 1000-pair Hash (#2173): a call through `Hashmap::aset` and two
     // root-slot stores per pair.
     let mut map = HashmapInner::with_capacity(hash.len());
-    let mut pairs = hash.iter();
-    while let Some((k, v)) = pairs.next() {
+    for (stored, (k, v)) in hash.iter().enumerate() {
         if !map.aset_native_key(v, k, vm, globals)? {
-            return invert_rooted(vm, globals, map, (k, v), pairs);
+            return invert_rooted(vm, globals, hash, map, stored);
         }
     }
     Ok(Value::hash_from_inner(map))
 }
 
-/// The rest of [`invert`], from `first`, the first pair whose new key may
-/// run Ruby code: `map`, the pairs before it, becomes the result Hash
-/// right away and stays on the temp stack while the others go in, so that
-/// a collection inside a key's `#hash` / `#eql?` finds every pair stored
-/// so far — the frozen copies of String keys included, which nothing else
-/// holds.
+/// The rest of [`invert`], from the first pair whose new key may run Ruby
+/// code: `map`, holding the `stored` pairs before it, becomes the result
+/// Hash right away and stays on the temp stack while the others go in, so
+/// that a collection inside a key's `#hash` / `#eql?` finds every pair
+/// stored so far — the frozen copies of String keys included, which
+/// nothing else holds.
+///
+/// From here the receiver is walked as `rb_hash_foreach(hash,
+/// rb_hash_invert_i)` walks it (`Hashmap::walk`, which also keeps the
+/// pair being stored rooted): the new key's `hash` / `eql?` may take
+/// pairs out of the receiver (#2155). Nothing has run since the native
+/// part read the first `stored` pairs, so the walk starts behind them.
 #[inline(never)]
 fn invert_rooted(
     vm: &mut Executor,
     globals: &mut Globals,
+    hash: Hashmap,
     map: HashmapInner,
-    first: (Value, Value),
-    rest: impl Iterator<Item = (Value, Value)>,
+    stored: usize,
 ) -> Result<Value> {
+    // Where the pair after the `stored` live ones stands: a position
+    // counts the tombstones before it too.
+    let start = if hash.entry_count() == hash.len() {
+        stored
+    } else {
+        let mut live = 0;
+        let mut pos = 0;
+        while live < stored {
+            live += hash.live_at(pos) as usize;
+            pos += 1;
+        }
+        pos
+    };
     vm.with_temp_scope(|vm| {
         let res = Value::hash_from_inner(map);
         vm.temp_push(res);
         let mut map = res.as_hash();
-        let slot = vm.temp_len();
-        vm.temp_push(Value::nil());
-        vm.temp_push(Value::nil());
-        for (k, v) in std::iter::once(first).chain(rest) {
-            // The pair waits on the temp stack (in two slots kept for the
-            // walk) while it is stored: the new key's `hash` / `eql?` may
-            // take it out of the receiver, and a collection would then
-            // free it.
-            vm.temp_set(slot, k);
-            vm.temp_set(slot + 1, v);
+        hash.walk_from(start, vm, globals, |vm, globals, _, k, v| {
             map.aset(v, k, vm, globals)?;
-        }
+            Ok(false)
+        })?;
         Ok(res)
     })
 }
@@ -2906,48 +2928,23 @@ pub(super) fn tally_up(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge.html]
 #[monoruby_builtin]
 fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut h = lfp.self_val().dup().as_hash();
+    let h = lfp.self_val().dup().as_hash();
     // The dup is a fresh Hash referenced only by this Rust local; root it
     // across `#to_hash`, the block calls, and the Ruby `hash`/`eql?`
     // dispatches inside get/insert (contrast `merge!`, where `h` is the
     // frame-rooted receiver).
     vm.with_temp_scope(|vm| {
         vm.temp_push(h.into());
-        if let Some(block) = lfp.block() {
-            let data = vm.get_block_data(globals, block)?;
-            // Three slots, kept for the walk, hold the pair being merged
-            // and the block's answer for it.
-            let slot = vm.temp_len();
-            for _ in 0..3 {
-                vm.temp_push(Value::nil());
-            }
-            for arg in lfp.arg(0).as_array().iter() {
-                let other_val = arg.coerce_to_hash(vm, globals)?;
-                // What a non-Hash operand's `to_hash` answered is referenced
-                // from nowhere else: root it while it is walked.
-                vm.temp_push(other_val.as_val());
-                for (k, other_v) in other_val.iter() {
-                    // The pair, too, until it is stored: the key's `hash` /
-                    // `eql?` and the block may take it out of `other_val`.
-                    vm.temp_set(slot, k);
-                    vm.temp_set(slot + 1, other_v);
-                    if let Some(self_v) = h.get(k, vm, globals)? {
-                        let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                        // The block's answer, too, until `aset` (which runs
-                        // the key's `hash` / `eql?`) has stored it.
-                        vm.temp_set(slot + 2, v);
-                        h.aset(k, v, vm, globals)?;
-                    } else {
-                        h.aset(k, other_v, vm, globals)?;
-                    }
-                }
-            }
-        } else {
-            for arg in lfp.arg(0).as_array().iter() {
-                let other_val = arg.coerce_to_hash(vm, globals)?;
-                vm.temp_push(other_val.as_val());
-                aset_pairs(h, other_val, vm, globals)?;
-            }
+        let data = match lfp.block() {
+            Some(block) => Some(vm.get_block_data(globals, block)?),
+            None => None,
+        };
+        for arg in lfp.arg(0).as_array().iter() {
+            let other_val = arg.coerce_to_hash(vm, globals)?;
+            // What a non-Hash operand's `to_hash` answered is referenced
+            // from nowhere else: root it while it is walked.
+            vm.temp_push(other_val.as_val());
+            update_pairs(h, other_val, data.as_ref(), vm, globals)?;
         }
         Ok(h.into())
     })
@@ -2964,46 +2961,57 @@ fn merge(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/merge=21.html]
 #[monoruby_builtin]
 fn merge_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let mut h = lfp.self_val().as_hash_mut(&globals.store)?;
+    let h = lfp.self_val().as_hash_mut(&globals.store)?;
     // What a non-Hash operand's `to_hash` answers is referenced from
-    // nowhere else, and so is the block's answer until `aset` has stored
-    // it: both go on the temp stack, or a collection in the block or in a
-    // key's `hash` / `eql?` frees them.
+    // nowhere else: it goes on the temp stack, or a collection in the
+    // block or in a key's `hash` / `eql?` frees it.
     vm.with_temp_scope(|vm| {
-        if let Some(block) = lfp.block() {
-            let data = vm.get_block_data(globals, block)?;
-            // Three slots, kept for the walk, hold the pair being merged and
-            // the block's answer for it.
-            let slot = vm.temp_len();
-            for _ in 0..3 {
-                vm.temp_push(Value::nil());
-            }
-            for arg in lfp.arg(0).as_array().iter() {
-                let other = arg.coerce_to_hash(vm, globals)?;
-                vm.temp_push(other.as_val());
-                for (k, other_v) in other.iter() {
-                    // The pair, too, until it is stored: the key's `hash` /
-                    // `eql?` and the block may take it out of `other`.
-                    vm.temp_set(slot, k);
-                    vm.temp_set(slot + 1, other_v);
-                    if let Some(self_v) = h.get(k, vm, globals)? {
-                        let v = vm.invoke_block(globals, &data, &[k, self_v, other_v])?;
-                        vm.temp_set(slot + 2, v);
-                        h.aset(k, v, vm, globals)?;
-                    } else {
-                        h.aset(k, other_v, vm, globals)?;
-                    }
-                }
-            }
-        } else {
-            for arg in lfp.arg(0).as_array().iter() {
-                let other = arg.coerce_to_hash(vm, globals)?;
-                vm.temp_push(other.as_val());
-                aset_pairs(h, other, vm, globals)?;
-            }
+        let data = match lfp.block() {
+            Some(block) => Some(vm.get_block_data(globals, block)?),
+            None => None,
+        };
+        for arg in lfp.arg(0).as_array().iter() {
+            let other = arg.coerce_to_hash(vm, globals)?;
+            vm.temp_push(other.as_val());
+            update_pairs(h, other, data.as_ref(), vm, globals)?;
         }
         Ok(lfp.self_val())
     })
+}
+
+/// `rb_hash_update` for one operand: store the pairs of `other` into
+/// `dst`, a key both have going in with what `block` answers for it (the
+/// key, `dst`'s value, `other`'s value). Both must be rooted.
+///
+/// `other` is walked as `rb_hash_foreach(other, rb_hash_update_i /
+/// rb_hash_update_block_i, hash)` walks it (`Hashmap::walk`): the block
+/// and the keys' `hash` / `eql?` may delete from it or clear it, and a
+/// new key in it raises.
+fn update_pairs(
+    mut dst: Hashmap,
+    other: Hashmap,
+    block: Option<&ProcData>,
+    vm: &mut Executor,
+    globals: &mut Globals,
+) -> Result<()> {
+    let Some(data) = block else {
+        return aset_pairs(dst, other, vm, globals);
+    };
+    other.walk(vm, globals, |vm, globals, _, k, other_v| {
+        let Some(self_v) = dst.get(k, vm, globals)? else {
+            dst.aset(k, other_v, vm, globals)?;
+            return Ok(false);
+        };
+        let v = vm.invoke_block(globals, data, &[k, self_v, other_v])?;
+        // The block's answer is referenced from nowhere else until `aset`
+        // (which runs the key's `hash` / `eql?`) has stored it.
+        vm.with_temp_scope(|vm| {
+            vm.temp_push(v);
+            dst.aset(k, v, vm, globals)
+        })?;
+        Ok(false)
+    })?;
+    Ok(())
 }
 
 ///
@@ -3019,9 +3027,18 @@ fn compare_by_identity(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
     lfp.expect_no_block()?;
-    lfp.self_val().as_hash().compare_by_identity(vm, globals)?;
+    let mut hash = lfp.self_val().as_hash();
+    if hash.is_compare_by_identity() {
+        return Ok(lfp.self_val());
+    }
+    lfp.self_val().ensure_not_frozen(&globals.store)?;
+    if hash.iter_active() {
+        return Err(MonorubyErr::runtimeerr(
+            "compare_by_identity during iteration",
+        ));
+    }
+    hash.compare_by_identity(vm, globals)?;
     Ok(lfp.self_val())
 }
 
@@ -4394,12 +4411,16 @@ fn shift(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let hash = lfp.self_val().as_hash();
     let target = lfp.arg(0);
-    for (k, v) in hash.iter() {
-        if vm.eq_values_bool(globals, v, target)? {
-            return Ok(k);
+    // Walked (`Hashmap::walk`): a value's `==` may change the receiver.
+    let mut found = Value::nil();
+    hash.walk(vm, globals, |vm, globals, _, k, v| {
+        let hit = vm.eq_values_bool(globals, v, target)?;
+        if hit {
+            found = k;
         }
-    }
-    Ok(Value::nil())
+        Ok(hit)
+    })?;
+    Ok(found)
 }
 
 ///
@@ -4418,23 +4439,7 @@ fn keep_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
         }
         Some(block) => block,
     };
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let data = vm.get_block_data(globals, bh)?;
-    let mut remove = vec![];
-    let self_val = lfp.self_val();
-    let hash = self_val.as_hash();
-    {
-        let _iter_guard = hash.iter_guard();
-        for (k, v) in hash.iter() {
-            if !vm.invoke_block(globals, &data, &[k, v])?.as_bool() {
-                remove.push(k);
-            }
-        }
-    }
-    let mut h = lfp.self_val().as_hash();
-    for k in remove {
-        h.remove(k, vm, globals)?;
-    }
+    hash_delete_where(vm, globals, lfp, bh, false)?;
     Ok(lfp.self_val())
 }
 
@@ -6014,8 +6019,10 @@ mod tests {
     }
 
     #[test]
-    fn hash_iter_guard_clear_raises() {
-        run_test_error("h = {a: 1, b: 2}; h.each { h.clear }");
+    fn hash_iter_guard_clear() {
+        // `clear` during a walk is a deletion of every pair, which CRuby
+        // allows as it allows `delete`: the walk ends there.
+        run_test("h = {a: 1, b: 2}; r = []; h.each { |k, _| r << k; h.clear }; [r, h]");
     }
 
     #[test]
@@ -6550,7 +6557,7 @@ mod tests {
 
     /// `Hash#[]` consults the `#default` *method* on a miss, so a subclass (or
     /// a singleton) overriding it must not be answered by the inliner, whose
-    /// `hashindex` reads the stored default directly.
+    /// `hashindex_pure` reads the stored default directly.
     #[test]
     fn hash_index_subclass_default() {
         run_test(

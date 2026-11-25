@@ -416,6 +416,12 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
     }
 
     /// Return the index in `entries` where an equivalent key can be found
+    //
+    // Inlined into its one hot caller (`RubyMap::get_index_of`): left to
+    // the optimizer it was, until more instantiations of the lookup made
+    // it a call of its own, 37 instructions per `Hash#[]` of a key with a
+    // Ruby-level `#hash`.
+    #[inline]
     pub(crate) fn get_index_of<Q>(
         &self,
         hash: HashValue,

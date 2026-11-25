@@ -489,14 +489,6 @@ class Hash
     ->(k) { hash[k] }
   end
 
-  def rehash
-    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
-    pairs = to_a
-    clear
-    pairs.each { |k, v| self[k] = v }
-    self
-  end
-
 end
 
 # True alias required by ruby/spec's strict

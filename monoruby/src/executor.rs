@@ -4897,9 +4897,13 @@ impl Executor {
                             }
                             let hash = v.coerce_to_hash(vm, globals)?;
                             vm.temp_push(hash.into());
-                            for (k, v) in hash.iter() {
+                            // Walked, not iterated: a key's `hash` /
+                            // `eql?` may change the Hash being splatted
+                            // (`Hashmap::walk`).
+                            hash.walk(vm, globals, |vm, globals, _, k, v| {
                                 vm.temp_at(map_idx).as_hash().insert(k, v, vm, globals)?;
-                            }
+                                Ok(false)
+                            })?;
                         }
                     }
                 }

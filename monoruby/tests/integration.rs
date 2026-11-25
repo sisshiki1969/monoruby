@@ -132,6 +132,7 @@ mod hash_literal_gc;
 mod hash_probe_jit;
 mod hash_seed;
 mod hash_string_keys;
+mod hash_walk_mutation;
 mod heap_limit_div_between_sort_order;
 mod hidden_ivars;
 mod hidden_state;

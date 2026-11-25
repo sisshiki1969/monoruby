@@ -293,7 +293,10 @@ aarch64 は `cmov` を `csel` で置き換えた同型で、cold ブロックは
   `js slow`、自己代入（`cmpq rdi, rdx`）→ slow、`rdx` がちょうど `len`
   要素の Array で、レシーバの run がその内側に収まるときだけ `len` 個の
   `mov` 対を展開し、`emit_write_barrier_bulk_rdi`、`rax = rdx`。それ以外は
-  `set_array_slice` が builtin と同じ規則（添字正規化、`#to_ary`）で処理。
+  `set_array_slice_pure` が、右辺が Array なら builtin と同じ規則（添字
+  正規化）で処理する。右辺が Array でない（`#to_ary` を呼ぶ）場合と builtin
+  が例外を出す場合は 0 を返して deopt し、インタプリタがフレーム付きで呼ぶ
+  （JIT から呼ぶヘルパは Ruby を実行しない、#2156）。
 - **`size` / `length`**: `ir.array_len_fixnum(Rax, Rdi)` の純 LIR。x86 は
   `cmov` + `salq/orq`、aarch64 は `csel`（[`../lir.md`](../lir.md) の
   「container length」族）。
