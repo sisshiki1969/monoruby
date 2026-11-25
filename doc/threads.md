@@ -357,7 +357,18 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
 - **`IO.select`**: グリーンパスでは与えられた全 fd を `wait_fds` で待つ
   (timeout は deadline として sleepers に併載)。非 IO オブジェクトは `#to_io` で変換。
   全セット空 + timeout なしは CRuby 同様「status "sleep" で永眠(kill/wakeup 可能)」。
-  単独スレッド時は従来の `select(2)`(EINTR → ポーリング → 再試行)。
+  単独スレッド時は `select(2)`(EINTR → ポーリング → 再試行)。fd 集合は最大 fd に
+  合わせて伸びるビット列(`FdSet`、CRuby の `rb_fdset_t` 相当)で、`FD_SETSIZE` の
+  上限はない(macOS は `select$DARWIN_EXTSN`)。
+  - 3 つの Array は添字で辿り、長さを毎回読み直す(`#to_io` が Array を変え得る)。
+    待つ前に持ち出すのは fd の整数だけで、戻り値は待ったあとに Array をもう一度
+    辿って(各要素を再変換して)作る。CRuby の `select_internal` と同じ 2 回走査で、
+    待っている間に他スレッドやトラップが Array を変えても、消えた要素には触れない。
+  - `poll(2)` は hangup / error を要求に関係なく返すので、グリーンパスでは
+    `select(2)` と同じ対応に読み替える: read リストは `POLLIN|POLLHUP|POLLERR`、
+    write リストは `POLLOUT|POLLERR`、error リストは `POLLPRI` だけを ready とし、
+    それ以外の revents しか出ない fd は待ち対象からも外す(外さないと空回りする)。
+    `POLLNVAL` は開いていない fd なら `Errno::EBADF`。
 - **ソケット**: TCP の `connect` は非ブロッキング発行(`EINPROGRESS`)→ `POLLOUT` を
   `wait_fd` で待って `SO_ERROR` 確認、`accept` はリスナ fd を恒久 non-blocking にして
   `POLLIN` の park-retry ループで受ける(いずれも native worker ではなくスケジューラの

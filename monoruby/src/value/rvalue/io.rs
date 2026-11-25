@@ -2681,6 +2681,22 @@ impl IoInner {
         }
     }
 
+    /// The descriptor written to, where it is another one than
+    /// [`Self::fileno`] answers: the pipe to the child's stdin of a
+    /// two-way `Popen`. (CRuby keeps that side as a second IO, the
+    /// `tied_io_for_writing` its `GetWriteIO` answers.)
+    #[inline]
+    pub fn tied_write_fd(&self) -> Option<i32> {
+        if let IoKind::Popen(popen) = &self.kind
+            && popen.reader.is_some()
+            && let Some(ref writer) = popen.writer
+        {
+            Some(writer.get_ref().as_raw_fd())
+        } else {
+            None
+        }
+    }
+
     /// The fd a poll for `events` actually applies to: like [`Self::fileno`],
     /// except that a `POLLOUT` wait on a `Popen` resolves to the child's
     /// stdin (the pipe end this process writes) rather than the read side

@@ -155,28 +155,36 @@ pub(crate) fn parse_exec_args(
             None
         };
         if let Some(h) = env_hash {
-            let pairs: Vec<(Value, Value)> = h.iter().collect();
-            for (k, v) in pairs {
-                let key = k.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
-                if key.contains(&0) {
-                    return Err(null_byte());
-                }
-                if key.contains(&b'=') {
-                    return Err(MonorubyErr::argumenterr(format!(
-                        "environment name contains a equal : {}",
-                        String::from_utf8_lossy(&key)
-                    )));
-                }
-                if v.is_nil() {
-                    env_ops.push((key, None));
-                } else {
-                    let val = v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
-                    if val.contains(&0) {
+            // Walked, not copied out: a key's or a value's `#to_str` may
+            // change the Hash, and a pair it deletes there is held by
+            // nothing else (`Hashmap::walk` roots the pair it is on).
+            // The Hash is rooted for the walk too: one that `#to_hash`
+            // made is referenced by nothing but this local (#2154).
+            vm.with_temp_scope(|vm| {
+                vm.temp_push(h.into());
+                h.walk(vm, globals, |vm, globals, _, k, v| {
+                    let key = k.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
+                    if key.contains(&0) {
                         return Err(null_byte());
                     }
-                    env_ops.push((key, Some(val)));
-                }
-            }
+                    if key.contains(&b'=') {
+                        return Err(MonorubyErr::argumenterr(format!(
+                            "environment name contains a equal : {}",
+                            String::from_utf8_lossy(&key)
+                        )));
+                    }
+                    if v.is_nil() {
+                        env_ops.push((key, None));
+                    } else {
+                        let val = v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
+                        if val.contains(&0) {
+                            return Err(null_byte());
+                        }
+                        env_ops.push((key, Some(val)));
+                    }
+                    Ok(false)
+                })
+            })?;
             have_env = true;
             items.remove(0);
         }
@@ -1433,6 +1441,50 @@ fn num2uint(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    // #2154: the env Hash's pairs were copied into a Rust `Vec` before
+    // `#to_str` ran on them, and a Hash that `#to_hash` made was held by
+    // nothing at all.
+    #[test]
+    fn spawn_env_hash_is_walked_in_place() {
+        run_test_once(
+            r##"
+            class SpEnvVal
+              def initialize(s = "v", &blk) = (@s, @blk = s, blk)
+              def to_str
+                @blk&.call
+                GC.start
+                $sp_junk = Array.new(20000) { {zz1: 1, zz2: 2, zz3: 3} }
+                @s
+              end
+            end
+            class SpEnv
+              def to_hash = {"SP_A" => SpEnvVal.new, "SP_B" => "b" * 3, "SP_C" => "c" * 3}
+            end
+            res = []
+            res << 5.times.map { system(SpEnv.new, "test $SP_A.$SP_B.$SP_C = v.bbb.ccc") }.uniq
+            out = ->(env) { IO.popen([env, "sh", "-c", "echo $SP_A.$SP_B.$SP_C"], &:read).chomp }
+            res << 3.times.map { out.(SpEnv.new) }.uniq
+            # A pair a `#to_str` deletes is not exported, and one it
+            # replaces is exported as replaced.
+            res << 3.times.map {
+              h = {"SP_A" => nil, "SP_B" => "b" * 3, "SP_C" => "c" * 3}
+              h["SP_A"] = SpEnvVal.new("a") { h.delete("SP_C") }
+              [out.(h), h.keys]
+            }.uniq
+            res << 3.times.map {
+              h = {"SP_A" => nil, "SP_B" => "b" * 3}
+              h["SP_A"] = SpEnvVal.new("a") { h["SP_B"] = "B" * 2 }
+              out.(h)
+            }.uniq
+            res << 3.times.map {
+              h = {SpEnvVal.new("SP_A") => "ka", "SP_B" => SpEnvVal.new("vb")}
+              out.(h)
+            }.uniq
+            res
+            "##,
+        );
+    }
 
     #[test]
     fn spawn_env_hash() {
