@@ -581,7 +581,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             // raises RangeError).
             if let Some(range) = a.is_range() {
                 let len = m.len() as i64;
-                let (start, slice_len) = match range_to_slice(range, len) {
+                let (start, slice_len) = match range_to_slice(vm, globals, range, len)? {
                     Some(v) => v,
                     None => {
                         let sep = if range.exclude_end() { "..." } else { ".." };
@@ -821,12 +821,11 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         if idx >= m.len() {
             return Ok(Value::nil());
         }
-        Ok(m.at_value(idx as usize)
-            .unwrap_or_default())
+        Ok(m.at_value(idx as usize).unwrap_or_default())
     } else if let Some(range) = lfp.arg(0).is_range() {
         // `[start..end]` / `[start...]` / `[..end]` slicing.
         let len = m.len() as i64;
-        let (start, slice_len) = match range_to_slice(range, len) {
+        let (start, slice_len) = match range_to_slice(vm, globals, range, len)? {
             Some(v) => v,
             None => return Ok(Value::nil()),
         };
@@ -903,30 +902,41 @@ fn slice_match_data(
 /// beginningless / endless) into a `(start, length)` pair suitable
 /// for `slice_match_data`. Returns `None` when the start exceeds the
 /// match-array length (CRuby returns `nil` in that case).
+///
+/// The ends are read as `rb_range_beg_len` reads them, with NUM2LONG: a
+/// Float end truncates (`m[1.9..]` is `m[1..]`), and one that is no
+/// number is a TypeError.
 fn range_to_slice(
+    vm: &mut Executor,
+    globals: &mut Globals,
     range: &crate::value::rvalue::RangeInner,
     len: i64,
-) -> Option<(i64, i64)> {
+) -> Result<Option<(i64, i64)>> {
     let start_v = range.start();
     let end_v = range.end();
     let start = if start_v.is_nil() {
         0
     } else {
-        let v = start_v.try_fixnum()?;
-        if v < 0 { v + len } else { v }
+        start_v.num2long(vm, globals)?
     };
-    if start < 0 || start > len {
-        return None;
-    }
     let end = if end_v.is_nil() {
-        len
+        None
     } else {
-        let v = end_v.try_fixnum()?;
-        let v = if v < 0 { v + len } else { v };
-        if range.exclude_end() { v } else { v + 1 }
+        Some(end_v.num2long(vm, globals)?)
+    };
+    let start = if start < 0 { start + len } else { start };
+    if start < 0 || start > len {
+        return Ok(None);
+    }
+    let end = match end {
+        None => len,
+        Some(v) => {
+            let v = if v < 0 { v + len } else { v };
+            if range.exclude_end() { v } else { v + 1 }
+        }
     };
     let length = (end.max(start) - start).max(0);
-    Some((start, length))
+    Ok(Some((start, length)))
 }
 
 ///

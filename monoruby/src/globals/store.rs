@@ -1875,6 +1875,20 @@ impl Store {
             Some((_, source)) => path_encoding(source),
             None => crate::value::Encoding::UsAscii,
         };
+        if let (Some((loc, source)), func_id, hint) = entry
+            && let Some(path) = non_utf8_path(source)
+        {
+            // The line starts with the file's name as the bytes it is.
+            let rest = match func_id {
+                Some(func_id) => format!(
+                    ":{}:in '{}'",
+                    source.get_line(loc),
+                    self.func_description_hinted(*func_id, *hint)
+                ),
+                None => format!(":{}", source.get_line(loc)),
+            };
+            return Value::string_from_source_bytes(&[path, rest.as_bytes()].concat(), enc);
+        }
         backtrace_line(self.trace_entry_location(entry), enc)
     }
 
@@ -1964,6 +1978,29 @@ pub(crate) fn display_path(source: &SourceInfoRef) -> std::borrow::Cow<'_, str> 
     match internal {
         Some(s) => std::borrow::Cow::Owned(s),
         None => source.file_name(),
+    }
+}
+
+/// The bytes of *source*'s path when they are not UTF-8 text — a file
+/// `require` / `load` found under a name in another encoding (#2235).
+///
+/// [`display_path`] and every `String` made of it can only show such a
+/// name lossily, so what hands a path to the program (`__FILE__`, a
+/// backtrace line, `Location#path`, `source_location`) asks this first
+/// and builds its String from these bytes, in [`path_encoding`].
+pub(crate) fn non_utf8_path(source: &SourceInfoRef) -> Option<&[u8]> {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = source.path.as_os_str().as_bytes();
+    (std::str::from_utf8(bytes).is_err() && !is_internal_source(source)).then_some(bytes)
+}
+
+/// *source*'s path as a String of its own: [`display_path`] for a name
+/// that is UTF-8 text, the name's bytes in the source's path encoding
+/// for one that is not ([`non_utf8_path`]).
+pub(crate) fn source_path_value(source: &SourceInfoRef) -> Value {
+    match non_utf8_path(source) {
+        Some(bytes) => Value::string_from_source_bytes(bytes, path_encoding(source)),
+        None => Value::string(display_path(source).into_owned()),
     }
 }
 

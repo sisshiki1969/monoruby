@@ -288,6 +288,18 @@ class Range
     unless block_given?
       res = __builtin_sum(init)
       return res unless res.nil?
+      # The same formula adds an initial value that is neither an Integer
+      # nor a Float by `rb_int_plus(init, sum)`, which coerces: the sum is
+      # asked to `coerce` the initial value, so `(1..3).sum(nil)` is
+      # Integer#coerce's TypeError and `(1..3).sum(1r)` is 7.0.
+      b = self.begin
+      e = self.end
+      if ::Integer === b && ::Integer === e && !(::Float === init)
+        e -= 1 if exclude_end?
+        return init if e < b
+        x, y = ((e - b + 1) * (e + b) / 2).coerce(init)
+        return x + y
+      end
     end
     super
   end

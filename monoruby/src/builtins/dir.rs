@@ -385,9 +385,9 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let pat_val = lfp.arg(0);
     // `flags:` keyword wins over the positional flags argument
     // (core/dir/glob_spec.rb "prefers the keyword argument").
-    let flags = if let Some(f) = lfp.try_arg(4)
-        && !f.is_nil()
-    {
+    // (`def self.glob(pattern, _flags = 0, flags: _flags, …)`, read with
+    // NUM2INT: a `flags: nil` is a TypeError like any other nil.)
+    let flags = if let Some(f) = lfp.try_arg(4) {
         f.num2long(vm, globals)?
     } else {
         match lfp.try_arg(1) {

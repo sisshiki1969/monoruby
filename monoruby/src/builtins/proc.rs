@@ -414,7 +414,7 @@ fn source_location(
     if let Some(iseq) = globals.store.resolve_iseq(func_id) {
         let iseq_info = &globals.store[iseq];
         // Absolute path, consistent with Method#source_location.
-        let file_name = Value::string(iseq_info.sourceinfo.file_name().to_string());
+        let file_name = crate::globals::source_path_value(&iseq_info.sourceinfo);
         let line = Value::integer(iseq_info.sourceinfo.get_line(&iseq_info.loc) as i64);
         Ok(Value::array2(file_name, line))
     } else {

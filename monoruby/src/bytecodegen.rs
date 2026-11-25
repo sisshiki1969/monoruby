@@ -2432,6 +2432,10 @@ impl<'a> BytecodeGen<'a> {
         MonorubyErr::syntax(msg.into(), loc, self.sourceinfo.clone(), self.func_id)
     }
 
+    fn regexp_literal_error(&self, msg: &str, loc: Loc) -> MonorubyErr {
+        MonorubyErr::regexp_literal(msg, loc, self.sourceinfo.clone())
+    }
+
     fn unsupported_lhs(&self, lhs: &Node) -> MonorubyErr {
         MonorubyErr::unsupported_lhs(lhs, self.sourceinfo.clone(), self.func_id)
     }

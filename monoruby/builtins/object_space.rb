@@ -63,9 +63,17 @@ module ObjectSpace
   # The Array is dropped from the enumerable path before yielding
   # begins, so its own entry — which CRuby's walk would not have — is
   # skipped rather than reported.
-  def self.each_object(klass = nil)
-    return to_enum(:each_object, klass) unless block_given?
-    objs = __live_objects(klass)
+  def self.each_object(*klass)
+    unless klass.size <= 1
+      raise ArgumentError, "wrong number of arguments (given #{klass.size}, expected 0..1)"
+    end
+    return to_enum(:each_object, *klass) unless block_given?
+    # A filter that is given is what every object is tested against with
+    # `rb_obj_is_kind_of`, nil included.
+    unless klass.empty? || ::Module === klass[0]
+      raise TypeError, "class or module required"
+    end
+    objs = __live_objects(klass[0])
     count = 0
     i = 0
     n = objs.size
@@ -127,6 +135,7 @@ module ObjectSpace
   end
 
   def self.count_objects(result_hash = {})
+    raise TypeError, "non-hash given" unless ::Hash === result_hash
     result_hash[:TOTAL] = 0
     result_hash[:FREE] = 0
     result_hash

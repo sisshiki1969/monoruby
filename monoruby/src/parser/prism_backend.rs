@@ -76,6 +76,7 @@ pub(super) fn parse_program(
         defer_bodies,
         AnonForwarding::default(),
         false,
+        0,
     )
 }
 
@@ -86,7 +87,7 @@ pub(super) fn parse_program_eval(
     mut line_offset: i64,
     default_encoding: Option<String>,
 ) -> Result<ParseResult, MonorubyErr> {
-    inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
+    let injected = inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let (options, anon_forwarding) = build_prism_options(extern_context, None, line_offset);
     try_prism_inner(
         code,
@@ -99,6 +100,7 @@ pub(super) fn parse_program_eval(
         true,
         anon_forwarding,
         false,
+        injected,
     )
 }
 
@@ -125,22 +127,27 @@ pub(super) fn lower_deferred_def(
 /// `pm_options_encoding_set`, but prism honours a `# encoding:` magic
 /// comment natively, so a non-UTF-8 eval source that doesn't carry its
 /// own directive gets one injected — with the line option shifted so
-/// every reported line number stays where CRuby puts it.
+/// every reported line number stays where CRuby puts it. Returns the
+/// length of what was put in front of the source (0 for nothing).
 fn inject_encoding_comment(
     code: &mut Vec<u8>,
     default_encoding: &Option<String>,
     line_offset: &mut i64,
-) {
-    let Some(enc) = default_encoding else { return };
+) -> usize {
+    let Some(enc) = default_encoding else {
+        return 0;
+    };
     if enc.eq_ignore_ascii_case("UTF-8") {
-        return;
+        return 0;
     }
     if detect_source_encoding(code).is_some() {
-        return;
+        return 0;
     }
-    let header = format!("# encoding: {enc}\n");
-    code.splice(0..0, header.into_bytes());
+    let header = format!("# encoding: {enc}\n").into_bytes();
+    let len = header.len();
+    code.splice(0..0, header);
     *line_offset -= 1;
+    len
 }
 
 pub(super) fn parse_program_binding(
@@ -152,7 +159,7 @@ pub(super) fn parse_program_binding(
     default_encoding: Option<String>,
     main_script: bool,
 ) -> Result<ParseResult, MonorubyErr> {
-    inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
+    let injected = inject_encoding_comment(&mut code, &default_encoding, &mut line_offset);
     let (options, anon_forwarding) =
         build_prism_options(extern_context, context.as_ref(), line_offset);
     // The main script's scopes stand for a still empty TOPLEVEL_BINDING;
@@ -170,6 +177,7 @@ pub(super) fn parse_program_binding(
         true,
         anon_forwarding,
         scopes_droppable,
+        injected,
     )
 }
 
@@ -467,6 +475,7 @@ fn try_prism_inner(
     defer_bodies: bool,
     anon_forwarding: AnonForwarding,
     scopes_droppable: bool,
+    injected_encoding_line: usize,
 ) -> Result<ParseResult, MonorubyErr> {
     super::stash_error_warnings(vec![]);
     let path_display = path.display().to_string();
@@ -486,11 +495,16 @@ fn try_prism_inner(
     // would take a multibyte character as US-ASCII bytes instead of
     // rejecting it the way CRuby does. The extra line is subtracted
     // back out so every reported line number stays put.
+    // The length of that line (or of the one an eval source was given,
+    // `inject_encoding_comment`), for what quotes the source as written.
+    let mut cli_encoding_line = injected_encoding_line;
     if let Some(enc) = &cli_source_encoding
         && options.is_none()
         && detect_source_encoding(&code).is_none()
     {
-        code.splice(0..0, format!("# encoding: {enc}\n").into_bytes());
+        let line = format!("# encoding: {enc}\n").into_bytes();
+        cli_encoding_line = line.len();
+        code.splice(0..0, line);
         line_offset -= 1;
         // No scopes unless there are locals to seed: any scope at all
         // makes the parse an eval's to prism (`parsing_eval`).
@@ -672,23 +686,65 @@ fn try_prism_inner(
     // character". `rb_reg_preprocess`, which monoruby ports as
     // `reg_preprocess` and runs where the literal is compiled, is the
     // authority: prism's diagnostic stands only when it agrees.
-    if let Some(diag) = result
+    let errors: Vec<super::parse_error::Diagnostic> = result
         .errors()
-        .find(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
-    {
+        .filter(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
+        .map(|d| {
+            let loc = d.location();
+            super::parse_error::Diagnostic {
+                message: d.message().to_vec(),
+                start: (loc.start() as usize).saturating_sub(cli_encoding_line),
+                end: (loc.end() as usize).saturating_sub(cli_encoding_line),
+            }
+        })
+        .collect();
+    if let Some(head) = errors.first() {
         // CRuby prints a parse's warnings before it raises the parse's
         // error: they are left for whoever reports the error.
         super::stash_error_warnings(warnings);
-        let loc = location_to_loc(&diag.location());
-        // CRuby embeds the location in the SyntaxError *message* itself
-        // ("file:line: syntax error, ..."), and callers regex on it.
-        let line = source_info.get_line(&loc);
-        let file = crate::globals::display_path(&source_info);
+        let loc = Loc(
+            head.start + cli_encoding_line,
+            (head.end + cli_encoding_line)
+                .saturating_sub(1)
+                .max(head.start + cli_encoding_line),
+        );
+        // The message is the one CRuby builds (`pm_parse_process_error`):
+        // "FILE:LINE: syntax error(s) found" and the source around every
+        // error, in the encoding of the source and colored for a
+        // terminal. The source is what the program wrote: the magic
+        // comment a `-e` / `-K` script was given above is not part of it.
+        let char_width = |bytes: &[u8]| -> usize {
+            use crate::value::Encoding;
+            let enc = regexp_check_encoding;
+            if matches!(enc, Encoding::Ascii8 | Encoding::UsAscii) {
+                return 1;
+            }
+            let width = crate::value::rvalue::char_width_at(enc, bytes, 0).min(bytes.len());
+            // A byte sequence that is no character of the encoding has
+            // no width (prism's `char_width` answers 0).
+            match enc.classify(&bytes[..width]) {
+                crate::value::rvalue::CodeRange::Broken => 0,
+                _ => width,
+            }
+        };
+        let start_line = (line_offset + 1 + i64::from(cli_encoding_line != 0))
+            .clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let source =
+            super::parse_error::Source::new(&code[cli_encoding_line..], start_line, &char_width);
+        let filepath = match crate::globals::non_utf8_path(&source_info) {
+            Some(raw) => raw.to_vec(),
+            None => crate::globals::display_path(&source_info)
+                .into_owned()
+                .into_bytes(),
+        };
+        let (level, message) =
+            super::parse_error::process_error(&source, &filepath, &errors, stderr_highlight());
         return Err(MonorubyErr::parse(crate::ast::ParseErr {
-            kind: crate::ast::ParseErrKind::SyntaxError(format!(
-                "{file}:{line}: prism: {}",
-                String::from_utf8_lossy(diag.message())
-            )),
+            kind: crate::ast::ParseErrKind::Diagnostics {
+                level,
+                message,
+                encoding: regexp_check_encoding,
+            },
             loc,
             source_info,
         }));
@@ -2308,8 +2364,14 @@ impl<'pr> Lowerer<'pr> {
                 // `__FILE__` — the source path inlined as a String
                 // literal (its encoding: `DeferCtx::file_encoding`).
                 let enc = self.ctx.file_encoding;
+                // A name that is not UTF-8 text as the bytes it is;
+                // `self.path` can only show it lossily (#2235).
+                let path = match crate::globals::non_utf8_path(&self.ctx.source_info) {
+                    Some(raw) => raw.to_vec(),
+                    None => self.path.clone().into_bytes(),
+                };
                 Node {
-                    kind: NodeKind::EncodedString(self.path.clone().into_bytes(), enc.name()),
+                    kind: NodeKind::EncodedString(path, enc.name()),
                     loc,
                 }
             }
@@ -6786,6 +6848,20 @@ fn is_regexp_escape_left_to_preprocess(
         crate::value::rvalue::regexp::reg_preprocess(body, enc, flags.contains(&b'x')),
         Err("invalid multibyte escape")
     )
+}
+
+/// CRuby's `highlight` for the message of a parse error: 0 unless
+/// standard error is a terminal, where it is 2 (colors), or 1 (bold
+/// only) under a non-empty `NO_COLOR`.
+fn stderr_highlight() -> u8 {
+    // SAFETY: isatty only inspects the descriptor.
+    if unsafe { libc::isatty(2) } != 1 {
+        0
+    } else if std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+        1
+    } else {
+        2
+    }
 }
 
 fn location_to_loc(loc: &Location<'_>) -> Loc {

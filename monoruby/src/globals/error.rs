@@ -33,6 +33,10 @@ pub(crate) const SIGNO_IVAR: &str = "/signo";
 /// into its class (see [`MonorubyErr::os_error_pending`]).
 pub(crate) const OS_ERRNO_PAYLOAD: &str = "os_errno";
 
+/// The `payload` tag of the SyntaxError of a source that does not
+/// parse: the path String of that source, `SyntaxError#path`.
+pub(crate) const SYNTAX_PATH_PAYLOAD: &str = "syntax_path";
+
 /// The `payload` tag of a NameError whose `#name` is not the Symbol of
 /// its kind but the Value carried here — the String `undef_method`
 /// reports (see [`MonorubyErr::undef_method_name_error`]).
@@ -688,31 +692,44 @@ impl MonorubyErr {
         }
     }
 
-    fn show_error_message_and_loc(&self, store: &Store) -> bool {
-        let mut loc_flag = false;
+    fn show_error_message_and_loc(&self, store: &Store) {
         if let Some(entry @ (source_loc, func_id, _)) = self.trace.first() {
             let error_message = self.get_error_message(store);
-            if let Some((loc, source)) = source_loc {
-                eprintln!("{}: {error_message}", store.trace_entry_location(entry));
-                // CRuby's runtime-error report is the compact
-                // `file:line:in 'method': message` form; only syntax
-                // errors keep the source excerpt with a caret.
-                if matches!(self.kind, MonorubyErrKind::Syntax) {
-                    source.show_loc(loc);
-                    loc_flag = true;
-                }
-            } else if func_id.is_some() {
+            // CRuby's report is the compact `file:line:in 'method':
+            // message` form for every class, SyntaxError included (the
+            // source around a syntax error is part of its message).
+            if source_loc.is_some() || func_id.is_some() {
                 eprintln!("{}: {error_message}", store.trace_entry_location(entry));
             } else {
                 eprintln!("<internal>: {error_message}");
             }
+        } else if let Some(path) = self.unparsed_script(store) {
+            // The script itself does not parse: no frame ran, and CRuby
+            // names the file alone (`error_pos` with no line).
+            let mut line = path;
+            line.extend_from_slice(format!(": {}\n", self.get_error_message(store)).as_bytes());
+            use std::io::Write;
+            let _ = std::io::stderr().write_all(&line);
         } else {
             // An error constructed outside any VM frame has no trace to
             // point into, but its message must still surface (an error
             // should never reach the user as a bare placeholder).
             eprintln!("monoruby: {}", self.get_error_message(store));
         };
-        loc_flag
+    }
+
+    /// The name of the source this SyntaxError says does not parse
+    /// (`SyntaxError#path`), for an error with no backtrace: the one of
+    /// the interpreter's own script.
+    fn unparsed_script(&self, store: &Store) -> Option<Vec<u8>> {
+        if !matches!(self.kind, MonorubyErrKind::Syntax) {
+            return None;
+        }
+        let path = match self.payload {
+            Some((path, SYNTAX_PATH_PAYLOAD)) => path,
+            _ => store.get_ivar(self.original?, IdentId::get_id("@path"))?,
+        };
+        Some(path.is_rstring()?.as_bytes().to_vec())
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
@@ -723,7 +740,13 @@ impl MonorubyErr {
         {
             return report;
         }
-        format!("{} ({})", self.message, self.class_name(store))
+        // The class goes after the first line of the message
+        // (`rb_error_write`).
+        let class = self.class_name(store);
+        match self.message.split_once('\n') {
+            Some((head, rest)) => format!("{head} ({class})\n{rest}"),
+            None => format!("{} ({class})", self.message),
+        }
     }
 
     pub fn class_name(&self, store: &Store) -> String {
@@ -883,6 +906,35 @@ impl MonorubyErr {
         let msg = match error.kind {
             ParseErrKind::SyntaxError(msg) => msg.to_string(),
             ParseErrKind::UnexpectedEOF => "unexpected end-of-file.".to_string(),
+            ParseErrKind::Diagnostics {
+                level,
+                message,
+                encoding,
+            } => {
+                // The error of a source that does not parse is raised
+                // by whoever asked for the parse (`eval`, `require`, the
+                // interpreter for its script): the source itself is no
+                // frame of its backtrace. `SyntaxError#path` names it.
+                use crate::parser::ErrorLevel;
+                let kind = match level {
+                    ErrorLevel::Syntax => MonorubyErrKind::Syntax,
+                    ErrorLevel::Argument => MonorubyErrKind::Arguments,
+                    ErrorLevel::Load => MonorubyErrKind::Load(PathBuf::new()),
+                };
+                let mut err = MonorubyErr::new(kind, String::from_utf8_lossy(&message));
+                if encoding != crate::value::Encoding::UTF8
+                    || std::str::from_utf8(&message).is_err()
+                {
+                    err.raw_message = Some((message, encoding));
+                }
+                if level == ErrorLevel::Syntax {
+                    err.payload = Some((
+                        crate::globals::source_path_value(&error.source_info),
+                        SYNTAX_PATH_PAYLOAD,
+                    ));
+                }
+                return err;
+            }
         };
         MonorubyErr::new_with_loc(
             MonorubyErrKind::Syntax,
@@ -941,6 +993,34 @@ impl MonorubyErr {
         func_id: FuncId,
     ) -> MonorubyErr {
         MonorubyErr::new_with_loc(MonorubyErrKind::Syntax, msg, loc, sourceinfo, func_id)
+    }
+
+    /// The SyntaxError of a regexp literal that does not compile.
+    /// CRuby compiles the literals of a source as it compiles the
+    /// source, so the error is the compilation's, raised like a parse
+    /// error by whoever asked for it (`eval`, `require`): the message
+    /// is "FILE:LINE: " and Onigmo's, with no source quoted, and
+    /// `#path` names the source.
+    pub(crate) fn regexp_literal(msg: &str, loc: Loc, source: SourceInfoRef) -> MonorubyErr {
+        let line = source.get_line(&loc);
+        let mut message = match crate::globals::non_utf8_path(&source) {
+            Some(raw) => raw.to_vec(),
+            None => crate::globals::display_path(&source)
+                .into_owned()
+                .into_bytes(),
+        };
+        message.extend_from_slice(format!(":{line}: {msg}").as_bytes());
+        let mut err = MonorubyErr::new(MonorubyErrKind::Syntax, String::from_utf8_lossy(&message));
+        if message.is_ascii() {
+            err.raw_message = Some((message, crate::value::Encoding::Ascii8));
+        } else if std::str::from_utf8(&message).is_err() {
+            err.raw_message = Some((message, source.path_encoding()));
+        }
+        err.payload = Some((
+            crate::globals::source_path_value(&source),
+            SYNTAX_PATH_PAYLOAD,
+        ));
+        err
     }
 
     pub(crate) fn escape_from_eval(

@@ -702,7 +702,7 @@ fn main() {
 
     // Resolve --enable/--disable features.
     let mut gems = true;
-    let mut did_you_mean = false;
+    let mut did_you_mean = true;
     let mut error_highlight = true;
     let mut frozen_string_literal: Option<bool> = None;
     for (name, on) in &features {
@@ -744,6 +744,7 @@ fn main() {
 
     let mut globals = Globals::new(warning_level, opts.no_jit, !gems);
     globals.no_error_highlight = !error_highlight;
+    globals.no_did_you_mean = !did_you_mean;
     Globals::gc_enable(!opts.no_gc);
     if let Some(limit) = opts.backtrace_limit.or(ropts.backtrace_limit) {
         Globals::set_backtrace_limit(limit);
@@ -786,9 +787,6 @@ fn main() {
     globals.prepend_load_path(front.into_iter());
 
     let mut requires = Vec::new();
-    if did_you_mean {
-        requires.push("did_you_mean".to_string());
-    }
     requires.append(&mut opts.requires);
 
     // Determine the program source.
@@ -978,7 +976,9 @@ fn main() {
                 // A source that does not parse has its warnings all the
                 // same, and they come before the error (CRuby).
                 warn(&parser::take_error_warnings());
-                err.show_error_message_and_all_loc(&globals.store);
+                // Nothing ran, so the report has no position of its own
+                // and names the interpreter (CRuby's `ruby: `).
+                eprintln!("monoruby: {}", err.get_error_message(&globals.store));
                 std::process::exit(1);
             }
         }

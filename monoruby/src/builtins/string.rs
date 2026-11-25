@@ -8087,8 +8087,20 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let mut self_ = lfp.self_val();
     let byte_len = self_.as_rstring_inner().len();
 
-    // Parse target range (index, length) from the first args
-    let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
+    // `rb_str_bytesplice`: two arguments are `(range, str)`, five are
+    // `(index, length, str, str_index, str_length)`, and three are
+    // `(index, length, str)` only when the first is an Integer — anything
+    // else there is read as the Range of `(range, str, str_range)`.
+    let range_form = arg_count == 2 || (arg_count == 3 && !lfp.arg(0).is_integer());
+    let not_a_range = |globals: &Globals, v: Value| {
+        MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Range)",
+            v.builtin_class_name(&globals.store)
+        ))
+    };
+    let (start, splice_len) = if range_form {
+        let arg0 = lfp.arg(0);
+        let range = arg0.is_range().ok_or_else(|| not_a_range(globals, arg0))?;
         let rstart = range.start().num2long(vm, globals)?;
         let rend = range.end().num2long(vm, globals)?;
         // The Range form reports an out-of-range left boundary the way
@@ -8126,11 +8138,6 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         (start, len)
     } else {
         // index, length form
-        if arg_count < 3 {
-            return Err(MonorubyErr::typeerr(
-                "wrong argument type Integer (expected Range)",
-            ));
-        }
         let idx = lfp.arg(0).num2long(vm, globals)?;
         let len = lfp.arg(1).num2long(vm, globals)?;
         if len < 0 {
@@ -8142,7 +8149,7 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     };
 
     // Determine the replacement string and optional sub-range
-    let (str_arg_idx, has_src_range) = if lfp.arg(0).is_range().is_some() {
+    let (str_arg_idx, has_src_range) = if range_form {
         // range form: bytesplice(range, str) or bytesplice(range, str, str_range)
         (1, arg_count == 3)
     } else {
@@ -8150,7 +8157,11 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         (2, arg_count == 5)
     };
 
-    let str_val = lfp.arg(str_arg_idx);
+    // `StringValue`: `#to_str` counts, and anything else is a TypeError.
+    let str_val = lfp
+        .arg(str_arg_idx)
+        .coerce_to_rstring(vm, globals)?
+        .as_val();
     let str_inner = str_val.as_rstring_inner();
     let str_bytes = str_inner.as_bytes();
     let str_byte_len = str_bytes.len();
@@ -8162,12 +8173,12 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // not a no-op).
     let mut src_span = (0usize, 0usize);
     let replacement = if has_src_range {
-        if lfp.arg(0).is_range().is_some() {
+        if range_form {
             // bytesplice(range, str, str_range)
             let src_range = lfp.arg(str_arg_idx + 1);
-            let src_range = src_range.is_range().ok_or_else(|| {
-                MonorubyErr::typeerr("wrong argument type Integer (expected Range)")
-            })?;
+            let src_range = src_range
+                .is_range()
+                .ok_or_else(|| not_a_range(globals, src_range))?;
             let src_start = src_range.start().num2long(vm, globals)?;
             let src_end = src_range.end().num2long(vm, globals)?;
             // Same as the receiver's range above: an out-of-range left
@@ -12147,10 +12158,27 @@ fn replace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// hint with no observable semantics; it is accepted and ignored.
 #[monoruby_builtin]
 fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let enc_arg = match lfp.try_arg(1) {
-        Some(v) if !v.is_nil() => Some(v),
+    // `nil` for `encoding:` or `capacity:` counts as absent — for a String
+    // subclass, which is `rb_str_init`'s rule. `String.new` itself is a
+    // faster path of CRuby's own (`rb_str_s_new`) that converts whatever
+    // it is given: `String.new(capacity: nil)` and `String.new(encoding:
+    // nil)` are TypeErrors there. Every construction comes through this
+    // one method here, so the strict rule is for a receiver that is
+    // exactly a String and was sent here by `String.new`. Looked at only
+    // when one of the two is nil.
+    let mut strict = None;
+    let mut given = |v: Option<Value>| match v {
+        Some(v)
+            if !v.is_nil()
+                || *strict
+                    .get_or_insert_with(|| runs_for_string_new(vm, globals, lfp.self_val())) =>
+        {
+            Some(v)
+        }
         _ => None,
     };
+    let enc_arg = given(lfp.try_arg(1));
+    let cap_arg = given(lfp.try_arg(2));
     if let Some(other) = lfp.try_arg(0) {
         lfp.self_val().ensure_string_mutable(vm, globals)?;
         // Go through `coerce_to_rstring` and clone the inner so the
@@ -12168,17 +12196,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     // from Ruby (no `capacity` reader), but the allocation it avoids is
     // the whole point at a site that appends in a loop, and the argument
     // *checking* is observable.
-    //
-    // `nil` counts as absent, which is `rb_str_init`'s rule and so what
-    // CRuby does for a String subclass and for a direct
-    // `send(:initialize, capacity: nil)`. CRuby's `String.new` has a
-    // second, faster path of its own that converts without the nil check
-    // and so raises TypeError there — an asymmetry between `String.new`
-    // and `SubclassOfString.new` that is not worth reproducing, since
-    // every construction here goes through this one method.
-    if let Some(cap_v) = lfp.try_arg(2)
-        && !cap_v.is_nil()
-    {
+    if let Some(cap_v) = cap_arg {
         // Raises TypeError for a non-Integer (`#to_int` is honoured) and
         // RangeError for a Bignum, both as CRuby does.
         let cap = cap_v.num2long(vm, globals)?;
@@ -12195,6 +12213,26 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
         }
     }
     Ok(lfp.self_val())
+}
+
+/// Whether the `String#initialize` that is running is the one of a
+/// `String.new` — CRuby's `rb_str_s_new`, which takes the class method's
+/// arguments itself when the class is exactly String: the receiver is a
+/// plain String and the frame that called is that of `String.new`
+/// (builtins/string.rb).
+fn runs_for_string_new(vm: &Executor, globals: &Globals, self_val: Value) -> bool {
+    if self_val.real_class(&globals.store).id() != STRING_CLASS {
+        return false;
+    }
+    let Some(caller) = vm.cfp().prev() else {
+        return false;
+    };
+    let string: Value = globals.store[STRING_CLASS].get_module().into();
+    globals
+        .store
+        .check_method_for_class(string.class(), IdentId::NEW)
+        .and_then(|entry| entry.func_id())
+        == Some(caller.lfp().func_id())
 }
 
 /// `NoMemoryError`, for a `capacity:` the allocator will not satisfy.
@@ -13252,20 +13290,28 @@ fn parse_hex_str(bytes: &[u8]) -> Option<u32> {
     Some(acc)
 }
 
-fn normalize_form(_: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&'static str> {
-    if let Some(form) = lfp.try_arg(0) {
-        match form.expect_symbol_or_string(globals)?.to_string().as_str() {
-            "nfc" => Ok("nfc"),
-            "nfd" => Ok("nfd"),
-            "nfkc" => Ok("nfkc"),
-            "nfkd" => Ok("nfkd"),
-            other => Err(MonorubyErr::argumenterr(format!(
-                "invalid normalization form -- {other}"
-            ))),
+/// The form of a normalization: one of the four Symbols, and nothing
+/// else — `unicode_normalize.rb` compares with `when :nfc`, so a String
+/// naming a form is as invalid as `nil` is, and the message interpolates
+/// whatever was given.
+fn normalize_form(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<&'static str> {
+    let Some(form) = lfp.try_arg(0) else {
+        return Ok("nfc");
+    };
+    if let Some(sym) = form.try_symbol() {
+        match sym.get_name().as_str() {
+            "nfc" => return Ok("nfc"),
+            "nfd" => return Ok("nfd"),
+            "nfkc" => return Ok("nfkc"),
+            "nfkd" => return Ok("nfkd"),
+            _ => {}
         }
-    } else {
-        Ok("nfc")
     }
+    let shown = vm.obj_as_string(globals, form)?;
+    Err(MonorubyErr::argumenterr(format!(
+        "Invalid normalization form {}.",
+        String::from_utf8_lossy(shown.as_rstring_inner().as_bytes())
+    )))
 }
 
 /// The encodings Unicode normalization applies to (CRuby's
@@ -13354,13 +13400,15 @@ fn unicode_normalize(
 ) -> Result<Value> {
     let enc = lfp.self_val().as_rstring_inner().encoding();
     ensure_unicode_normalizable(globals, enc)?;
-    let form = normalize_form(vm, globals, lfp)?;
     // `unicode_normalize.rb` hands a US-ASCII string back as it is,
-    // broken bytes and all.
+    // broken bytes and all, without a look at the form.
     if enc == Encoding::UsAscii {
-        return Ok(Value::string_from_inner(lfp.self_val().as_rstring_inner().clone()));
+        return Ok(Value::string_from_inner(
+            lfp.self_val().as_rstring_inner().clone(),
+        ));
     }
     let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
+    let form = normalize_form(vm, globals, lfp)?;
     let result = normalize_text(&s, form);
     Ok(Value::string_from_inner(
         RStringInner::from_encoding_scanned(&normalized_bytes(globals, &result, enc), enc),
@@ -13391,9 +13439,10 @@ fn unicode_normalized_p(
     // All-ASCII text is normalized in every form — but only bytes of an
     // ASCII-compatible encoding say that: UTF-16 `"e\u0301"` is four
     // bytes under 0x80.
-    if enc == Encoding::UsAscii
-        || (enc.is_ascii_compatible() && inner.as_bytes().is_ascii())
-    {
+    if enc == Encoding::UsAscii {
+        return Ok(Value::bool(true));
+    }
+    if enc.is_ascii_compatible() && inner.as_bytes().is_ascii() {
         // Verify the form is valid even when we shortcut.
         let _ = normalize_form(vm, globals, lfp)?;
         return Ok(Value::bool(true));
@@ -13416,11 +13465,11 @@ fn unicode_normalize_(
 ) -> Result<Value> {
     let enc = lfp.self_val().as_rstring_inner().encoding();
     ensure_unicode_normalizable(globals, enc)?;
-    let form = normalize_form(vm, globals, lfp)?;
     if enc == Encoding::UsAscii {
         return Ok(lfp.self_val());
     }
     let s = normalizable_text(globals, &lfp.self_val().as_rstring_inner())?;
+    let form = normalize_form(vm, globals, lfp)?;
     let result = normalize_text(&s, form);
     let old_len = lfp.self_val().as_rstring_inner().len();
     // The output is well-formed by construction, so a pre-classified
@@ -13899,24 +13948,23 @@ mod tests {
 
     #[test]
     fn string_new_capacity_nil_is_absent() {
-        // `nil` counts as absent (`rb_str_init`'s rule). CRuby's
-        // `String.new` fast path converts without the nil check and so
-        // raises TypeError there, while its own String *subclass* and a
-        // direct `send(:initialize, capacity: nil)` do not \u2014 an asymmetry
-        // monoruby does not reproduce, since every construction goes
-        // through this one method. Not a `run_test`: it would compare
-        // against the CRuby fast path.
-        // The script asserts for itself: `run_test_no_result_check`
-        // panics if the code raises, and nothing here needs a CRuby
-        // reference.
-        run_test_no_result_check(
+        // `nil` counts as absent for a String subclass and for a direct
+        // `send(:initialize, capacity: nil)` (`rb_str_init`'s rule), while
+        // `String.new` itself converts whatever it is given
+        // (`rb_str_s_new`): nil is a TypeError there, for `encoding:` too
+        // (#2240).
+        run_test(
             r#"
-            got = [String.new(capacity: nil),
-                   String.allocate.send(:initialize, capacity: nil),
-                   Class.new(String).new(capacity: nil).class.superclass.to_s,
-                   "abc".freeze.send(:initialize, capacity: nil)]
-            want = ["", "", "String", "abc"]
-            raise "capacity: nil -> #{got.inspect}, want #{want.inspect}" unless got == want
+            x = ->(&b) { begin; b.call; rescue => e; [e.class, e.message]; end }
+            k = Class.new(String)
+            [x.() { String.new(capacity: nil) }, x.() { String.new("a", capacity: nil) },
+             x.() { String.new(encoding: nil) }, x.() { String.new(encoding: nil, capacity: nil) },
+             x.() { String.allocate.send(:initialize, capacity: nil) },
+             x.() { k.new(capacity: nil).class.superclass.to_s }, x.() { k.new(encoding: nil) },
+             x.() { k.new("a", encoding: nil, capacity: nil) },
+             x.() { "abc".freeze.send(:initialize, capacity: nil) },
+             x.() { "abc".send(:initialize, encoding: nil).encoding.to_s },
+             x.() { String.new(capacity: 1.5) }, x.() { String.new(capacity: -1) }]
             "#,
         );
     }

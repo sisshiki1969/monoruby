@@ -2133,35 +2133,80 @@ pub(super) fn getline_args(
     globals: &mut Globals,
     lfp: Lfp,
     kw_chomp_idx: usize,
-) -> Result<(Option<Vec<u8>>, Option<usize>, bool)> {
-    // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
-    let mut limit_arg: Option<Value> = None;
-    match (lfp.try_arg(0), lfp.try_arg(1)) {
-        (None, _) => {}
+) -> Result<(Option<Vec<u8>>, Option<usize>, bool, SepSrc)> {
+    let (sep, limit_arg, src) = getline_sep_args(vm, globals, lfp.try_arg(0), lfp.try_arg(1))?;
+    let limit = getline_limit(vm, globals, limit_arg)?;
+    let chomp = lfp.try_arg(kw_chomp_idx).is_some_and(|v| v.as_bool());
+    Ok((sep, limit, chomp, src))
+}
+
+/// Where the separator of a line read came from, for
+/// [`line_split`]'s check of it against the stream's read encoding
+/// (CRuby's `check_getline_args`).
+#[derive(Clone, Copy)]
+pub(crate) enum SepSrc {
+    /// `rb_default_rs` — no separator given while `$/` is the `"\n"` it
+    /// starts as — or none at all (`nil`). The one separator a stream in
+    /// any encoding takes: it is re-encoded for the stream.
+    Default,
+    /// A String given as the argument, or assigned to `$/`: its encoding,
+    /// and whether it is 7-bit.
+    Given(crate::value::Encoding, bool),
+}
+
+impl SepSrc {
+    fn given(rs: &RStringInner) -> Self {
+        // CRuby's `is_ascii_string`: no String in an encoding that is
+        // not ASCII-compatible is 7-bit, whatever its bytes are.
+        let enc = rs.encoding();
+        SepSrc::Given(enc, enc.is_ascii_compatible() && rs.as_bytes().is_ascii())
+    }
+
+    /// The source of `$/`, as it is now.
+    pub(crate) fn of_rs(globals: &Globals) -> Self {
+        let rs = globals.rs();
+        match rs.is_rstring() {
+            Some(s) if rs.id() != globals.default_rs().id() => SepSrc::given(&s),
+            _ => SepSrc::Default,
+        }
+    }
+}
+
+/// The `(sep = $/, limit = nil)` pair of a line reader: the separator's
+/// bytes (`None` slurps), the limit as given, and the separator's source.
+fn getline_sep_args(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg0: Option<Value>,
+    arg1: Option<Value>,
+) -> Result<(Option<Vec<u8>>, Option<Value>, SepSrc)> {
+    let given = |rs: &RStringInner| (Some(rs.as_bytes().to_vec()), SepSrc::given(rs));
+    Ok(match (arg0, arg1) {
+        // Default separator: `$/` — "\n" unless reassigned; nil slurps.
+        (None, _) => (globals.rs_bytes(), None, SepSrc::of_rs(globals)),
         (Some(v0), None) => {
             if v0.is_nil() {
-                sep = None;
+                (None, None, SepSrc::Default)
             } else if let Some(rs) = v0.is_rstring() {
-                sep = Some(rs.as_bytes().to_vec());
+                let (sep, src) = given(&rs);
+                (sep, None, src)
             } else if let Some(rs) = v0.check_string_type(vm, globals)? {
-                sep = Some(rs.as_rstring_inner().as_bytes().to_vec());
+                let (sep, src) = given(rs.as_rstring_inner());
+                (sep, None, src)
             } else {
-                limit_arg = Some(v0);
+                (globals.rs_bytes(), Some(v0), SepSrc::of_rs(globals))
             }
         }
         (Some(v0), Some(v1)) => {
             if v0.is_nil() {
-                sep = None;
+                (None, Some(v1), SepSrc::Default)
             } else {
-                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
+                let rs = v0.coerce_to_rstring(vm, globals)?;
+                let (sep, src) = given(&rs);
+                (sep, Some(v1), src)
             }
-            limit_arg = Some(v1);
         }
-    }
-    let limit = getline_limit(vm, globals, limit_arg)?;
-    let chomp = lfp.try_arg(kw_chomp_idx).is_some_and(|v| v.as_bool());
-    Ok((sep, limit, chomp))
+    })
 }
 
 /// The limit of a line reader, as `extract_getline_args` reads it: `nil`
@@ -2253,75 +2298,128 @@ pub(super) fn chomp_line_for(
 }
 
 /// How a line read splits a stream whose external encoding is UTF-16 or
-/// UTF-32 and is converted to an internal one: by the separator *in the
-/// external encoding*, on code-unit boundaries
-/// ([`IoInner::getline_units`]). Every other stream splits on the
-/// separator's own bytes.
+/// UTF-32: by the separator *in the external encoding*, on code-unit
+/// boundaries ([`IoInner::getline_units`]). Every other stream splits on
+/// the separator's own bytes.
 pub(super) struct WideLines {
     /// The separator in the external encoding; `None` reads to EOF.
     sep: Option<Vec<u8>>,
-    /// `"\r"` in the external encoding, chomped ahead of a `"\n"`
-    /// separator.
+    /// What `chomp:` takes off ahead of a `"\n"` separator: `"\r"` in
+    /// the external encoding when the stream converts what it reads. One
+    /// that converts nothing is chomped by CRuby as bytes, and loses the
+    /// lone byte `"\r"` (which is the low half of a UTF-16BE `"\r"`, and
+    /// never the last byte of a little-endian one).
     cr: Vec<u8>,
     newline_sep: bool,
     unit: usize,
 }
 
-/// The [`WideLines`] a line read of a stream with these encodings uses,
-/// or `None` when it splits on bytes.
+/// CRuby's `check_getline_args`, and how the line read it admits splits
+/// the stream: the [`WideLines`] of one in UTF-16 / UTF-32, or `None` for
+/// a split on the bytes of `sep`.
+///
+/// A separator has to be in the stream's *read* encoding — the internal
+/// one when there is one, else the external — unless it is 7-bit and that
+/// encoding is ASCII-compatible; `"encoding mismatch"` otherwise. The
+/// default separator is exempt and re-encoded instead (#2220). `sep`
+/// comes back in the external encoding, which is what the stream's bytes
+/// are split by ahead of any conversion.
 #[inline(always)]
-pub(super) fn wide_lines(
+pub(super) fn line_split(
     globals: &Globals,
-    sep: Option<&[u8]>,
+    sep: &mut Option<Vec<u8>>,
+    src: SepSrc,
     ext: crate::value::Encoding,
     intl: Option<crate::value::Encoding>,
-) -> Option<WideLines> {
+) -> Result<Option<WideLines>> {
     use crate::value::Encoding as E;
-    // A stream without an internal encoding — nearly every one — is
-    // settled by the first test.
-    if intl.is_none() || !matches!(ext, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be) {
-        return None;
+    // The default separator on a stream that is not UTF-16 / UTF-32 —
+    // nearly every line read — is settled by this test.
+    if matches!(src, SepSrc::Default)
+        && !matches!(ext, E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be)
+    {
+        return Ok(None);
     }
-    wide_lines_of(globals, sep, ext, intl)
+    line_split_of(globals, sep, src, ext, intl)
 }
 
-fn wide_lines_of(
+fn line_split_of(
     globals: &Globals,
-    sep: Option<&[u8]>,
+    sep: &mut Option<Vec<u8>>,
+    src: SepSrc,
     ext: crate::value::Encoding,
     intl: Option<crate::value::Encoding>,
-) -> Option<WideLines> {
+) -> Result<Option<WideLines>> {
     use crate::value::Encoding as E;
-    let unit = match ext {
-        E::Utf16Le | E::Utf16Be => 2,
-        E::Utf32Le | E::Utf32Be => 4,
-        _ => return None,
-    };
-    if !read_converts(ext, intl) {
-        return None;
-    }
-    let enc = |b: &[u8]| {
+    let read_enc = intl.unwrap_or(ext);
+    let converts = read_converts(ext, intl);
+    let transcode = |b: &[u8], from: E| {
         crate::value::transcode_bytes_with_opts(
             b,
-            E::UTF8,
+            from,
             ext,
             &crate::value::transcode::TranscodeOpts::default(),
             &globals.store,
         )
         .ok()
     };
-    let sep_ext = match sep {
+    // Whether `sep` holds the separator in the external encoding already.
+    let mut in_ext = false;
+    if let SepSrc::Given(enc_rs, ascii) = src
+        && let Some(s) = sep.as_ref()
+    {
+        if enc_rs != read_enc && (!ascii || (!s.is_empty() && !read_enc.is_ascii_compatible())) {
+            return Err(MonorubyErr::argumenterr(format!(
+                "encoding mismatch: {} IO with {} RS",
+                read_enc.name(),
+                enc_rs.name()
+            )));
+        }
+        if !converts {
+            in_ext = true;
+        } else if !(ascii && ext.is_ascii_compatible())
+            && let Some(t) = transcode(s, read_enc)
+        {
+            // Given in the internal encoding, looked for in the external.
+            *sep = Some(t);
+            in_ext = true;
+        }
+    }
+    let unit = match ext {
+        E::Utf16Le | E::Utf16Be => 2,
+        E::Utf32Le | E::Utf32Be => 4,
+        _ => return Ok(None),
+    };
+    // What is left is 7-bit: the default separator, paragraph mode, or a
+    // separator the stream's own encoding has no character for.
+    let enc = |b: &[u8]| transcode(b, E::UTF8);
+    let Some(newline) = enc(b"\n") else {
+        return Ok(None);
+    };
+    let sep_ext = match sep.as_deref() {
         None => None,
         // Paragraph mode: split at a blank line.
-        Some([]) => Some(enc(b"\n\n")?),
-        Some(s) => Some(enc(s)?),
+        Some([]) => Some([newline.as_slice(), newline.as_slice()].concat()),
+        Some(s) if in_ext => Some(s.to_vec()),
+        Some(s) => match enc(s) {
+            Some(s) => Some(s),
+            None => return Ok(None),
+        },
     };
-    Some(WideLines {
+    let cr = if converts {
+        match enc(b"\r") {
+            Some(cr) => cr,
+            None => return Ok(None),
+        }
+    } else {
+        b"\r".to_vec()
+    };
+    Ok(Some(WideLines {
+        newline_sep: sep_ext.as_deref() == Some(newline.as_slice()),
         sep: sep_ext,
-        cr: enc(b"\r")?,
-        newline_sep: sep == Some(b"\n".as_slice()),
+        cr,
         unit,
-    })
+    }))
 }
 
 /// Read one line off `io` for `IO#gets` and its relatives: split on the
@@ -2600,11 +2698,11 @@ pub(crate) fn wait_fd_single(
 /// arguments, update lineno / `$.` / `$_`, and return the tagged String
 /// (nil at EOF).
 fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
-    let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
+    let (mut sep, limit, chomp, src) = getline_args(vm, globals, lfp, 2)?;
     let self_ = lfp.self_val();
     let (ext, intl) = io_encodings(globals, self_);
     let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
-    let wide = wide_lines(globals, sep.as_deref(), ext, intl);
+    let wide = line_split(globals, &mut sep, src, ext, intl)?;
     if let Some(i) = intl
         && read_converts(ext, intl)
         && self_.as_io_inner().char_pending_len() > 0
@@ -3306,7 +3404,7 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts) =
+    let (mut sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts, sep_src) =
         class_getline_args(vm, globals, lfp)?;
     let universal = class_reads_universal_newline(
         vm,
@@ -3351,10 +3449,13 @@ fn io_class_readlines(
     }
     let (converts, wide) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
-        (
-            read_converts(ext, intl),
-            wide_lines(globals, sep.as_deref(), ext, intl),
-        )
+        match line_split(globals, &mut sep, sep_src, ext, intl) {
+            Ok(wide) => (read_converts(ext, intl), wide),
+            Err(e) => {
+                let _ = io_val.as_io_inner_mut().close(&globals.store);
+                return Err(e);
+            }
+        }
     };
     vm.with_temp_scope(|vm| {
         // Root the transient File IO (and the result lines) across the
@@ -3422,6 +3523,7 @@ fn class_getline_args(
     bool,
     (String, Option<Value>, Option<Value>, Option<EncNames>),
     (i64, Option<Value>),
+    SepSrc,
 )> {
     let opts = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
     let mut chomp = false;
@@ -3430,35 +3532,11 @@ fn class_getline_args(
     {
         chomp = c.as_bool();
     }
-    // Default separator: `$/` — "\n" unless reassigned; nil slurps.
-    let mut sep: Option<Vec<u8>> = globals.rs_bytes();
-    let mut limit_arg: Option<Value> = None;
-    match (lfp.try_arg(1), lfp.try_arg(2)) {
-        (None, _) => {}
-        (Some(v0), None) => {
-            if v0.is_nil() {
-                sep = None;
-            } else if let Some(rs) = v0.is_rstring() {
-                sep = Some(rs.as_bytes().to_vec());
-            } else if let Some(rs) = v0.check_string_type(vm, globals)? {
-                sep = Some(rs.as_rstring_inner().as_bytes().to_vec());
-            } else {
-                limit_arg = Some(v0);
-            }
-        }
-        (Some(v0), Some(v1)) => {
-            if v0.is_nil() {
-                sep = None;
-            } else {
-                sep = Some(v0.coerce_to_rstring(vm, globals)?.as_bytes().to_vec());
-            }
-            limit_arg = Some(v1);
-        }
-    }
+    let (sep, limit_arg, src) = getline_sep_args(vm, globals, lfp.try_arg(1), lfp.try_arg(2))?;
     let limit = getline_limit(vm, globals, limit_arg)?;
     let open = class_read_opts(vm, globals, opts)?;
     let ecopts = class_read_ecopts(vm, globals, opts)?;
-    Ok((sep, limit, chomp, open, ecopts))
+    Ok((sep, limit, chomp, open, ecopts, src))
 }
 
 /// Whether limit-cut reads should complete UTF-8 characters, given the
@@ -3517,7 +3595,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .to_str()?
         .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts) =
+    let (mut sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts, sep_src) =
         class_getline_args(vm, globals, lfp)?;
     let universal = class_reads_universal_newline(
         vm,
@@ -3562,10 +3640,13 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     }
     let (converts, wide) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
-        (
-            read_converts(ext, intl),
-            wide_lines(globals, sep.as_deref(), ext, intl),
-        )
+        match line_split(globals, &mut sep, sep_src, ext, intl) {
+            Ok(wide) => (read_converts(ext, intl), wide),
+            Err(e) => {
+                let _ = io_val.as_io_inner_mut().close(&globals.store);
+                return Err(e);
+            }
+        }
     };
     vm.with_temp_scope(|vm| {
         // Root the transient File IO across the block calls below.
@@ -4007,7 +4088,9 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             items.extend(elems);
             false
         } else {
-            let cmd = Value::string(cmd_val.coerce_to_str(vm, globals)?);
+            // The String as it is, bytes and encoding: a command need not
+            // be UTF-8, and `parse_exec_args` reads it by its encoding.
+            let cmd = cmd_val.coerce_to_rstring(vm, globals)?.as_val();
             vm.temp_push(cmd);
             items.push(cmd);
             true
@@ -4916,7 +4999,7 @@ fn io_readlines(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let (sep, limit, chomp) = getline_args(vm, globals, lfp, 2)?;
+    let (mut sep, limit, chomp, src) = getline_args(vm, globals, lfp, 2)?;
     if limit == Some(0) {
         return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
     }
@@ -4924,7 +5007,7 @@ fn io_readlines(
     let complete_utf8 = io_completes_utf8(globals, self_);
     let (ext, intl) = io_encodings(globals, self_);
     let converts = read_converts(ext, intl);
-    let wide = wide_lines(globals, sep.as_deref(), ext, intl);
+    let wide = line_split(globals, &mut sep, src, ext, intl)?;
     // The lines go into an Array on the temp stack as they are read. Each
     // read can park the thread, letting another thread collect, or run
     // signal handlers, and a collection there would free the lines a Rust

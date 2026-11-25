@@ -35,8 +35,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash", ruby2_keywords_hash, 1);
     globals.define_builtin_class_func(HASH_CLASS, "ruby2_keywords_hash?", ruby2_keywords_hash_p, 1);
 
-    // `capacity:` (kw slot `try_arg(1)`) is a pure allocation hint with no
-    // observable semantics; it is accepted and ignored.
+    // `capacity:` (kw slot `try_arg(1)`) is a pure allocation hint: it is
+    // converted as CRuby converts it, and otherwise ignored.
     globals.define_private_builtin_func_with_kw(
         HASH_CLASS,
         "initialize",
@@ -397,6 +397,11 @@ fn initialize(
     pc: BytecodePtr,
 ) -> Result<Value> {
     let mut hash = lfp.self_val().as_hash_mut(&globals.store)?;
+    // `capacity:` sizes nothing here, but `rb_hash_init` reads whatever
+    // is given with NUM2LONG, nil included.
+    if let Some(capa) = lfp.try_arg(1) {
+        capa.num2long(vm, globals)?;
+    }
     if let Some(bh) = lfp.block() {
         if lfp.try_arg(0).is_some() {
             return Err(MonorubyErr::argumenterr(

@@ -701,7 +701,7 @@ undefined method 'custom_fmt' for nil (NoMethodError)
 119: no error
 [ErrorHighlight::CoreExt, TypeError]
 [ErrorHighlight::CoreExt, ArgumentError]
-[ErrorHighlight::CoreExt, NameError]
+[DidYouMean::Correctable, ErrorHighlight::CoreExt]
 120: no error
 ErrorHighlight::CoreExt
 121: no error

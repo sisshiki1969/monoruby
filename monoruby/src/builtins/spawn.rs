@@ -234,6 +234,23 @@ fn command_needs_shell(cmd: &[u8]) -> bool {
     POSIX_SH_CMDS.contains(&word)
 }
 
+/// CRuby's `StringValueCStr`: the bytes of a String that holds no null
+/// character (`RStringInner::check_c_str`, #2231).
+fn cstr_value(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
+    let rs = v.coerce_to_rstring(vm, globals)?;
+    rs.check_c_str()?;
+    Ok(rs.as_bytes().to_vec())
+}
+
+/// What C code reads out of the bytes [`cstr_value`] answers: those up
+/// to the first NUL.
+fn c_str(mut bytes: Vec<u8>) -> Vec<u8> {
+    if let Some(nul) = bytes.iter().position(|b| *b == 0) {
+        bytes.truncate(nul);
+    }
+    bytes
+}
+
 /// Parse `Process.spawn`/`exec` arguments into an `ExecSpec`.
 pub(crate) fn parse_spawn_args(
     vm: &mut Executor,
@@ -278,10 +295,7 @@ pub(crate) fn parse_exec_args(
             vm.with_temp_scope(|vm| {
                 vm.temp_push(h.into());
                 h.walk(vm, globals, |vm, globals, _, k, v| {
-                    let key = k.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
-                    if key.contains(&0) {
-                        return Err(null_byte());
-                    }
+                    let key = c_str(cstr_value(vm, globals, k)?);
                     if key.contains(&b'=') {
                         return Err(MonorubyErr::argumenterr(format!(
                             "environment name contains a equal : {}",
@@ -291,10 +305,7 @@ pub(crate) fn parse_exec_args(
                     if v.is_nil() {
                         env_ops.push((key, None));
                     } else {
-                        let val = v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
-                        if val.contains(&0) {
-                            return Err(null_byte());
-                        }
+                        let val = c_str(cstr_value(vm, globals, v)?);
                         env_ops.push((key, Some(val)));
                     }
                     Ok(false)
@@ -426,13 +437,16 @@ pub(crate) fn parse_exec_args(
     // --- command ---
     // The words go to the child as bytes: an argv entry may hold bytes
     // that are not UTF-8 (a `# encoding: big5` script passed via `-e`).
-    let to_str = |vm: &mut Executor, globals: &mut Globals, v: Value| -> Result<Vec<u8>> {
-        let s = v.coerce_to_rstring(vm, globals)?.as_bytes().to_vec();
-        if s.contains(&0) {
-            Err(null_byte())
-        } else {
-            Ok(s)
-        }
+    //
+    // Each is read as a C string would be (`cstr_value`), and CRuby then
+    // packs the arguments into one buffer, a NUL after each, which the
+    // child's argv is cut out of again at every NUL. A String in UTF-16
+    // or UTF-32 holds zero bytes without holding a null *character*, so
+    // one such argument reaches the child as several: `"ab"` in UTF-16LE
+    // is `a`, `b` and an empty one (#2231). The program is what a C
+    // string of the first one names: its bytes up to the first NUL.
+    let push_args = |argv: &mut Vec<Vec<u8>>, arg: Vec<u8>| {
+        argv.extend(arg.split(|b| *b == 0).map(<[u8]>::to_vec));
     };
     // The first command item may be a two-element Array `[command, argv0]`.
     let first = items[0];
@@ -448,11 +462,14 @@ pub(crate) fn parse_exec_args(
         if ary.len() != 2 {
             return Err(MonorubyErr::argumenterr("wrong first argument"));
         }
-        let prog = to_str(vm, globals, ary.get(0).copied().unwrap())?;
-        let argv0 = to_str(vm, globals, ary.get(1).copied().unwrap())?;
-        let mut argv = vec![argv0];
+        let prog = c_str(cstr_value(vm, globals, ary.get(0).copied().unwrap())?);
+        let mut argv = vec![];
+        push_args(
+            &mut argv,
+            cstr_value(vm, globals, ary.get(1).copied().unwrap())?,
+        );
         for v in items.iter().skip(1) {
-            argv.push(to_str(vm, globals, *v)?);
+            push_args(&mut argv, cstr_value(vm, globals, *v)?);
         }
         (prog, argv, false)
     } else if items.len() == 1 && accept_shell {
@@ -460,7 +477,7 @@ pub(crate) fn parse_exec_args(
         // syntax, and otherwise split into words here and exec'd as a
         // program, with no shell in between (CRuby's `rb_exec_fillarg`).
         // It goes on as the bytes it is.
-        let cmd = to_str(vm, globals, first)?;
+        let cmd = c_str(cstr_value(vm, globals, first)?);
         if command_needs_shell(&cmd) {
             let argv = vec![b"sh".to_vec(), b"-c".to_vec(), cmd.clone()];
             shell_script = Some(cmd);
@@ -477,10 +494,12 @@ pub(crate) fn parse_exec_args(
             (prog, argv, false)
         }
     } else {
-        let prog = to_str(vm, globals, first)?;
-        let mut argv = vec![prog.clone()];
+        let first = cstr_value(vm, globals, first)?;
+        let prog = c_str(first.clone());
+        let mut argv = vec![];
+        push_args(&mut argv, first);
         for v in items.iter().skip(1) {
-            argv.push(to_str(vm, globals, *v)?);
+            push_args(&mut argv, cstr_value(vm, globals, *v)?);
         }
         (prog, argv, false)
     };
@@ -633,7 +652,8 @@ fn parse_redirect(
         RedirectTarget::Fd(i as i32)
     } else if v.ty() == Some(ObjTy::IO) {
         RedirectTarget::Fd(v.as_io_inner().fileno()?)
-    } else if let Some(s) = v.is_rstring() {
+    } else if v.is_rstring().is_some() {
+        let s = v.coerce_to_path_rstring(vm, globals)?;
         let path = CString::new(s.as_bytes().to_vec()).map_err(|_| null_byte())?;
         RedirectTarget::File {
             path,

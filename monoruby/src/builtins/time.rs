@@ -2539,9 +2539,14 @@ fn time_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // CRuby rejects non-Symbol units (including String — it does NOT
     // call `to_sym`) and unknown Symbols with ArgumentError.
     let unit_multiplier: u64 = if let Some(unit_arg) = lfp.try_arg(2) {
-        let sym = unit_arg.try_symbol().ok_or_else(|| {
-            MonorubyErr::argumenterr("unexpected unit. Time.at(sec, subsec, unit)")
-        })?;
+        let Some(sym) = unit_arg.try_symbol() else {
+            // `get_scale` names whatever it was given (`%PRIsVALUE`).
+            let shown = vm.obj_as_string(globals, unit_arg)?;
+            return Err(MonorubyErr::argumenterr(format!(
+                "unexpected unit: {}",
+                String::from_utf8_lossy(shown.as_rstring_inner().as_bytes())
+            )));
+        };
         match sym.get_name().as_str() {
             "nanosecond" | "nsec" => 1,
             "microsecond" | "usec" => 1_000,

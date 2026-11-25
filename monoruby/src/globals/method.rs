@@ -20,6 +20,18 @@ impl Globals {
             .new_builtin_func(name, address, min, max, rest, kw, kw_rest);
         let method_name = IdentId::get_id(name);
         self.gen_wrapper(func_id);
+        // The methods Ruby makes private whatever the definition says
+        // (`rb_scope_visibility_test` aside: `initialize` and its copy
+        // hooks, `respond_to_missing?`), so that
+        // `NameError.instance_methods(false)` does not list them.
+        let visi = match name {
+            "initialize"
+            | "initialize_copy"
+            | "initialize_clone"
+            | "initialize_dup"
+            | "respond_to_missing?" => Visibility::Private,
+            _ => visi,
+        };
         self.add_method(class_id, method_name, func_id, visi);
         func_id
     }

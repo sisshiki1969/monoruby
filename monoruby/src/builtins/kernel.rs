@@ -743,10 +743,17 @@ fn gets(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
         return Ok(res);
     }
     let sep = globals.rs_bytes();
-    Ok(
-        crate::builtins::argf::argf_getline_raw(vm, globals, argf, sep.as_deref(), None, false)?
-            .unwrap_or_default(),
-    )
+    let src = crate::builtins::io::SepSrc::of_rs(globals);
+    Ok(crate::builtins::argf::argf_getline_raw(
+        vm,
+        globals,
+        argf,
+        sep.as_deref(),
+        src,
+        None,
+        false,
+    )?
+    .unwrap_or_default())
 }
 
 ///
@@ -1507,14 +1514,32 @@ fn caller_frames(
                     // The frame line is ASCII when its path and label are.
                     let path_ascii = enc != crate::value::Encoding::UTF8 && path.is_ascii();
                     let line_ascii = path_ascii && label.is_ascii();
-                    let frame_line = format!("{path}:{line}:in '{label}'");
+                    // A name that is not UTF-8 text is shown as the
+                    // bytes it is (#2235).
+                    let (frame_line, mut path) = match crate::globals::non_utf8_path(&source) {
+                        Some(raw) => {
+                            let rest = format!(":{line}:in '{label}'");
+                            (
+                                Value::string_from_source_bytes(
+                                    &[raw, rest.as_bytes()].concat(),
+                                    enc,
+                                ),
+                                Value::string_from_source_bytes(raw, enc),
+                            )
+                        }
+                        None => (
+                            crate::globals::backtrace_string(
+                                format!("{path}:{line}:in '{label}'"),
+                                enc,
+                                line_ascii,
+                            ),
+                            crate::globals::backtrace_string(path, enc, path_ascii),
+                        ),
+                    };
+                    path.set_frozen();
                     vec![
-                        crate::globals::backtrace_string(frame_line, enc, line_ascii),
-                        {
-                            let mut v = crate::globals::backtrace_string(path, enc, path_ascii);
-                            v.set_frozen();
-                            v
-                        },
+                        frame_line,
+                        path,
                         absolute,
                         Value::integer(line as i64),
                         location_label(label),
@@ -3654,71 +3679,125 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // protocol below is a no-op — but with the shim absent (`--no-gems`
     // / the test harness) the builtin itself must run the
     // `#to_path`/`#to_str` chain.
-    let feature = path_arg_to_string(vm, globals, lfp.arg(0))?;
-    let file_name = std::path::PathBuf::from(feature);
-    vm.feature_encoding = feature_encoding(lfp.arg(0));
-    let b = vm.require(globals, &file_name, false)?;
+    let (file_name, enc) = feature_arg(vm, globals, lfp.arg(0))?;
+    vm.feature_encoding = Some(enc);
+    let b = vm
+        .require(globals, &file_name, false)
+        .map_err(|err| name_load_error(err, enc))?;
     Ok(Value::bool(b))
 }
 
-/// The encoding of the feature String *arg*, which decides that of the
-/// loaded file's path String (#2090, `Globals::expanded_path_encoding`).
-fn feature_encoding(arg: Value) -> Option<crate::value::Encoding> {
-    let name = arg.is_rstring_inner()?;
-    Some(ospath_encoding(
+/// The feature String *name* as `require` / `load` look for it: its
+/// bytes, and the encoding that decides that of the loaded file's path
+/// String (#2090, `Globals::expanded_path_encoding`).
+fn feature_name(
+    store: &Store,
+    name: &RStringInner,
+) -> (std::path::PathBuf, crate::value::Encoding) {
+    let (bytes, enc) = encode_ospath(
+        store,
+        name.as_bytes(),
         name.encoding(),
-        name.as_bytes().is_ascii(),
         cfg!(target_os = "macos"),
-    ))
+    );
+    (super::file::bytes_to_pathbuf(&bytes), enc)
+}
+
+/// The feature argument of `require`, `require_relative` and
+/// `autoload`, CRuby's `FilePathValue`: `#to_path` (if present) and
+/// then `#to_str`, an encoding that is not ASCII-compatible is an
+/// Encoding::CompatibilityError and a NUL an ArgumentError.
+///
+/// The name is taken as the bytes it is, in whatever encoding: a file
+/// called `\xC6\xFC\xCB\xDC.rb` (EUC-JP) is found by those bytes, and
+/// the encoding answered is what its path String is labelled with.
+pub(crate) fn feature_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<(std::path::PathBuf, crate::value::Encoding)> {
+    let name = arg.coerce_to_path_rstring(vm, globals)?;
+    Ok(feature_name(&globals.store, &name))
+}
+
+/// A "cannot load such file" about a file whose name is not UTF-8 text
+/// names it as the bytes it is, in the encoding *enc* of the feature
+/// String: CRuby's `load_failed` formats that String itself, and
+/// `LoadError#path` is it. The Rust-side message can only be lossy.
+fn name_load_error(mut err: MonorubyErr, enc: crate::value::Encoding) -> MonorubyErr {
+    const HEAD: &str = "cannot load such file -- ";
+    if let MonorubyErrKind::Load(path) = err.kind()
+        && err.raw_message.is_none()
+        && err.message.starts_with(HEAD)
+    {
+        let name = super::file::pathbuf_bytes(path);
+        if std::str::from_utf8(name).is_err()
+            || (!name.is_ascii() && enc != crate::value::Encoding::UTF8)
+        {
+            err.raw_message = Some(([HEAD.as_bytes(), name].concat(), enc));
+        }
+    }
+    err
+}
+
+/// The file argument of `load`. CRuby converts it without
+/// `FilePathValue`'s checks (`rb_get_path_check_to_string`) and they
+/// come from what it does next: `StringValueCStr` in `rb_find_file`,
+/// then the expansion against the working directory or a `$LOAD_PATH`
+/// entry, which cannot join a name that is not ASCII-compatible.
+fn load_arg(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+) -> Result<(std::path::PathBuf, crate::value::Encoding)> {
+    let name = arg.coerce_to_path_rstring_allow_nul(vm, globals)?;
+    name.check_c_str()?;
+    let enc = name.encoding();
+    if !enc.is_ascii_compatible() {
+        // `rb_enc_check` of the buffer the expansion builds (BINARY;
+        // the home directory's for a `~` name) against the name.
+        let (lhs, rhs) = if name.as_bytes().first() == Some(&b'~') {
+            (enc.inspect_label(), "US-ASCII".to_string())
+        } else {
+            ("BINARY (ASCII-8BIT)".to_string(), enc.inspect_label())
+        };
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!("incompatible character encodings: {lhs} and {rhs}"),
+        ));
+    }
+    Ok(feature_name(&globals.store, &name))
 }
 
 /// CRuby's `rb_str_encode_ospath`, which `require`, `load` and an
 /// autoload's `require` run the feature String through before anything
 /// else. Where the OS takes its paths in UTF-8 (*utf8_ospath*: macOS;
 /// Linux has no such step) a name that is neither BINARY nor UTF-8 is
-/// converted to UTF-8, so that is the encoding the file's path String
-/// starts from: `load "x.rb".encode("EUC-JP")` has a UTF-8 `__FILE__`
-/// there and an EUC-JP one on Linux, and a US-ASCII name no longer
-/// stands for `Encoding.default_external` as a BINARY one still does.
+/// converted to UTF-8: `load "\u65E5.rb".encode("EUC-JP")` opens the
+/// file of the UTF-8 name there and has a UTF-8 `__FILE__`, where Linux
+/// opens the file of the EUC-JP bytes and has an EUC-JP one, and a
+/// US-ASCII name no longer stands for `Encoding.default_external` as a
+/// BINARY one still does.
 ///
-/// Only an ASCII-only name is relabelled. Any other would have to be
-/// transcoded, and a name whose bytes are not UTF-8 is not loadable
-/// here yet in the first place.
-fn ospath_encoding(
+/// A name that cannot be converted is left as it is
+/// (`rb_str_conv_enc`).
+fn encode_ospath<'a>(
+    store: &Store,
+    name: &'a [u8],
     enc: crate::value::Encoding,
-    ascii_only: bool,
     utf8_ospath: bool,
-) -> crate::value::Encoding {
+) -> (std::borrow::Cow<'a, [u8]>, crate::value::Encoding) {
     use crate::value::Encoding;
+    use std::borrow::Cow;
     match enc {
-        Encoding::Ascii8 | Encoding::UTF8 => enc,
-        _ if utf8_ospath && ascii_only => Encoding::UTF8,
-        _ => enc,
+        Encoding::Ascii8 | Encoding::UTF8 => (Cow::Borrowed(name), enc),
+        _ if !utf8_ospath => (Cow::Borrowed(name), enc),
+        _ if name.is_ascii() => (Cow::Borrowed(name), Encoding::UTF8),
+        _ => match crate::value::transcode::transcode_for_env(store, name, enc, Encoding::UTF8) {
+            Ok(utf8) => (Cow::Owned(utf8), Encoding::UTF8),
+            Err(_) => (Cow::Borrowed(name), enc),
+        },
     }
-}
-
-/// CRuby's `rb_get_path`: convert a path argument to a String via
-/// `#to_path` (if present) and then `#to_str` (if the `#to_path`
-/// result is not already a String). A bare `#to_str` object is also
-/// accepted. Anything else is a TypeError.
-fn path_arg_to_string(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<String> {
-    if let Some(s) = arg.is_str() {
-        return Ok(s.to_string());
-    }
-    let v = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_PATH)?.unwrap_or(arg);
-    if let Some(s) = v.is_str() {
-        return Ok(s.to_string());
-    }
-    if let Some(r) = crate::coerce::check_funcall(vm, globals, v, IdentId::TO_STR)? {
-        if let Some(s) = r.is_str() {
-            return Ok(s.to_string());
-        }
-    }
-    Err(MonorubyErr::no_implicit_conversion(
-        &globals.store,
-        arg,
-        STRING_CLASS,
-    ))
 }
 
 ///
@@ -3736,13 +3815,15 @@ fn require_relative(
 ) -> Result<Value> {
     let mut file_name: std::path::PathBuf = globals.current_source_path(vm).into();
     file_name.pop();
-    let feature = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
+    let (feature, enc) = feature_arg(vm, globals, lfp.arg(0))?;
     file_name.extend(&feature);
     // No extension munging here: the shared resolution appends `.rb`
     // itself, and `require_relative "x.ext"` must mean `x.ext.rb`
     // (set_extension would *replace* the foreign extension).
-    vm.feature_encoding = feature_encoding(lfp.arg(0));
-    let b = vm.require(globals, &file_name, true)?;
+    vm.feature_encoding = Some(enc);
+    let b = vm
+        .require(globals, &file_name, true)
+        .map_err(|err| name_load_error(err, enc))?;
     Ok(Value::bool(b))
 }
 
@@ -3754,7 +3835,7 @@ fn require_relative(
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/load.html]
 #[monoruby_builtin]
 fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let file_name = std::path::PathBuf::from(path_arg_to_string(vm, globals, lfp.arg(0))?);
+    let (file_name, enc) = load_arg(vm, globals, lfp.arg(0))?;
     // `wrap` is either the module to load the file into, or — for any
     // other truthy value — a fresh anonymous module (CRuby: a T_MODULE
     // is used as-is, everything else truthy means `Module.new`; note a
@@ -3767,8 +3848,9 @@ fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         None
     };
-    vm.feature_encoding = feature_encoding(lfp.arg(0));
-    vm.load(globals, &file_name, wrap)?;
+    vm.feature_encoding = Some(enc);
+    vm.load(globals, &file_name, wrap)
+        .map_err(|err| name_load_error(err, enc))?;
     Ok(Value::bool(true))
 }
 
@@ -4145,14 +4227,10 @@ pub(super) fn spawn(
 fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Only a String is a command here (an Array or a Hash would be read
     // as `spawn`'s `[command, argv0]` and env forms), converted once.
-    let bytes = lfp
-        .arg(0)
-        .coerce_to_rstring(vm, globals)?
-        .as_bytes()
-        .to_vec();
+    // (With its encoding, which decides what a NUL in it is.)
+    let cmd = lfp.arg(0).coerce_to_rstring(vm, globals)?.as_val();
     crate::scheduler::clear_last_status(vm);
     let spec = vm.with_temp_scope(|vm| {
-        let cmd = Value::bytes(bytes);
         vm.temp_push(cmd);
         crate::builtins::spawn::parse_spawn_args(vm, globals, &[cmd])
     })?;
@@ -4627,20 +4705,20 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
         Some(p) => (p, source.realpath_encoding()),
         None => (&source.path, source.path_encoding()),
     };
-    let s = path.to_string_lossy();
+    let s = super::file::pathbuf_bytes(path);
     // `eval` with a binding (and no explicit filename) yields a
     // synthetic "(eval at ...)" source; there is no directory.
-    if s.starts_with("(eval") || s.starts_with("(irb") {
+    if s.starts_with(b"(eval") || s.starts_with(b"(irb") {
         return Ok(Value::nil());
     }
     // File.dirname semantics: a bare filename has directory ".".
     let dir = match path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
-        _ => ".".to_string(),
+        Some(p) if !p.as_os_str().is_empty() => super::file::pathbuf_bytes(p),
+        _ => b".",
     };
     // The directory of the path String CRuby keeps for the source, in
-    // that String's encoding (#2096).
-    Ok(Value::string_from_source_bytes(dir.as_bytes(), enc))
+    // that String's encoding (#2096), as the bytes it is (#2235).
+    Ok(Value::string_from_source_bytes(dir, enc))
 }
 
 ///
@@ -7946,20 +8024,46 @@ mod tests {
     /// platform they run on.
     #[test]
     fn feature_string_encoding_goes_through_the_ospath_rule() {
-        use super::ospath_encoding;
+        use super::encode_ospath;
         use crate::value::Encoding;
+        let globals = crate::Globals::new_test();
+        let store = &globals.store;
+        // "\u65E5" in EUC-JP and in UTF-8.
+        let (euc, utf8) = (&b"\xC6\xFC.rb"[..], "\u{65E5}.rb".as_bytes());
         for enc in [Encoding::UsAscii, Encoding::EUC_JP, Encoding::Iso8859(1)] {
-            // Linux: the name's own encoding.
-            assert_eq!(ospath_encoding(enc, true, false), enc);
-            assert_eq!(ospath_encoding(enc, false, false), enc);
-            // macOS: UTF-8, as long as there is nothing to transcode.
-            assert_eq!(ospath_encoding(enc, true, true), Encoding::UTF8);
-            assert_eq!(ospath_encoding(enc, false, true), enc);
+            // Linux: the name as it is, in its own encoding.
+            assert_eq!(
+                encode_ospath(store, b"a.rb", enc, false),
+                (b"a.rb"[..].into(), enc)
+            );
+            assert_eq!(encode_ospath(store, euc, enc, false), (euc.into(), enc));
+            // macOS: UTF-8.
+            assert_eq!(
+                encode_ospath(store, b"a.rb", enc, true),
+                (b"a.rb"[..].into(), Encoding::UTF8)
+            );
         }
+        // ... transcoded when the name is not ASCII only (#2235),
+        assert_eq!(
+            encode_ospath(store, euc, Encoding::EUC_JP, true),
+            (utf8.into(), Encoding::UTF8)
+        );
+        // and left alone when it cannot be.
+        assert_eq!(
+            encode_ospath(store, b"\xC6.rb", Encoding::EUC_JP, true),
+            (b"\xC6.rb"[..].into(), Encoding::EUC_JP)
+        );
+        assert_eq!(
+            encode_ospath(store, euc, Encoding::UsAscii, true),
+            (euc.into(), Encoding::UsAscii)
+        );
         for enc in [Encoding::Ascii8, Encoding::UTF8] {
-            for ascii_only in [true, false] {
+            for name in [&b"a.rb"[..], euc] {
                 for utf8_ospath in [true, false] {
-                    assert_eq!(ospath_encoding(enc, ascii_only, utf8_ospath), enc);
+                    assert_eq!(
+                        encode_ospath(store, name, enc, utf8_ospath),
+                        (name.into(), enc)
+                    );
                 }
             }
         }

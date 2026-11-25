@@ -1727,22 +1727,7 @@ fn to_path_keeping(
     })
 }
 
-/// Reject ASCII-incompatible path encodings (UTF-16/32, ISO-2022-JP)
-/// with CRuby's `Encoding::CompatibilityError` message.
-pub(super) fn check_path_encoding(globals: &Globals, rs: &RString) -> Result<()> {
-    let enc = rs.encoding();
-    if !enc.is_ascii_compatible() {
-        return Err(MonorubyErr::encoding_compatibility_error_with_store(
-            &globals.store,
-            format!(
-                "path name must be ASCII-compatible ({}): \"{}\"",
-                enc.name(),
-                rs.inspect().trim_matches('"'),
-            ),
-        ));
-    }
-    Ok(())
-}
+pub(super) use crate::coerce::check_path_encoding;
 
 /// Build a `PathBuf` from raw path bytes (no UTF-8 requirement on Unix).
 pub(super) fn bytes_to_pathbuf(bytes: &[u8]) -> std::path::PathBuf {

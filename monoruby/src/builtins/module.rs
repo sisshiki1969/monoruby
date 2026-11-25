@@ -793,9 +793,11 @@ pub(super) fn autoload_on(
     }
     let feature = feature_arg.coerce_to_path_rstring(vm, globals)?;
     let feature_encoding = feature.encoding();
-    let feature = feature.to_str()?.to_string();
-    if feature.is_empty() {
-        return Err(MonorubyErr::argumenterr("empty file name"));
+    // The name as the bytes it is: a feature in another encoding than
+    // UTF-8 names the file of those bytes (#2235).
+    let feature = crate::builtins::file::bytes_to_pathbuf(feature.as_bytes());
+    if feature.as_os_str().is_empty() {
+        return Err(MonorubyErr::argumenterr("empty feature name"));
     }
     // CRuby raises a `FrozenError` *before* recording any autoload state so
     // that `frozen_module.autoload :Foo, ...` neither installs the entry
@@ -953,12 +955,12 @@ pub(super) fn autoload_query_on(
 /// chance. See `Executor::require`, which retires only on a direct
 /// `require`.
 pub(crate) fn autoload_pending(globals: &Globals, feature: &std::path::Path) -> bool {
-    !autoload_resolution_candidates(globals, &feature.to_string_lossy())
+    !autoload_resolution_candidates(globals, feature)
         .iter()
         .any(|path| globals.is_feature_loaded(path))
 }
 
-fn autoload_feature_already_loaded(globals: &Globals, feature: &str) -> bool {
+fn autoload_feature_already_loaded(globals: &Globals, feature: &std::path::Path) -> bool {
     let candidates = autoload_resolution_candidates(globals, feature);
     for path in &candidates {
         if globals.is_feature_loaded(path) || globals.is_loading_here(path) {
@@ -989,7 +991,7 @@ pub(crate) fn autoload_running_here(globals: &Globals, feature: &std::path::Path
         return false;
     }
     let name = feature.to_string_lossy();
-    if autoload_resolution_candidates(globals, &name)
+    if autoload_resolution_candidates(globals, feature)
         .iter()
         .any(|path| globals.is_loading_here(path))
     {
@@ -1060,7 +1062,7 @@ pub(crate) fn autoload_feature_in_flight(
 /// can probe for already-loadedness without performing I/O.
 fn autoload_resolution_candidates(
     globals: &Globals,
-    feature: &str,
+    raw: &std::path::Path,
 ) -> Vec<std::path::PathBuf> {
     use std::collections::HashSet;
     use std::path::PathBuf;
@@ -1082,7 +1084,7 @@ fn autoload_resolution_candidates(
             out.push(p);
         }
     };
-    let raw = PathBuf::from(feature);
+    let feature = crate::builtins::file::pathbuf_bytes(raw);
     let with_ext = |p: &std::path::Path| -> Vec<PathBuf> {
         if p.extension().is_some() {
             vec![p.to_path_buf()]
@@ -1102,15 +1104,15 @@ fn autoload_resolution_candidates(
     // on macOS where `/tmp`→`/private/tmp` (and `/var/folders`→
     // `/private/var/folders`) symlinks make the two diverge.
     let norm = |p: PathBuf| std::path::absolute(&p).unwrap_or(p);
-    if feature.starts_with('/') {
-        for c in with_ext(&raw) {
+    if feature.starts_with(b"/") {
+        for c in with_ext(raw) {
             push(&mut out, &mut seen, norm(c));
         }
         return out;
     }
-    if feature.starts_with("./") || feature.starts_with("../") {
+    if feature.starts_with(b"./") || feature.starts_with(b"../") {
         if let Ok(cwd) = std::env::current_dir() {
-            let resolved = cwd.join(&raw);
+            let resolved = cwd.join(raw);
             for c in with_ext(&resolved) {
                 push(&mut out, &mut seen, norm(c));
             }
@@ -1123,7 +1125,7 @@ fn autoload_resolution_candidates(
             Some(s) => s,
             None => continue,
         };
-        let joined = PathBuf::from(lib).join(&raw);
+        let joined = PathBuf::from(lib).join(raw);
         for c in with_ext(&joined) {
             push(&mut out, &mut seen, norm(c));
         }
@@ -2884,31 +2886,59 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         require_module_argument(globals, v, "prepend")?;
     }
     let self_ = lfp.self_val();
-    // error_highlight is loaded on first use rather than at boot
-    // (`builtins/gem_prelude.rb`), and CRuby has its `CoreExt` underneath
-    // every other module prepended to the three classes it decorates. So
-    // the first prepend to one of them brings the library in first. (The
-    // library's own prepends come through here too, with the autoload
-    // running, which the Ruby side reads as nothing pending.)
-    if let Some(class) = self_.is_class_or_module()
-        && matches!(
-            class.id(),
+    // error_highlight and did_you_mean are loaded on first use rather
+    // than at boot (`builtins/gem_prelude.rb`,
+    // `builtins/did_you_mean_prelude.rb`), and CRuby has their modules
+    // underneath every other module prepended to the classes they
+    // decorate: `ErrorHighlight::CoreExt` at the bottom,
+    // `DidYouMean::Correctable` on top of it. So the first prepend to
+    // one of those classes brings the libraries in first, did_you_mean
+    // before error_highlight: its own prepend to NameError comes
+    // through here with its autoload running, which the Ruby side reads
+    // as nothing pending, and loads error_highlight underneath.
+    // error_highlight's own prepend (it is loaded alone for a
+    // TypeError) must not bring did_you_mean in below it.
+    if let Some(class) = self_.is_class_or_module() {
+        let id = class.id();
+        let pending = |globals: &Globals, name: &str| {
+            globals
+                .store
+                .get_constant(OBJECT_CLASS, IdentId::get_id(name))
+                .is_some_and(|state| state.is_autoload())
+        };
+        let error_highlight = args.iter().any(|m| {
+            m.is_class_or_module()
+                .is_some_and(|m| globals.store.get_class_name(m.id()) == "ErrorHighlight::CoreExt")
+        });
+        let corrected = !error_highlight
+            && (matches!(id, NAME_ERROR_CLASS | KEY_ERROR_CLASS | LOAD_ERROR_CLASS)
+                || globals
+                    .store
+                    .get_constant_noautoload(
+                        OBJECT_CLASS,
+                        IdentId::get_id("NoMatchingPatternKeyError"),
+                    )
+                    .is_some_and(|v| v.is_class_or_module().is_some_and(|c| c.id() == id)));
+        let highlighted = matches!(
+            id,
             NAME_ERROR_CLASS | TYPE_ERROR_CLASS | ARGUMENTS_ERROR_CLASS
-        )
-        && globals
-            .store
-            .get_constant(OBJECT_CLASS, IdentId::get_id("ErrorHighlight"))
-            .is_some_and(|state| state.is_autoload())
-    {
-        let exception = globals.store[EXCEPTION_CLASS].get_module().as_val();
-        vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("__load_error_highlight"),
-            exception,
-            &[],
-            None,
-            None,
-        )?;
+        );
+        for (wanted, constant, loader) in [
+            (corrected, "DidYouMean", "__load_did_you_mean"),
+            (highlighted, "ErrorHighlight", "__load_error_highlight"),
+        ] {
+            if wanted && pending(globals, constant) {
+                let exception = globals.store[EXCEPTION_CLASS].get_module().as_val();
+                vm.invoke_method_inner(
+                    globals,
+                    IdentId::get_id(loader),
+                    exception,
+                    &[],
+                    None,
+                    None,
+                )?;
+            }
+        }
     }
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(

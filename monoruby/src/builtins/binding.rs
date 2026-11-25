@@ -83,8 +83,7 @@ fn source_location(
                 let bc_index = pc - top_pc;
                 if bc_index.to_usize() < iseq_info.sourcemap.len() {
                     let loc = iseq_info.sourcemap[bc_index.to_usize()];
-                    let file_name =
-                        Value::string(iseq_info.sourceinfo.file_name().into_owned());
+                    let file_name = crate::globals::source_path_value(&iseq_info.sourceinfo);
                     let line = Value::integer(iseq_info.sourceinfo.get_line(&loc) as i64);
                     return Ok(Value::array2(file_name, line));
                 }
@@ -99,7 +98,7 @@ fn source_location(
         binding.outer_fid()
     };
     let iseq = globals.store.iseq(fid);
-    let file_name = Value::string(iseq.sourceinfo.file_name().into_owned());
+    let file_name = crate::globals::source_path_value(&iseq.sourceinfo);
     let line = Value::integer(iseq.sourceinfo.get_line(&iseq.loc) as i64);
     Ok(Value::array2(file_name, line))
 }

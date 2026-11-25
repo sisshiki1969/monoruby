@@ -258,8 +258,13 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                 inner.current = Some(stream);
                 // Re-apply remembered `set_encoding` / `binmode` to the
                 // fresh stream (CRuby keeps them across file switches).
+                // The mode first, as `argf_next_argv` does: an encoding
+                // that is not ASCII-compatible needs it.
                 let enc_args = inner.enc_args.clone();
                 let bin = inner.binmode;
+                if bin {
+                    invoke0(vm, globals, stream, "binmode")?;
+                }
                 if !enc_args.is_empty() {
                     vm.invoke_method_inner(
                         globals,
@@ -269,9 +274,6 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                         None,
                         None,
                     )?;
-                }
-                if bin {
-                    invoke0(vm, globals, stream, "binmode")?;
                 }
                 return Ok(Some(stream));
             }
@@ -370,6 +372,7 @@ pub(crate) fn argf_getline_raw(
     globals: &mut Globals,
     argf: Value,
     sep: Option<&[u8]>,
+    sep_src: super::io::SepSrc,
     limit: Option<usize>,
     chomp: bool,
 ) -> Result<Option<Value>> {
@@ -399,7 +402,11 @@ pub(crate) fn argf_getline_raw(
             }
         };
         let complete_utf8 = matches!(ext, crate::value::Encoding::Utf8(_));
-        let wide = super::io::wide_lines(globals, sep, ext, intl);
+        // Checked against, and put into, the encoding of each stream of
+        // the walk in turn.
+        let mut stream_sep = sep.map(<[u8]>::to_vec);
+        let wide = super::io::line_split(globals, &mut stream_sep, sep_src, ext, intl)?;
+        let sep = stream_sep.as_deref();
         let line = super::io::blocking_io_region(vm, globals, stream, libc::POLLIN, |_store| {
             super::io::getline_with(stream, sep, limit, complete_utf8, wide.as_ref())
         })?;
@@ -426,13 +433,17 @@ pub(crate) fn argf_getline_raw(
     }
 }
 
-fn getline_from_lfp(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-) -> Result<Option<Value>> {
-    let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
-    argf_getline_raw(vm, globals, lfp.self_val(), sep.as_deref(), limit, chomp)
+fn getline_from_lfp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<Value>> {
+    let (sep, limit, chomp, src) = super::io::getline_args(vm, globals, lfp, 2)?;
+    argf_getline_raw(
+        vm,
+        globals,
+        lfp.self_val(),
+        sep.as_deref(),
+        src,
+        limit,
+        chomp,
+    )
 }
 
 /// The current stream when it is `$stdin` reassigned to something that
@@ -524,14 +535,16 @@ fn readlines(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let (args, kw) = forwarded_args(lfp);
         return forward_call_to_stdin(vm, globals, stdin, "readlines", &args, kw, None);
     }
-    let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
+    let (sep, limit, chomp, src) = super::io::getline_args(vm, globals, lfp, 2)?;
     // The lines go into an Array on the temp stack as they are read: the
     // walk runs Ruby (`close` on a drained file, `File.open` on the next)
     // and parks the thread, and a collection there would free the lines a
     // Rust `Vec` held.
     vm.with_temp_scope(|vm| {
         vm.temp_array_new(None);
-        while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
+        while let Some(line) =
+            argf_getline_raw(vm, globals, argf, sep.as_deref(), src, limit, chomp)?
+        {
             vm.temp_array_push(line);
         }
         Ok(vm.temp_pop())
@@ -559,9 +572,9 @@ fn each_line(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
         forward_call_to_stdin(vm, globals, stdin, "each_line", &args, kw, Some(bh))?;
         return Ok(argf);
     }
-    let (sep, limit, chomp) = super::io::getline_args(vm, globals, lfp, 2)?;
+    let (sep, limit, chomp, src) = super::io::getline_args(vm, globals, lfp, 2)?;
     let data = vm.get_block_data(globals, bh)?;
-    while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), limit, chomp)? {
+    while let Some(line) = argf_getline_raw(vm, globals, argf, sep.as_deref(), src, limit, chomp)? {
         vm.invoke_block(globals, &data, &[line])?;
     }
     Ok(argf)
@@ -1082,10 +1095,12 @@ fn to_s(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn binmode(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let argf = lfp.self_val();
+    expect_inner(argf)?.binmode = true;
+    // The stream the mode is for is opened now (`argf_binmode_m` calls
+    // `next_argv`): a `set_encoding` that follows finds it in binmode.
+    force_stream(vm, globals, argf)?;
     let inner = expect_inner(argf)?;
-    inner.binmode = true;
     inner.cur_encs = None;
-    // Applies to the file being read right now, too (CRuby-verified).
     if let Some(cur) = inner.current {
         invoke0(vm, globals, cur, "binmode")?;
     }
@@ -1101,19 +1116,23 @@ fn binmode_p(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePt
 fn set_encoding(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let argf = lfp.self_val();
     let args: Vec<Value> = lfp.arg(0).as_array().iter().cloned().collect();
+    // The encodings are set on the stream being read, opened for it if
+    // need be, and remembered for the ones after it only once that
+    // stream took them (`argf_set_encoding`).
+    let Some(cur) = force_stream(vm, globals, argf)? else {
+        return Err(MonorubyErr::argumenterr("no stream to set encoding"));
+    };
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("set_encoding"),
+        cur,
+        &args,
+        None,
+        None,
+    )?;
     let inner = expect_inner(argf)?;
-    inner.enc_args = args.clone();
+    inner.enc_args = args;
     inner.cur_encs = None;
-    if let Some(cur) = inner.current {
-        vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("set_encoding"),
-            cur,
-            &args,
-            None,
-            None,
-        )?;
-    }
     Ok(argf)
 }
 
