@@ -741,7 +741,8 @@ fn instance_eval_inner(
             Some(receiver_class),
             lineno,
             src_encoding,
-        )?;
+        );
+        let fid = vm.warned(globals, fid)?;
         // Constant lookup inside the body checks the receiver's class
         // between the singleton class and the caller's lexical scopes
         // (CRuby); see `ISeqInfo::instance_eval_class`.

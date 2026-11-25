@@ -127,6 +127,29 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+thread_local! {
+    /// The warnings of the last parse, when it ended in an error: there
+    /// is no `ParseResult` to carry them then, and CRuby prints them
+    /// before it raises the error. Replaced by every parse, emptied by
+    /// [`take_error_warnings`].
+    static ERROR_WARNINGS: std::cell::RefCell<Vec<(String, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Leave the warnings of a parse that is about to fail (an empty list
+/// when a parse starts, so that nothing outlives the parse it is of).
+pub(crate) fn stash_error_warnings(warnings: Vec<(String, bool)>) {
+    ERROR_WARNINGS.with(|w| *w.borrow_mut() = warnings);
+}
+
+/// The warnings of the parse that just failed on this thread, in
+/// `ParseResult::warnings`' shape (formatted line, verbose-only flag).
+/// `Executor::flush_compile_warnings` prints them with the rest; `-c`,
+/// which has no interpreter running, prints them itself.
+pub fn take_error_warnings() -> Vec<(String, bool)> {
+    ERROR_WARNINGS.with(|w| std::mem::take(&mut *w.borrow_mut()))
+}
+
 /// Arm (or, with `None`, disarm) the marker for the file a `require` /
 /// `load` is about to parse, with the encoding of its path String.
 pub(crate) fn set_loading_file(file: Option<(PathBuf, crate::value::Encoding)>) {

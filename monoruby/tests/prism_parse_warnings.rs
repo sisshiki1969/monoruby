@@ -5,6 +5,10 @@
 //! to forward nine of them. The expectations below are CRuby's output
 //! for the same script under `-w` (every warning) and without it (the
 //! default-level ones only).
+//!
+//! Also: the order of a scope's "assigned but unused variable" warnings
+//! (#2192), and the warnings of a source that ends in a SyntaxError
+//! (#2191).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -474,4 +478,312 @@ fn every_dash_e_is_a_line() {
         monoruby_stderr(&["-e", "a = 1 \r + 2"]),
         "-e:1: warning: encountered \\r in middle of line, treated as a mere space\n"
     );
+}
+
+/// `(line, name)` pairs as "assigned but unused variable" warnings.
+fn unused(locals: &[(u32, &str)]) -> Vec<(u32, String)> {
+    locals
+        .iter()
+        .map(|(line, name)| (*line, format!("assigned but unused variable - {name}")))
+        .collect()
+}
+
+fn check_unused(name: &str, source: &str, locals: &[(u32, &str)]) {
+    let expected = unused(locals);
+    let expected: Vec<(u32, &str)> = expected.iter().map(|(l, m)| (*l, m.as_str())).collect();
+    check(name, source, &expected, &[]);
+}
+
+// #2192. prism reports the unused locals of a scope by walking the
+// scope's table of locals, and the table of the prism linked here (2.x)
+// is not the one of CRuby 4.0's (1.8): it becomes a hash table at three
+// locals where CRuby's stays a list, in the order of the first writes,
+// up to six.
+#[test]
+fn unused_locals_of_a_small_scope_in_source_order() {
+    // The script of the issue. prism 2.x alone says b, c, a twice.
+    check_unused(
+        "unused_small",
+        "def m\n  a = 1\n  b = 2\n  c = 3\nend\ndef n\n  c = 1; b = 2; a = 3\nend\n",
+        &[(2, "a"), (3, "b"), (4, "c"), (7, "c"), (7, "b"), (7, "a")],
+    );
+}
+
+#[test]
+fn unused_locals_where_the_table_starts_hashing() {
+    // Six locals fill CRuby's list. The write that finds it full turns
+    // it into a hash table, and only a write that adds a local with a
+    // plain `name = value` is followed by another one (prism writes the
+    // name before the value and again after it):
+    // - `m`: the sixth local is added by `a = 1`, so the table hashes;
+    // - `n`: it is added as a target of `b, a = 1, 2`, and stays a list;
+    // - `o`: two of the six are parameters, `f = e` adds nothing;
+    // - `q`: the targets are added inside the value of `g = (...)`,
+    //   whose second write follows them.
+    check_unused(
+        "unused_six",
+        "def m\n  f = 1\n  e = 1\n  d = 1\n  c = 1\n  b = 1\n  a = 1\nend\n\
+         def n\n  f = 1\n  e = 1\n  d = 1\n  c = 1\n  b, a = 1, 2\nend\n\
+         def o(f, e)\n  d = 1\n  c = 1\n  b = 1\n  a = 1\n  f = e\nend\n\
+         def q\n  f = 1\n  e = 1\n  d = 1\n  c = 1\n  g = (b, a = 1, 2)\nend\n",
+        &[
+            (5, "c"),
+            (6, "b"),
+            (4, "d"),
+            (2, "f"),
+            (3, "e"),
+            (7, "a"),
+            (10, "f"),
+            (11, "e"),
+            (12, "d"),
+            (13, "c"),
+            (14, "b"),
+            (14, "a"),
+            (18, "c"),
+            (19, "b"),
+            (17, "d"),
+            (20, "a"),
+            (27, "c"),
+            (28, "b"),
+            (28, "g"),
+            (26, "d"),
+            (24, "f"),
+            (25, "e"),
+            (28, "a"),
+        ],
+    );
+}
+
+#[test]
+fn unused_locals_where_the_hash_table_grows() {
+    // Twelve locals: the table doubles to 32 slots in `m`, whose last
+    // local is followed by a write, and keeps its 16 in `n`.
+    check_unused(
+        "unused_twelve",
+        "def m\n  l = 1\n  k = 1\n  j = 1\n  i = 1\n  h = 1\n  g = 1\n  f = 1\n  e = 1\n  \
+         d = 1\n  c = 1\n  b = 1\n  a = 1\nend\n\
+         def n\n  l = 1\n  k = 1\n  j = 1\n  i = 1\n  h = 1\n  g = 1\n  f = 1\n  e = 1\n  \
+         d = 1\n  c = 1\n  b, a = 1, 2\nend\n",
+        &[
+            (9, "e"),
+            (11, "c"),
+            (4, "j"),
+            (2, "l"),
+            (7, "g"),
+            (10, "d"),
+            (12, "b"),
+            (13, "a"),
+            (5, "i"),
+            (6, "h"),
+            (8, "f"),
+            (3, "k"),
+            (19, "i"),
+            (20, "h"),
+            (22, "f"),
+            (23, "e"),
+            (18, "j"),
+            (25, "c"),
+            (16, "l"),
+            (17, "k"),
+            (21, "g"),
+            (24, "d"),
+            (26, "b"),
+            (26, "a"),
+        ],
+    );
+}
+
+#[test]
+fn unused_locals_of_every_kind_of_scope() {
+    // A block, a lambda, a class, a module, a singleton class, a method
+    // with parameters and the top level, each with its own table. What a
+    // nested scope leaves to the enclosing one — a superclass, the path
+    // of a module, the object of `class <<`, a default value — writes
+    // the enclosing scope's locals (`kd`, `ke`, `kf`, which make `K`'s
+    // table a hash table; `rb`, `ra`).
+    check_unused(
+        "unused_scopes",
+        "def o\n  z = 1\n  [1].each do |x|\n    y = 2\n    w = 3\n    -> { q = 1; p0 = 2 }\n  \
+         end\n  v = 2\nend\n\
+         class K\n  kb = 1\n  ka = 2\n  def km; kz = 1; ky = 2; end\n  def self.ks; end\n  \
+         class Inner < (kd = Object); end\n  module (ke = self)::Mod; end\n  \
+         class << (kf = self); end\n  [1].each { |i| }\n  -> { }\n  kc = 3\nend\n\
+         module M\n  mb = 1; ma = 2\nend\n\
+         class << self\n  sb = 1; sa = 2\nend\n\
+         def r(pb = (rb = 1), *rest, pk: (ra = 2), **opts, &blk)\n  rd = 1; rc = 2\n  \
+         pb = rest = pk = opts = blk\nend\n\
+         [1].each do |i; lb, la|\n  lb = 1; la = 2\n  bd = 1; bc = 2; bb = 3; i = bb\n  \
+         bb += 1\n  ba &&= 1\n  b9 ||= 1\nend\n\
+         tb = 1\nta = 2\n",
+        &[
+            (6, "q"),
+            (6, "p0"),
+            (4, "y"),
+            (5, "w"),
+            (2, "z"),
+            (8, "v"),
+            (13, "kz"),
+            (13, "ky"),
+            (20, "kc"),
+            (11, "kb"),
+            (12, "ka"),
+            (23, "mb"),
+            (23, "ma"),
+            (26, "sb"),
+            (26, "sa"),
+            (29, "rd"),
+            (29, "rc"),
+            (34, "bc"),
+            (34, "bd"),
+            (39, "tb"),
+            (40, "ta"),
+        ],
+    );
+}
+
+/// stderr of a run that is expected to fail, with its exit status.
+fn failing_stderr(args: &[&str]) -> String {
+    let out = monoruby(args).output().expect("failed to spawn monoruby");
+    assert!(!out.status.success(), "{out:?}");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// A source with a warning of each level, an unused local and, at the
+/// end, a syntax error.
+const BROKEN: &str = "a = 1; p(a +1); if 'x' then end; b = 2; )";
+
+// #2191. CRuby prints the warnings of a source before it raises the
+// source's SyntaxError; monoruby returned the error first and never
+// printed them.
+#[test]
+fn a_script_that_does_not_parse_has_its_warnings() {
+    let script = Script::new("broken_main", &format!("{BROKEN}\n"));
+    let file = script.path();
+    let binary = format!("'+' {BINARY} unary operator");
+    let verbose = script.lines(&[
+        (1, &binary),
+        (1, "string literal in condition"),
+        (1, "assigned but unused variable - b"),
+    ]);
+    let default = script.lines(&[(1, "string literal in condition")]);
+    for (flags, expected) in [
+        (&["-w"][..], &verbose),
+        (&[][..], &default),
+        (&["-W1"][..], &default),
+        (&["-W0"][..], &vec![]),
+        // Under `-c` too, where nothing but the parse happens.
+        (&["-wc"][..], &verbose),
+        (&["-c"][..], &default),
+        (&["-W0", "-c"][..], &vec![]),
+    ] {
+        let err = failing_stderr(&[flags, &[file]].concat());
+        // The warnings come first; the error follows.
+        let lines: Vec<&str> = err.lines().collect();
+        assert!(lines.len() > expected.len(), "{flags:?}: {err}");
+        assert_eq!(&lines[..expected.len()], &expected[..], "{flags:?}: {err}");
+        assert!(
+            !lines[expected.len()..]
+                .iter()
+                .any(|l| l.contains(": warning: ")),
+            "{flags:?}: {err}"
+        );
+        assert!(err.contains("SyntaxError"), "{flags:?}: {err}");
+    }
+}
+
+#[test]
+fn an_eval_or_a_loaded_file_that_does_not_parse_has_its_warnings() {
+    let binary = format!("'+' {BINARY} unary operator");
+    let lib = Script::new("broken_lib", &format!("{BROKEN}\n"));
+    // Each failing parse is announced on stderr by the line that runs
+    // it, so that the expectation also says *when* its warnings are
+    // printed: before the SyntaxError reaches the `rescue`.
+    let main = Script::new(
+        "broken_evals",
+        &format!(
+            "SRC = \"{BROKEN}\"\n\
+             def t(label)\n  $stderr.puts label\n  yield\n  $stderr.puts \"no error\"\n\
+             rescue SyntaxError\n  $stderr.puts \"rescued\"\nend\n\
+             t(\"eval\") {{ eval(SRC) }}\n\
+             t(\"eval with a binding\") {{ eval(SRC, binding) }}\n\
+             t(\"eval with a file\") {{ eval(SRC, nil, \"foo.rb\", 10) }}\n\
+             t(\"Binding#eval\") {{ binding.eval(SRC) }}\n\
+             t(\"instance_eval\") {{ Object.new.instance_eval(SRC) }}\n\
+             t(\"class_eval\") {{ Class.new.class_eval(SRC) }}\n\
+             t(\"module_eval with a file\") {{ Module.new.module_eval(SRC, \"bar.rb\", 5) }}\n\
+             t(\"require\") {{ require {lib:?} }}\n\
+             t(\"load\") {{ load {lib:?} }}\n\
+             t(\"load in a module\") {{ load {lib:?}, true }}\n\
+             t(\"a jump with nothing to jump out of\") {{ eval(\"if 'y' then end; retry\") }}\n\
+             t(\"an eval that parses\") {{ eval(\"if 'z' then end\") }}\n",
+            lib = lib.path(),
+        ),
+    );
+    let file = main.path();
+    // (announcement, the name the warnings carry, whether the source
+    // is a file: its top level reports its unused locals).
+    let sources = [
+        ("eval", format!("(eval at {file}:9)"), 1, false),
+        (
+            "eval with a binding",
+            format!("(eval at {file}:10)"),
+            1,
+            false,
+        ),
+        ("eval with a file", "foo.rb".to_string(), 10, false),
+        ("Binding#eval", format!("(eval at {file}:12)"), 1, false),
+        ("instance_eval", format!("(eval at {file}:13)"), 1, false),
+        ("class_eval", format!("(eval at {file}:14)"), 1, false),
+        ("module_eval with a file", "bar.rb".to_string(), 5, false),
+        ("require", lib.path().to_string(), 1, true),
+        ("load", lib.path().to_string(), 1, true),
+        ("load in a module", lib.path().to_string(), 1, true),
+    ];
+    let expected = |verbose: bool, warnings: bool| {
+        let mut lines = vec![];
+        for (label, name, line, is_file) in &sources {
+            lines.push(label.to_string());
+            if warnings && verbose {
+                lines.push(format!("{name}:{line}: warning: {binary}"));
+            }
+            if warnings {
+                lines.push(format!(
+                    "{name}:{line}: warning: string literal in condition"
+                ));
+            }
+            if warnings && verbose && *is_file {
+                lines.push(format!(
+                    "{name}:{line}: warning: assigned but unused variable - b"
+                ));
+            }
+            lines.push("rescued".to_string());
+        }
+        lines.push("a jump with nothing to jump out of".to_string());
+        if warnings {
+            lines.push(format!(
+                "(eval at {file}:19):1: warning: string literal in condition"
+            ));
+        }
+        lines.push("rescued".to_string());
+        lines.push("an eval that parses".to_string());
+        if warnings {
+            lines.push(format!(
+                "(eval at {file}:20):1: warning: string literal in condition"
+            ));
+        }
+        lines.push("no error".to_string());
+        lines
+    };
+    for (flags, verbose, warnings) in [
+        (&["-w"][..], true, true),
+        (&[][..], false, true),
+        (&["-W0"][..], false, false),
+    ] {
+        let err = monoruby_stderr(&[flags, &[file]].concat());
+        assert_eq!(
+            err.lines().collect::<Vec<_>>(),
+            expected(verbose, warnings),
+            "{flags:?}: {err}"
+        );
+    }
 }

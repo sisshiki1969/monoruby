@@ -1139,10 +1139,12 @@ impl Executor {
         code: &[u8],
         path: &std::path::Path,
     ) -> Result<std::result::Result<Value, ()>> {
-        let res = crate::parser::parse_program(code.to_vec(), path)?;
+        let res = crate::parser::parse_program(code.to_vec(), path);
+        let res = self.warned(globals, res)?;
         let data_offset = res.data_offset;
         let const_site_start = globals.store.const_site_len();
-        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        let fid = bytecodegen::bytecode_compile_script(globals, res);
+        let fid = self.warned(globals, fid)?;
         if globals
             .store
             .names_constant_since(const_site_start, toplevel_binding_id())
@@ -1201,19 +1203,18 @@ impl Executor {
                 }
             },
         };
-        let data_offset = globals.compile_main_script_binding(
-            code,
-            path.to_string_lossy().into_owned(),
-            binding,
-        )?;
+        let data_offset =
+            globals.compile_main_script_binding(code, path.to_string_lossy().into_owned(), binding);
         // The script has now been parsed and compiled twice. Its
         // warnings are the first parse's, which was the script's own
         // (`-e`, a `#!` line, a top level that is not an eval's); the
         // second would only repeat them.
         if let Some(len) = plain_warnings {
             globals.store.compile_warnings.truncate(len);
+            crate::parser::take_error_warnings();
         }
         self.flush_compile_warnings(globals);
+        let data_offset = data_offset?;
         self.define_data(globals, path, data_offset);
         self.invoke_binding(globals, binding.binding().unwrap())
     }
@@ -1258,9 +1259,11 @@ impl Executor {
         let Some(wrap) = wrap else {
             return self.exec_script(globals, code, path);
         };
-        let res = crate::parser::parse_program(code, path)?;
-        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        let res = crate::parser::parse_program(code, path);
+        let res = self.warned(globals, res)?;
+        let fid = bytecodegen::bytecode_compile_script(globals, res);
         self.flush_compile_warnings(globals);
+        let fid = fid?;
         if let Some(iseq) = globals.store.iseq_mut(fid) {
             iseq.set_lexical_context(vec![wrap.id()]);
         }
@@ -1291,11 +1294,13 @@ impl Executor {
         path: &std::path::Path,
         is_main: bool,
     ) -> Result<Value> {
-        let res = crate::parser::parse_program(code, path)?;
+        let res = crate::parser::parse_program(code, path);
+        let res = self.warned(globals, res)?;
         if is_main {
             self.define_data(globals, path, res.data_offset);
         }
-        let fid = bytecodegen::bytecode_compile_script(globals, res)?;
+        let fid = bytecodegen::bytecode_compile_script(globals, res);
+        let fid = self.warned(globals, fid)?;
         if is_main {
             // Label its frames `<main>`, and let a first read of
             // TOPLEVEL_BINDING find this frame to build over.
@@ -1398,6 +1403,19 @@ impl Executor {
         );
     }
 
+    ///
+    /// A parse's or a compile's result on its way to `?`: CRuby prints
+    /// the warnings of a source before it raises that source's
+    /// SyntaxError, so a failure flushes them here, where the success
+    /// path flushes them once the code is ready to run.
+    ///
+    pub(crate) fn warned<T>(&mut self, globals: &mut Globals, res: Result<T>) -> Result<T> {
+        if res.is_err() {
+            self.flush_compile_warnings(globals);
+        }
+        res
+    }
+
     pub(crate) fn flush_compile_warnings(&mut self, globals: &mut Globals) {
         // Onigmo compile-time diagnostics ("character class has
         // duplicated range", "nested repeat operator ... was replaced
@@ -1412,10 +1430,17 @@ impl Executor {
         } else {
             vec![]
         };
-        if globals.store.compile_warnings.is_empty() && regexp_warnings.is_empty() {
+        // The warnings of a parse that ended in an error never reached
+        // `Store::compile_warnings`: the parser left them aside.
+        let error_warnings = crate::parser::take_error_warnings();
+        if globals.store.compile_warnings.is_empty()
+            && error_warnings.is_empty()
+            && regexp_warnings.is_empty()
+        {
             return;
         }
         let mut msgs = std::mem::take(&mut globals.store.compile_warnings);
+        msgs.extend(error_warnings);
         msgs.extend(regexp_warnings);
         // `rb_warn`-level warnings print unless `$VERBOSE` is nil;
         // verbose-level ones (CRuby's `rb_warning`) only when `$VERBOSE`

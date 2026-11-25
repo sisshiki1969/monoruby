@@ -137,8 +137,9 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     // binding-form. The cast can't fail; `Module#define_builtin_func`
     // guarantees `lfp.self_val()` matches `BINDING_CLASS`.
     let binding = Binding::try_new(lfp.self_val()).expect("self is Binding");
-    globals.compile_script_binding(expr, fname, binding, lineno, src_encoding)?;
+    let compiled = globals.compile_script_binding(expr, fname, binding, lineno, src_encoding);
     vm.flush_compile_warnings(globals);
+    compiled?;
     vm.invoke_binding(globals, binding.binding().unwrap())
 }
 

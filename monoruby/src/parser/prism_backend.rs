@@ -468,6 +468,7 @@ fn try_prism_inner(
     anon_forwarding: AnonForwarding,
     scopes_droppable: bool,
 ) -> Result<ParseResult, MonorubyErr> {
+    super::stash_error_warnings(vec![]);
     let path_display = path.display().to_string();
     // An `eval` arrives with its options; a file (the main script with
     // TOPLEVEL_BINDING included) is not one, whatever options the
@@ -593,33 +594,6 @@ fn try_prism_inner(
         is_eval_source,
     ));
 
-    // prism >= 2.0 validates the byte escapes of a regexp literal against
-    // its encoding and calls every sequence it rejects an "invalid
-    // multibyte escape" — including a valid character spelled with mixed
-    // escapes (`/\xE3\201\202/`) and a truncated one, which CRuby 4.0
-    // (prism 1.x) accepts or calls "too short escaped multibyte
-    // character". `rb_reg_preprocess`, which monoruby ports as
-    // `reg_preprocess` and runs where the literal is compiled, is the
-    // authority: prism's diagnostic stands only when it agrees.
-    if let Some(diag) = result
-        .errors()
-        .find(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
-    {
-        let loc = location_to_loc(&diag.location());
-        // CRuby embeds the location in the SyntaxError *message* itself
-        // ("file:line: syntax error, ..."), and callers regex on it.
-        let line = source_info.get_line(&loc);
-        let file = crate::globals::display_path(&source_info);
-        return Err(MonorubyErr::parse(crate::ast::ParseErr {
-            kind: crate::ast::ParseErrKind::SyntaxError(format!(
-                "{file}:{line}: prism: {}",
-                String::from_utf8_lossy(diag.message())
-            )),
-            loc,
-            source_info,
-        }));
-    }
-
     // Forward prism's parse warnings, formatted the way CRuby prints
     // them. The Rust prism wrapper does not expose a diagnostic's level,
     // so `prism_warning_level` recovers it from the message; a message
@@ -641,7 +615,7 @@ fn try_prism_inner(
             false,
         )
     });
-    let warnings: Vec<(String, bool)> = result
+    let mut warnings: Vec<ForwardedWarning> = result
         .warnings()
         .filter_map(|w| {
             let msg = String::from_utf8_lossy(w.message()).into_owned();
@@ -675,13 +649,50 @@ fn try_prism_inner(
             };
             let loc = location_to_loc(&w.location());
             let line = source_info.get_line(&loc);
-            Some((
-                format!("{}:{}: warning: {}", path_display, line, msg),
+            Some(ForwardedWarning {
+                line: format!("{}:{}: warning: {}", path_display, line, msg),
                 verbose_only,
-            ))
+                unused_local: msg
+                    .strip_prefix(UNUSED_LOCAL_WARNING)
+                    .map(|name| (w.location().start() as usize, name.to_string())),
+            })
         })
         .collect();
+    // prism 2.x reports the unused locals of a scope in another order
+    // than CRuby's prism does (#2192).
+    order_unused_locals_as_cruby(&tree.root(), &mut warnings);
+    let warnings = warnings.into_iter().map(|w| (w.line, w.verbose_only));
     let warnings: Vec<(String, bool)> = shebang_cr.into_iter().chain(warnings).collect();
+
+    // prism >= 2.0 validates the byte escapes of a regexp literal against
+    // its encoding and calls every sequence it rejects an "invalid
+    // multibyte escape" — including a valid character spelled with mixed
+    // escapes (`/\xE3\201\202/`) and a truncated one, which CRuby 4.0
+    // (prism 1.x) accepts or calls "too short escaped multibyte
+    // character". `rb_reg_preprocess`, which monoruby ports as
+    // `reg_preprocess` and runs where the literal is compiled, is the
+    // authority: prism's diagnostic stands only when it agrees.
+    if let Some(diag) = result
+        .errors()
+        .find(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
+    {
+        // CRuby prints a parse's warnings before it raises the parse's
+        // error: they are left for whoever reports the error.
+        super::stash_error_warnings(warnings);
+        let loc = location_to_loc(&diag.location());
+        // CRuby embeds the location in the SyntaxError *message* itself
+        // ("file:line: syntax error, ..."), and callers regex on it.
+        let line = source_info.get_line(&loc);
+        let file = crate::globals::display_path(&source_info);
+        return Err(MonorubyErr::parse(crate::ast::ParseErr {
+            kind: crate::ast::ParseErrKind::SyntaxError(format!(
+                "{file}:{line}: prism: {}",
+                String::from_utf8_lossy(diag.message())
+            )),
+            loc,
+            source_info,
+        }));
+    }
 
     // `data_loc` spans from the `__END__` marker to EOF; `DATA` content
     // starts after the marker's line terminator (or at EOF when the file
@@ -724,8 +735,16 @@ fn try_prism_inner(
     // `SyntaxError` is the correct Ruby class and — being `rescue`-
     // able — a single unsupported construct only fails its own
     // example instead of aborting the whole process.
-    let body = lowerer.lower_top(&root)?;
     let mut warnings = warnings;
+    let body = match lowerer.lower_top(&root) {
+        Ok(body) => body,
+        Err(err) => {
+            // As for prism's own errors above.
+            warnings.append(&mut lowerer.warnings);
+            super::stash_error_warnings(warnings);
+            return Err(err);
+        }
+    };
     warnings.append(&mut lowerer.warnings);
 
     Ok(ParseResult {
@@ -5728,7 +5747,7 @@ fn prism_warning_level(msg: &str) -> Option<PrismWarningLevel> {
         // prism decides where it applies (not at the top level of an
         // eval or of `-e`) and skips `_`-prefixed names, as CRuby's own
         // check does.
-        _ if msg.starts_with("assigned but unused variable - ") => Verbose,
+        _ if msg.starts_with(UNUSED_LOCAL_WARNING) => Verbose,
         // A statement whose value nothing uses — "a variable", "a
         // literal", "==", "self", "defined?" … prism leaves out the last
         // statement of an eval, which is the eval's value.
@@ -5784,6 +5803,457 @@ impl<'pr> prism::Visit<'pr> for InterpolatedRegexpConditions {
         self.offsets.insert(node.location().start() as usize);
         prism::visit_interpolated_match_last_line_node(self, node);
     }
+}
+
+/// What prism says of a local that is written and never read; the
+/// name follows.
+const UNUSED_LOCAL_WARNING: &str = "assigned but unused variable - ";
+
+/// A warning of prism's on its way to `ParseResult::warnings`.
+struct ForwardedWarning {
+    /// The line CRuby prints.
+    line: String,
+    verbose_only: bool,
+    /// For [`UNUSED_LOCAL_WARNING`]: where the local is first written,
+    /// and its name.
+    unused_local: Option<(usize, String)>,
+}
+
+///
+/// Put the "assigned but unused variable" warnings of each scope in the
+/// order CRuby 4.0 prints them (#2192).
+///
+/// prism reports them as a scope closes, walking the scope's table of
+/// locals slot by slot (`pm_locals_order`). The table is a list in the
+/// order the locals were first written while it is small and a hash
+/// table keyed by the name's constant id once it grows, so the order is
+/// an artifact of that table — and the table differs between the prism
+/// CRuby 4.0 bundles (1.8) and the one linked here (2.x): 1.8 switches
+/// to hashing at a capacity of 16 where 2.x does at 8, and 2.x hands a
+/// closed scope's table, capacity included, to the next scope opened.
+/// A method with three unused locals is reported in source order by
+/// CRuby and in hash order by prism 2.x.
+///
+/// The warnings of one scope are consecutive in prism's list, so each
+/// run of them is put in the order [`cruby_locals_order`] rebuilds from
+/// the scope's locals. A run this cannot place (a scope or a name it
+/// does not find) stays as prism gave it.
+///
+fn order_unused_locals_as_cruby(root: &prism::Node<'_>, warnings: &mut [ForwardedWarning]) {
+    use prism::Visit;
+    // Almost every source: no two such warnings in a row, nothing to do.
+    if !warnings
+        .windows(2)
+        .any(|w| w[0].unused_local.is_some() && w[1].unused_local.is_some())
+    {
+        return;
+    }
+    let mut scopes = LocalScopes::default();
+    scopes.visit(root);
+    let scope_of = |w: &ForwardedWarning| {
+        w.unused_local
+            .as_ref()
+            .and_then(|(offset, _)| scopes.innermost(*offset))
+    };
+    let mut start = 0;
+    while start < warnings.len() {
+        let Some(scope) = scope_of(&warnings[start]) else {
+            start += 1;
+            continue;
+        };
+        let mut end = start + 1;
+        while end < warnings.len() && scope_of(&warnings[end]) == Some(scope) {
+            end += 1;
+        }
+        if end - start > 1 {
+            let order = scopes.scopes[scope].cruby_order();
+            let rank = |w: &ForwardedWarning| {
+                let (_, name) = w.unused_local.as_ref()?;
+                order.iter().position(|local| local == name)
+            };
+            let run = &mut warnings[start..end];
+            if run.iter().all(|w| rank(w).is_some()) {
+                run.sort_by_key(rank);
+            }
+        }
+        start = end;
+    }
+}
+
+/// A node that opens a scope of locals, and the part of the source
+/// whose assignments make locals of that scope: the node without what
+/// the enclosing scope evaluates (a `def`'s receiver, a class's path
+/// and superclass, the object of `class <<`).
+struct LocalScope<'pr> {
+    start: usize,
+    end: usize,
+    /// The enclosing scope, as an index into [`LocalScopes::scopes`].
+    parent: Option<usize>,
+    node: prism::Node<'pr>,
+}
+
+/// Every scope of a source, in the order they open.
+#[derive(Default)]
+struct LocalScopes<'pr> {
+    scopes: Vec<LocalScope<'pr>>,
+    /// The scope the visit is in.
+    current: Option<usize>,
+}
+
+impl<'pr> LocalScopes<'pr> {
+    /// Record the scope `node` opens at `start` and visit what is
+    /// inside it with `walk`.
+    fn scope(&mut self, start: u32, node: prism::Node<'pr>, walk: impl FnOnce(&mut Self)) {
+        let parent = self.current;
+        self.current = Some(self.scopes.len());
+        self.scopes.push(LocalScope {
+            start: start as usize,
+            end: node.location().end() as usize,
+            parent,
+            node,
+        });
+        walk(self);
+        self.current = parent;
+    }
+
+    fn visit_opt(&mut self, node: Option<prism::Node<'pr>>) {
+        use prism::Visit;
+        if let Some(node) = node {
+            self.visit(&node);
+        }
+    }
+
+    /// The index of the innermost scope around `offset`.
+    fn innermost(&self, offset: usize) -> Option<usize> {
+        // The last scope opened before `offset` is the innermost one
+        // around it, or is inside that one.
+        let opened = self.scopes.partition_point(|s| s.start <= offset);
+        let mut scope = opened.checked_sub(1);
+        while let Some(i) = scope
+            && self.scopes[i].end <= offset
+        {
+            scope = self.scopes[i].parent;
+        }
+        scope
+    }
+}
+
+impl<'pr> prism::Visit<'pr> for LocalScopes<'pr> {
+    fn visit_program_node(&mut self, node: &prism::ProgramNode<'pr>) {
+        self.scope(node.location().start(), node.as_node(), |this| {
+            prism::visit_program_node(this, node)
+        });
+    }
+
+    // What a scope leaves to the enclosing one is visited as part of
+    // the enclosing one, before the scope opens.
+    fn visit_def_node(&mut self, node: &prism::DefNode<'pr>) {
+        self.visit_opt(node.receiver());
+        self.scope(node.name_loc().end(), node.as_node(), |this| {
+            if let Some(params) = node.parameters() {
+                this.visit_parameters_node(&params);
+            }
+            this.visit_opt(node.body());
+        });
+    }
+
+    fn visit_class_node(&mut self, node: &prism::ClassNode<'pr>) {
+        self.visit(&node.constant_path());
+        self.visit_opt(node.superclass());
+        let head = node.superclass().unwrap_or_else(|| node.constant_path());
+        self.scope(head.location().end(), node.as_node(), |this| {
+            this.visit_opt(node.body())
+        });
+    }
+
+    fn visit_module_node(&mut self, node: &prism::ModuleNode<'pr>) {
+        self.visit(&node.constant_path());
+        let start = node.constant_path().location().end();
+        self.scope(start, node.as_node(), |this| this.visit_opt(node.body()));
+    }
+
+    fn visit_singleton_class_node(&mut self, node: &prism::SingletonClassNode<'pr>) {
+        self.visit(&node.expression());
+        let start = node.expression().location().end();
+        self.scope(start, node.as_node(), |this| this.visit_opt(node.body()));
+    }
+
+    fn visit_block_node(&mut self, node: &prism::BlockNode<'pr>) {
+        self.scope(node.location().start(), node.as_node(), |this| {
+            prism::visit_block_node(this, node)
+        });
+    }
+
+    fn visit_lambda_node(&mut self, node: &prism::LambdaNode<'pr>) {
+        self.scope(node.location().start(), node.as_node(), |this| {
+            prism::visit_lambda_node(this, node)
+        });
+    }
+}
+
+impl<'pr> LocalScope<'pr> {
+    /// The names of the scope's locals in the order CRuby's prism walks
+    /// them when the scope closes. Empty for a scope it cannot rebuild.
+    fn cruby_order(&self) -> Vec<String> {
+        use prism::Visit;
+        let mut writes = ScopeWrites::default();
+        let node = &self.node;
+        let locals = if let Some(n) = node.as_program_node() {
+            writes.visit_statements_node(&n.statements());
+            n.locals()
+        } else if let Some(n) = node.as_def_node() {
+            if let Some(params) = n.parameters() {
+                writes.visit_parameters_node(&params);
+            }
+            writes.visit_opt(n.body());
+            n.locals()
+        } else if let Some(n) = node.as_class_node() {
+            writes.visit_opt(n.body());
+            n.locals()
+        } else if let Some(n) = node.as_module_node() {
+            writes.visit_opt(n.body());
+            n.locals()
+        } else if let Some(n) = node.as_singleton_class_node() {
+            writes.visit_opt(n.body());
+            n.locals()
+        } else if let Some(n) = node.as_block_node() {
+            writes.visit_opt(n.parameters());
+            writes.visit_opt(n.body());
+            n.locals()
+        } else if let Some(n) = node.as_lambda_node() {
+            writes.visit_opt(n.parameters());
+            writes.visit_opt(n.body());
+            n.locals()
+        } else {
+            return vec![];
+        };
+        // `ConstantId` shows its number only through `Debug`.
+        let Some(ids) = locals
+            .iter()
+            .map(|id| format!("{id:?}").parse::<u32>().ok())
+            .collect::<Option<Vec<u32>>>()
+        else {
+            return vec![];
+        };
+        let names: Vec<&[u8]> = locals.iter().map(|id| id.as_slice()).collect();
+        let written_again = names
+            .last()
+            .is_some_and(|last| writes.written_after_first(last));
+        cruby_locals_order(&ids, written_again)
+            .into_iter()
+            .map(|i| String::from_utf8_lossy(names[i]).into_owned())
+            .collect()
+    }
+}
+
+///
+/// The order in which prism 1.8 (CRuby 4.0) walks a scope's table of
+/// locals, as indices into `ids`: the constant ids of the scope's locals
+/// in the order they were added. A port of its `pm_locals_write` /
+/// `pm_locals_resize` / `pm_locals_order`.
+///
+/// The table doubles when a write finds it three quarters full: 4 slots,
+/// then 8 — both a plain list, walked in the order of addition — then 16
+/// and up, an open-addressed hash table walked slot by slot. Every write
+/// makes that check, a new local's or not, so whether the table grew a
+/// last time depends on whether anything was written after the last
+/// local was added (`written_again`): the second of the two writes a
+/// plain `name = value` makes is enough.
+///
+fn cruby_locals_order(ids: &[u32], written_again: bool) -> Vec<usize> {
+    const HASH_THRESHOLD: usize = 9;
+    fn hash(mut name: u32) -> usize {
+        name = ((name >> 16) ^ name).wrapping_mul(0x45d9f3b);
+        name = ((name >> 16) ^ name).wrapping_mul(0x45d9f3b);
+        ((name >> 16) ^ name) as usize
+    }
+    // Put local `i` in its slot of a hash table.
+    let insert = |table: &mut [Option<usize>], i: usize| {
+        let mask = table.len() - 1;
+        let mut slot = hash(ids[i]);
+        while table[slot & mask].is_some() {
+            slot = slot.wrapping_add(1);
+        }
+        table[slot & mask] = Some(i);
+    };
+    let grow = |table: &mut Vec<Option<usize>>| {
+        let capacity = if table.is_empty() { 4 } else { table.len() * 2 };
+        let mut next = vec![None; capacity];
+        if capacity < HASH_THRESHOLD {
+            next[..table.len()].copy_from_slice(table);
+        } else {
+            for &i in table.iter().flatten() {
+                insert(&mut next, i);
+            }
+        }
+        *table = next;
+    };
+    let mut table: Vec<Option<usize>> = vec![];
+    for i in 0..ids.len() {
+        // `i` is the number of locals so far.
+        if i >= table.len() / 4 * 3 {
+            grow(&mut table);
+        }
+        if table.len() < HASH_THRESHOLD {
+            table[i] = Some(i);
+        } else {
+            insert(&mut table, i);
+        }
+    }
+    if written_again && ids.len() >= table.len() / 4 * 3 {
+        grow(&mut table);
+    }
+    table.into_iter().flatten().collect()
+}
+
+/// The writes to a scope's own locals, for [`cruby_locals_order`]'s
+/// `written_again`.
+#[derive(Default)]
+struct ScopeWrites<'pr> {
+    /// The scope's parameters (and block-local variables): never added
+    /// by an assignment.
+    params: std::collections::HashSet<&'pr [u8]>,
+    /// Where each local is first written.
+    first: std::collections::HashMap<&'pr [u8], usize>,
+    /// The plain assignments `name = value`: the name, where it starts
+    /// and where the value ends.
+    assignments: Vec<(&'pr [u8], usize, usize)>,
+}
+
+impl<'pr> ScopeWrites<'pr> {
+    fn visit_opt(&mut self, node: Option<prism::Node<'pr>>) {
+        use prism::Visit;
+        if let Some(node) = node {
+            self.visit(&node);
+        }
+    }
+
+    fn write(&mut self, name: prism::ConstantId<'pr>, depth: u32, start: u32) {
+        if depth == 0 {
+            let start = start as usize;
+            let first = self.first.entry(name.as_slice()).or_insert(start);
+            *first = start.min(*first);
+        }
+    }
+
+    /// Whether prism writes its table of locals once more after it has
+    /// added `last`, the scope's last local. Only an assignment that
+    /// adds its local does: prism adds the name before it parses the
+    /// value, so that the value can read it, and writes it again once
+    /// the assignment is complete. Such an assignment still open where
+    /// `last` is added — its own, or one whose value adds `last` — is
+    /// that write. An assignment to a local that exists is not one.
+    fn written_after_first(&self, last: &[u8]) -> bool {
+        let Some(&added) = self.first.get(last) else {
+            return false;
+        };
+        self.assignments.iter().any(|&(name, start, end)| {
+            !self.params.contains(name) && self.first.get(name) == Some(&start) && end > added
+        })
+    }
+}
+
+impl<'pr> prism::Visit<'pr> for ScopeWrites<'pr> {
+    fn visit_local_variable_write_node(&mut self, node: &prism::LocalVariableWriteNode<'pr>) {
+        let start = node.name_loc().start();
+        self.write(node.name(), node.depth(), start);
+        if node.depth() == 0 {
+            self.assignments.push((
+                node.name().as_slice(),
+                start as usize,
+                node.location().end() as usize,
+            ));
+        }
+        prism::visit_local_variable_write_node(self, node);
+    }
+
+    fn visit_local_variable_target_node(&mut self, node: &prism::LocalVariableTargetNode<'pr>) {
+        self.write(node.name(), node.depth(), node.location().start());
+    }
+
+    fn visit_local_variable_operator_write_node(
+        &mut self,
+        node: &prism::LocalVariableOperatorWriteNode<'pr>,
+    ) {
+        self.write(node.name(), node.depth(), node.name_loc().start());
+        prism::visit_local_variable_operator_write_node(self, node);
+    }
+
+    fn visit_local_variable_and_write_node(
+        &mut self,
+        node: &prism::LocalVariableAndWriteNode<'pr>,
+    ) {
+        self.write(node.name(), node.depth(), node.name_loc().start());
+        prism::visit_local_variable_and_write_node(self, node);
+    }
+
+    fn visit_local_variable_or_write_node(&mut self, node: &prism::LocalVariableOrWriteNode<'pr>) {
+        self.write(node.name(), node.depth(), node.name_loc().start());
+        prism::visit_local_variable_or_write_node(self, node);
+    }
+
+    fn visit_required_parameter_node(&mut self, node: &prism::RequiredParameterNode<'pr>) {
+        self.params.insert(node.name().as_slice());
+    }
+
+    fn visit_optional_parameter_node(&mut self, node: &prism::OptionalParameterNode<'pr>) {
+        self.params.insert(node.name().as_slice());
+        prism::visit_optional_parameter_node(self, node);
+    }
+
+    fn visit_rest_parameter_node(&mut self, node: &prism::RestParameterNode<'pr>) {
+        self.params.extend(node.name().map(|name| name.as_slice()));
+    }
+
+    fn visit_required_keyword_parameter_node(
+        &mut self,
+        node: &prism::RequiredKeywordParameterNode<'pr>,
+    ) {
+        self.params.insert(node.name().as_slice());
+    }
+
+    fn visit_optional_keyword_parameter_node(
+        &mut self,
+        node: &prism::OptionalKeywordParameterNode<'pr>,
+    ) {
+        self.params.insert(node.name().as_slice());
+        prism::visit_optional_keyword_parameter_node(self, node);
+    }
+
+    fn visit_keyword_rest_parameter_node(&mut self, node: &prism::KeywordRestParameterNode<'pr>) {
+        self.params.extend(node.name().map(|name| name.as_slice()));
+    }
+
+    fn visit_block_parameter_node(&mut self, node: &prism::BlockParameterNode<'pr>) {
+        self.params.extend(node.name().map(|name| name.as_slice()));
+    }
+
+    fn visit_block_local_variable_node(&mut self, node: &prism::BlockLocalVariableNode<'pr>) {
+        self.params.insert(node.name().as_slice());
+    }
+
+    // A scope inside this one: only what it leaves to this scope to
+    // evaluate can write this scope's locals.
+    fn visit_def_node(&mut self, node: &prism::DefNode<'pr>) {
+        self.visit_opt(node.receiver());
+    }
+
+    fn visit_class_node(&mut self, node: &prism::ClassNode<'pr>) {
+        self.visit(&node.constant_path());
+        self.visit_opt(node.superclass());
+    }
+
+    fn visit_module_node(&mut self, node: &prism::ModuleNode<'pr>) {
+        self.visit(&node.constant_path());
+    }
+
+    fn visit_singleton_class_node(&mut self, node: &prism::SingletonClassNode<'pr>) {
+        self.visit(&node.expression());
+    }
+
+    fn visit_block_node(&mut self, _: &prism::BlockNode<'pr>) {}
+
+    fn visit_lambda_node(&mut self, _: &prism::LambdaNode<'pr>) {}
 }
 
 /// Whether `msg` is prism's duplicated-key warning for a Float zero key
