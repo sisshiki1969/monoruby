@@ -2311,6 +2311,8 @@ pub(super) struct WideLines {
     /// never the last byte of a little-endian one).
     cr: Vec<u8>,
     newline_sep: bool,
+    /// Paragraph mode: `sep` is two line feeds.
+    paragraph: bool,
     unit: usize,
 }
 
@@ -2392,7 +2394,22 @@ fn line_split_of(
     };
     // What is left is 7-bit: the default separator, paragraph mode, or a
     // separator the stream's own encoding has no character for.
-    let enc = |b: &[u8]| transcode(b, E::UTF8);
+    // (Widened by hand: `IO#each_line` comes here once a line, and a
+    // transcoder set up for one "\n" cost ~800 instructions each time.)
+    let enc = |b: &[u8]| {
+        if !b.is_ascii() {
+            return transcode(b, E::UTF8);
+        }
+        let at = match ext {
+            E::Utf16Le | E::Utf32Le => 0,
+            _ => unit - 1,
+        };
+        let mut wide = vec![0; b.len() * unit];
+        for (i, &c) in b.iter().enumerate() {
+            wide[i * unit + at] = c;
+        }
+        Some(wide)
+    };
     let Some(newline) = enc(b"\n") else {
         return Ok(None);
     };
@@ -2416,6 +2433,7 @@ fn line_split_of(
     };
     Ok(Some(WideLines {
         newline_sep: sep_ext.as_deref() == Some(newline.as_slice()),
+        paragraph: sep.as_deref() == Some(b"".as_slice()),
         sep: sep_ext,
         cr,
         unit,
@@ -2434,7 +2452,7 @@ pub(super) fn getline_with(
     match wide {
         Some(w) => io
             .as_io_inner_mut()
-            .getline_units(w.sep.as_deref(), limit, w.unit),
+            .getline_units(w.sep.as_deref(), limit, w.unit, w.paragraph),
         None => io.as_io_inner_mut().getline(sep, limit, complete_utf8),
     }
 }

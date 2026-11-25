@@ -82,6 +82,75 @@ res
     );
 }
 
+/// The line is taken off the buffer in bulk, up to a byte of the
+/// separator at a time: that byte elsewhere in a character (U+010A,
+/// U+0A00, a surrogate), at the wrong offset of a code unit, in a
+/// separator of several characters, with bytes pushed back, and in a
+/// file cut inside a code unit. Paragraph mode on a converting stream
+/// skips line feeds *characters* around a paragraph.
+#[test]
+fn separator_bytes_inside_other_characters() {
+    run_test_once(
+        r####"
+path = "/tmp/mr_wide_needle_#{$$}.txt"
+res = []
+%w[UTF-16LE UTF-16BE UTF-32LE UTF-32BE].each do |e|
+  text = "aĊb਀cਊd\neਊ\n\nf\u{1040A}g\nh\u0000i\nj\r\nk".encode(e)
+  File.binwrite(path, text)
+  File.open(path, "rb:#{e}") do |f|
+    res << f.readlines.map { |l| l.unpack("C*") }
+    f.rewind
+    res << f.readlines(chomp: true).map(&:bytesize)
+    f.rewind
+    res << f.readlines("").map(&:bytesize)
+    f.rewind
+    res << f.readlines("ਊ".encode(e)).map(&:bytesize)
+    f.rewind
+    res << f.readlines("\n\n".encode(e)).map(&:bytesize)
+    f.rewind
+    res << f.readlines("\u0000".encode(e)).map(&:bytesize)
+    f.rewind
+    res << f.readlines("i\n".encode(e), chomp: true).map(&:bytesize)
+    f.rewind
+    res << f.readlines("\u{1040A}".encode(e)).map(&:bytesize)
+    f.rewind
+    f.ungetbyte(text.getbyte(0)); f.getbyte
+    b = f.getbyte; f.ungetbyte(b)
+    res << f.gets.bytesize << f.gets.bytesize << f.pos
+    f.rewind
+    res << f.each_line(7).map(&:bytesize)
+  end
+  File.open(path, "rb:#{e}:UTF-8") do |f|
+    res << f.readlines
+    f.rewind
+    res << f.readlines("ਊ")
+    f.rewind
+    res << f.gets << f.gets(chomp: true) << f.pos
+  end
+  File.binwrite(path, text.b[0, text.bytesize - 1])
+  res << File.readlines(path, mode: "rb:#{e}").map(&:bytesize)
+  File.binwrite(path, "ab\n".encode(e).b.chop)
+  res << File.readlines(path, mode: "rb:#{e}").map(&:bytesize)
+  File.binwrite(path, "\x41\x0A\x0A\x00\x00\x0A\x00\x0A\x0A\x00\x00\x00\x00\x00\x0A\x00x".b)
+  res << File.readlines(path, mode: "rb:#{e}").map(&:bytesize)
+  File.binwrite(path, "\n\na\nb\n\n\n\nc\n\nd\n\n\n".encode(e))
+  File.open(path, "rb:#{e}:UTF-8") do |f|
+    res << f.readlines("")
+    f.rewind
+    res << f.readlines("", chomp: true)
+    f.rewind
+    res << f.gets("") << f.gets << f.gets("") << f.gets("") << f.gets("")
+    f.rewind
+    res << f.gets("") << f.getc << f.gets("") << f.eof?
+  end
+  IO.popen(["cat", path], "rb:#{e}:UTF-8") { |f| res << f.readlines("") }
+end
+File.delete(path)
+res
+"####,
+    );
+}
+
 /// UTF-16BE, and a separator given in another encoding than the
 /// stream's (converted when the stream transcodes, refused when the
 /// two cannot be compared).

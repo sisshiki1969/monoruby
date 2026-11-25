@@ -225,6 +225,7 @@ fn script_syntax_error_reports() {
         b"# coding: euc-jp\nx = \"\xa4\xa2\"; \xa4\xa2 = )\n",
     );
     dir.write("r1.rb", REQUIRE_SYNTAX);
+    dir.write("nox.rb", "p 1\n");
     dir.write("ascii.rb", b"# coding: us-ascii\nx = \"\xe3\x81\x82\"\n");
     // Regexp literals: at the top level, behind a `require`, and in a
     // method body (which is compiled with the file on CRuby and when
@@ -253,6 +254,10 @@ fn script_syntax_error_reports() {
             "begin; eval('x = )'); rescue SyntaxError => e; p e.message, e.message.encoding; end",
         ],
         &["-w", "-e", "x = 1\ny = )"],
+        // `-x` on a script with no `#!ruby` line: the same kind of
+        // report, for a LoadError. A `-e` script is taken as it is.
+        &["-x", "nox.rb"],
+        &["-x", "-e", "p 1"],
     ] {
         compare("script", &dir.0, SYNTAX_CRUBY, SYNTAX_MONO, args, b"");
     }
@@ -263,6 +268,14 @@ fn script_syntax_error_reports() {
         SYNTAX_MONO,
         &[],
         b"x = [1,\n",
+    );
+    compare(
+        "stdin",
+        &dir.0,
+        SYNTAX_CRUBY,
+        SYNTAX_MONO,
+        &["-x"],
+        b"p 1\n",
     );
 
     // `-c`: nothing ran, so the report is the interpreter's

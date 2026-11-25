@@ -864,10 +864,13 @@ fn main() {
     };
 
     // `-x` / a non-ruby `#!` first line: strip the leading garbage.
-    let (code, shebang_cr) = match preprocess_shebang(code, opts.dash_x) {
+    // A `-e` script is taken as it is, `-x` or not.
+    let (code, shebang_cr) = match preprocess_shebang(code, opts.dash_x && opts.exec.is_empty()) {
         Ok(c) => c,
         Err(msg) => {
-            eprintln!("monoruby: {msg} (LoadError)");
+            // The script's own report, as for a source that does not
+            // parse: it is named, the interpreter is not.
+            eprintln!("{}: {msg} (LoadError)", path.display());
             std::process::exit(1);
         }
     };
