@@ -832,10 +832,7 @@ fn unasked_digest(k: Value, globals: &Globals) -> Option<usize> {
 /// a Float of the same value.
 #[inline(always)]
 fn unasked_key_eq(stored: &Option<Value>, k: Value) -> bool {
-    match stored {
-        Some(sk) => sk.id() == k.id() || numeric_key_eq(*sk, k),
-        None => false,
-    }
+    stored.is_some_and(|sk| sk.id() == k.id() || numeric_key_eq(sk, k))
 }
 
 /// Two heap numbers of one value. Out of line: an object that is a key
@@ -1055,14 +1052,15 @@ impl<'a> HashRef<'a> {
                 }
                 ContentRef::Map(m) => m.each_filed_under(
                     digest_of(hash_value),
+                    // A key is `None` only in an entry a traversal has
+                    // tombstoned, and those are out of the index table.
                     |i, ek, ev| {
-                        if let Some(ek) = ek {
-                            cands.push((i, *ek, *ev));
-                        }
+                        let Some(ek) = ek else { return };
+                        cands.push((i, *ek, *ev));
                     },
                     vm,
                     globals,
-                )?,
+                ),
                 ContentRef::Ident(_) => {
                     return Ok(self.pos_ident(k, hash_value, vm, globals));
                 }
@@ -1126,7 +1124,7 @@ impl<'a> HashRef<'a> {
             // that has changed its answer since.
             ContentRef::Map(m) => {
                 let mut found = None;
-                let _ = m.each_filed_under(
+                m.each_filed_under(
                     digest_of(hash_value),
                     |i, ek, ev| {
                         if ek.is_some_and(|ek| ek.id() == k.id()) {
@@ -1145,19 +1143,17 @@ impl<'a> HashRef<'a> {
         }
     }
 
-    /// The position of the pair whose key is `eql?` to `k`, as
-    /// [`Self::get`] finds it. No Ruby code has run since the position
-    /// was read, so the caller may use it at once.
-    fn pos(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<usize>> {
+    /// The position of the pair whose key is `eql?` to `k`, for a key
+    /// that is settled without a call: any key of a Hash that compares by
+    /// identity, and otherwise one that is not [`is_observed_key`].
+    fn pos_unasked(
+        &self,
+        k: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<usize>> {
         Ok(match self.content() {
-            ContentRef::Inline([]) => None,
-            ContentRef::Inline(_) => match self.inline_pos_noobs(k) {
-                Some(i) => Some(i),
-                None if !self.is_ident_inline() && is_observed_key(k, globals) => {
-                    self.pos_observed(k, vm, globals)?.map(|(i, _)| i)
-                }
-                None => None,
-            },
+            ContentRef::Inline(_) => self.inline_pos_noobs(k),
             ContentRef::Map(m) => {
                 if k.is_packed_value() {
                     let (hash, zero) = packed_digest_zero(m.hasher(), k);
@@ -1171,10 +1167,11 @@ impl<'a> HashRef<'a> {
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
                     m.get_index_of_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
-                } else if let Some(hash) = unasked_digest(k, globals) {
-                    m.get_index_of_prehashed_with(hash, |ek| unasked_key_eq(ek, k), vm, globals)?
                 } else {
-                    self.pos_observed(k, vm, globals)?.map(|(i, _)| i)
+                    // What is left of the keys that are not asked.
+                    unasked_digest(k, globals).map_or(Ok(None), |hash| {
+                        m.get_index_of_prehashed_with(hash, |ek| unasked_key_eq(ek, k), vm, globals)
+                    })?
                 }
             }
             ContentRef::Ident(m) => m.get_index_of(&IdentKey(k), vm, globals)?,
@@ -2200,7 +2197,7 @@ impl<'a> HashRefMut<'a> {
             let hash_value = k.hash_value(vm, globals)?;
             self.as_ref().pos_with_hash(k, hash_value, vm, globals)?
         } else {
-            match self.as_ref().pos(k, vm, globals)? {
+            match self.as_ref().pos_unasked(k, vm, globals)? {
                 Some(i) => self.as_ref().entry_at(i).map(|(_, v)| (i, v)),
                 None => None,
             }

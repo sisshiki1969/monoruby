@@ -1799,8 +1799,7 @@ fn candidates_under_a_digest_and_removal_by_predicate() {
         assert_eq!(map.len() as u64, n + 3);
 
         let mut seen = vec![];
-        map.each_filed_under(77 << 20, |i, k, v| seen.push((i, k.0, *v)), &mut e, &mut g)
-            .unwrap();
+        map.each_filed_under(77 << 20, |i, k, v| seen.push((i, k.0, *v)), &mut e, &mut g);
         seen.sort();
         let base = n as usize;
         assert_eq!(
@@ -1808,8 +1807,7 @@ fn candidates_under_a_digest_and_removal_by_predicate() {
             vec![(base, 100, 100), (base + 1, 101, 101), (base + 2, 102, 102)]
         );
         let mut none = vec![];
-        map.each_filed_under(12345 << 20, |i, _, _| none.push(i), &mut e, &mut g)
-            .unwrap();
+        map.each_filed_under(12345 << 20, |i, _, _| none.push(i), &mut e, &mut g);
         assert!(none.is_empty());
 
         assert_eq!(

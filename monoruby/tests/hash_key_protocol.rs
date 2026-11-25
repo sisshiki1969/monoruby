@@ -324,6 +324,125 @@ fn array_key_elements_resize_the_array() {
     );
 }
 
+// Paths of the probe a plain test does not reach: an `eql?` that moves
+// the pair it accepts, a `#hash` that leaves tombstones behind before a
+// removal, keys that are not asked removed while a traversal is open, and
+// heap numbers probed among keys of every other kind.
+#[test]
+fn hash_key_methods_move_and_delete_pairs() {
+    check_once(
+        r##"
+        class A
+          def hash = 1
+        end
+        # A key whose methods run what it is handed.
+        class B
+          attr_accessor :on_hash, :on_eql
+          def hash = (on_hash&.call; 1)
+          def eql?(o) = (on_eql&.call(o); true)
+        end
+        res = []
+        # `eql?` moves the key it accepts: an earlier pair goes away.
+        [0, 12].each do |pre|
+          mk = -> do
+            h = {x: 0}; pre.times { |i| h["k#{i}"] = i }
+            a = A.new; h[a] = 1
+            b = B.new; b.on_eql = ->(_) { h.delete(:x) }
+            [h, a, b]
+          end
+          h, a, b = mk.(); res << [h[b], h.size]
+          h, a, b = mk.(); h[b] = 5; res << [h[a], h.size, h.key?(:x)]
+          h, a, b = mk.(); res << [h.delete(b), h.size, h.key?(a)]
+          h, a, b = mk.(); res << [h.key?(b), h.fetch(b, :none), h.size]
+        end
+        # `#hash` walks the Hash and deletes from it before the removal goes on.
+        [0, 12].each do |pre|
+          h = {x: 0, y: 1}; pre.times { |i| h["k#{i}"] = i }
+          a = A.new; h[a] = 1
+          b = B.new; b.on_hash = -> { h.each { |k, _| h.delete(k) if k == :x } }
+          res << [h.delete(b), h.size, h.key?(:x), h.key?(a), h.keys.first]
+          h[:z] = 2
+          res << [h.size, h.keys.last]
+        end
+        # Keys that are not asked, removed while a traversal is open and after.
+        big = 2**70
+        o = Object.new
+        h = {0.0 => :zero, big => :big, 1.5e300 => :flo, o => :obj, "s" => :str, :sym => :sym, 1 => :int}
+        12.times { |i| h["k#{i}"] = i }
+        res << h.delete(0.0)
+        res << h.delete(-0.0)
+        h[0.0] = :zero
+        n = 0
+        h.each do |k, _|
+          next unless (n += 1) == 1
+          res << [h.delete(2**70), h.delete(1.5e300), h.delete(o), h.delete("s"), h.delete(:sym), h.delete(1), h.delete(0.0)]
+          res << [h.delete(2**71), h.delete(2.5e300), h.delete(Object.new), h.delete("t"), h.delete(:none), h.delete(2), h.delete(-0.0)]
+        end
+        res << h.size
+        # Heap numbers looked up among keys of every other kind.
+        h = {}
+        3000.times { |i| h[i] = i; h[i + 0.5] = i; h["s#{i}"] = i; h[:"y#{i}"] = i }
+        h[2**70] = :big; h[1.0e300] = :flo
+        res << (0...300).count { |i| h.key?(2**70 + i) } << (0...300).count { |i| h.key?(1.0e300 + i * 1.0e290) }
+        res << h[2**70] << h[1.0e300] << (0...300).count { |i| h.key?(Object.new) }
+        res
+        "##,
+    );
+}
+
+// A key's `#hash` that makes the Hash compare by identity (CRuby is left
+// with the key filed under its eql?-hash in an identity table once the
+// Hash is past 8 pairs), and an `eql?` that deletes every key it accepts
+// (CRuby reads the dead entries): monoruby files, finds and removes the
+// key by what the Hash is by then, and gives up on a key that keeps
+// disappearing.
+#[test]
+fn hash_key_methods_switch_the_hash_to_identity() {
+    let v = run_test_no_result_check(
+        r##"
+        class A
+          def hash = 1
+        end
+        class B
+          attr_accessor :on_hash, :on_eql
+          def hash = (on_hash&.call; 1)
+          def eql?(o) = (on_eql&.call(o); true)
+        end
+        res = []
+        once = ->(&blk) { done = false; -> { next if done; done = true; blk.call } }
+        [0, 12].each do |pre|
+          mk = -> { h = {x: 0}; pre.times { |i| h["k#{i}"] = i }; h }
+          # `#hash` makes the Hash compare by identity: the key is then filed,
+          # found and removed as the object it is.
+          h = mk.(); b = B.new; b.on_hash = once.() { h.compare_by_identity }
+          h[b] = 2
+          res << (h.compare_by_identity? && h.size == pre + 2 && h[b] == 2 && h.keys.last.equal?(b))
+          h = mk.(); b = B.new; b.on_hash = once.() { h.compare_by_identity }
+          res << (h[b] == nil && h.size == pre + 1)
+          # ... and stores itself there before the store that asked goes on.
+          h = mk.(); b = B.new; b.on_hash = once.() { h.compare_by_identity; h[b] = 0 }
+          h[b] = 5
+          res << (h[b] == 5 && h.size == pre + 2)
+          h = mk.(); b = B.new; b.on_hash = once.() { h.compare_by_identity; h[b] = 9 }
+          res << (h.delete(b) == 9 && h.size == pre + 1 && !h.key?(b))
+          # ... having deleted during a traversal of its own as well.
+          h = mk.(); h[:y] = 1; b = B.new
+          b.on_hash = once.() { h.compare_by_identity; h[b] = 9; h.each { |k, _| h.delete(k) if k == :x } }
+          res << (h.delete(b) == 9 && h.size == pre + 1 && !h.key?(b) && !h.key?(:x) && h.key?(:y))
+          h[:z] = 3
+          res << (h.size == pre + 2 && h.keys.last == :z)
+        end
+        # An `eql?` that accepts every key it is shown and deletes it: the lookup
+        # gives up, with nothing left to find.
+        h = {}; as = Array.new(3) { A.new }; as.each_with_index { |a, i| h[a] = i }
+        b = B.new; b.on_eql = ->(o) { h.delete(o) }
+        res << (h[b] == nil && h.size == 0)
+        res.all?
+        "##,
+    );
+    assert!(v.as_bool());
+}
+
 // The crash of #2199 as reported, and a store or a removal while an
 // external enumerator holds a traversal open.
 #[test]

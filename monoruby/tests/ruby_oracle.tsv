@@ -3671,6 +3671,7 @@
 92d03f760ad8afc09f2a68a94487b012	["Fri Dec", "Fri Dec", " Dec", " Dec", " Dec", " Dec", nil, 2, [" Dec"], "Fri Dec", 7, "", " 12 1975 14:39", "IndexError", " 12", "Fri Dec ", " 1975 14:39", "12", 7, " 12", "Fri Dec ", " 1975 14:39", 10, " ", " ", " ", 1, 5, "19", "75", ["19", "75"], "1975 ", 3, 0, 3, 3, "tes", nil, ["t", "e", nil, "s"], ["tes", "s", "s", nil], 0]	require "strscan"\n        r = []\n        s = StringScanner.new("Fri Dec
 92d55f7191fed22f0d1af9face39145d	[:a, :b, :block, :x, :z]	a = 1\n        b = 2\n        def f(x, &block)\n          z = nil\n        
 92e0d6751ffe55fbb725230f9af7de44	"UTF-8"	"abcあ".reverse.encoding.to_s
+92e833dc1776d0819a233ea0bb010527	"[[1, 1], [5, 1, false], [1, 0, false], [true, 1, 1], [1, 13], [5, 13, false], [1, 12, false], [true, 1, 13], [1, 1, false, false, :y], [2, :z], [1, 13, false, false, :y], [14, :z], :zero, nil, [:big, :flo, :obj, :str, :sym, :int, :zero], [nil, nil, nil, nil, nil, nil, nil], 12, 1, 1, :big, :flo, 0]"	class A\n          def hash = 1\n        end\n        # A key whose method
 92ec5f7b3b36f4e9ba10f989be89cdcb	[9, 9, 42, 2, ["String", "String"]]	class MyStr < String; end\n        h = { "alpha" => 1 }\n        s = MySt
 930d79ab56d8f793cc4caede2beafe11	0	ObjectSpace.define_finalizer(Object.new){ |id| id }[0]
 93116a0d3b8d41fed6f23d459fd4adc8	false	(0x8000_0000_0000_0000 + 39 + 0.0) >= (0x8000_0000_0000_0000 + 39)

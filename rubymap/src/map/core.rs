@@ -717,14 +717,14 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         mut f: impl FnMut(usize, &K, &V),
         e: &mut E,
         g: &mut G,
-    ) -> Result<(), R> {
+    ) {
         if self.linear {
             for (i, entry) in self.entries.iter().enumerate() {
                 if entry.hash == hash {
                     f(i, &entry.key, &entry.value);
                 }
             }
-            return Ok(());
+            return;
         }
         let entries = &self.entries;
         let visit = |&i: &usize, _: &mut E, _: &mut G| {
@@ -734,8 +734,8 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
             }
             Ok(false)
         };
-        self.indices.find(hash.get(), visit, e, g)?;
-        Ok(())
+        // `visit` never fails, so neither does the probe.
+        let _: Result<_, R> = self.indices.find(hash.get(), visit, e, g);
     }
 
     /// Same as `insert_full`, except it also replaces the key

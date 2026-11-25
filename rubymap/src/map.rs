@@ -557,7 +557,7 @@ where
         f: impl FnMut(usize, &K, &V),
         e: &mut E,
         g: &mut G,
-    ) -> Result<(), R> {
+    ) {
         self.core.each_filed_under(HashValue(hash), f, e, g)
     }
 
