@@ -96,6 +96,7 @@ mod exception_api;
 mod exception_mesg_and_encodings;
 mod exit_before_regions_value;
 mod exit_handler_error_roots;
+mod exit_landing_join;
 mod exit_order;
 mod extend_special_singletons;
 mod far_branch_relaxation;

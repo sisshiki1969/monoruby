@@ -1994,6 +1994,22 @@ impl SlotState {
         }
     }
 
+    /// The no-return-path resume: a float local *entry* (this frame as
+    /// it entered the call) holds deferred to a spill home stays
+    /// deferred to it, whatever the callee's stores made of the parked
+    /// copy. Those stores wrote the home.
+    pub(in crate::codegen::jitgen) fn keep_deferred_homes(&mut self, entry: &SlotState) {
+        for slot in self.locals() {
+            if let LinkMode::F(fpr) = entry.mode(slot)
+                && fpr.0 >= crate::codegen::PHYS_FPR_POOL
+                && matches!(self.mode(slot), LinkMode::S(_) | LinkMode::Sf(_, _))
+            {
+                self.grow_fpr_to(fpr.0 + 1);
+                self.set_F(slot, fpr);
+            }
+        }
+    }
+
     /// Surrender every constant claim this frame holds, writing the
     /// values out (`Keep::Type`'s `C` arm).
     pub(in crate::codegen::jitgen) fn forget_constants(&mut self, ir: &mut AsmIr) {

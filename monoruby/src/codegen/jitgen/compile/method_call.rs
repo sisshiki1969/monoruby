@@ -3402,6 +3402,10 @@ impl<'a> JitContext<'a> {
         let mut return_context = frame.detach_return_context();
         let return_state = return_context.remove(&pos);
         self.merge_return_context(return_context);
+        // The exits that land above this frame go on up with them; the
+        // ones landing here were consumed when this frame resumed.
+        let exit_chains = frame.detach_exit_chains();
+        self.merge_exit_chains(exit_chains);
         // Capture before `frame.asm_info` is moved below.
         let spec_id = frame.asm_info.specialized_id;
         let frame_using_fpr = frame.call_site_using_fpr;

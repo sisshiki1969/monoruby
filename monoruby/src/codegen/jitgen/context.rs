@@ -720,6 +720,21 @@ pub(super) struct JitStackFrame {
     /// Contexts for returning from this frame.
     ///
     return_context: HashMap<usize, ReturnState>,
+    ///
+    /// The paths that leave this frame's subtree other than by a plain
+    /// return and land in a frame of the unit: a `break`, which lands
+    /// where the block was handed over, and a `return` out of a block,
+    /// which lands where its method was called. Keyed by the stack
+    /// position of the frame they land in; the value is the join of
+    /// those paths' chains up to and including that frame.
+    ///
+    /// The landing is the continuation of a call, the same code a plain
+    /// return of that call resumes, so these are edges of the same
+    /// merge: [`JitContext::build_return_segments`] joins them with the
+    /// return edges. They travel up one frame per finished callee, like
+    /// `return_context`.
+    ///
+    exit_chains: HashMap<usize, Vec<FrameRef>>,
 
     ///
     /// Machine stack offset for this frame. May be temporarily bumped
@@ -1003,6 +1018,7 @@ impl JitStackFrame {
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
+            exit_chains: HashMap::default(),
             stack_offset,
             base_stack_offset: stack_offset,
             window_bytes: 0,
@@ -1044,6 +1060,7 @@ impl JitStackFrame {
             branch_map: HashMap::default(),
             backedge_map: HashMap::default(),
             return_context: HashMap::default(),
+            exit_chains: HashMap::default(),
             stack_offset: self.stack_offset,
             base_stack_offset: self.base_stack_offset,
             window_bytes: self.window_bytes,
@@ -1076,6 +1093,10 @@ impl JitStackFrame {
 
     pub(super) fn detach_return_context(&mut self) -> HashMap<usize, ReturnState> {
         std::mem::take(&mut self.return_context)
+    }
+
+    pub(super) fn detach_exit_chains(&mut self) -> HashMap<usize, Vec<FrameRef>> {
+        std::mem::take(&mut self.exit_chains)
     }
 
     // handling labels
@@ -1442,6 +1463,19 @@ pub(in crate::codegen) struct NoDeferral {
     /// No local is deferred: where the per-local list did not settle.
     pub(in crate::codegen) all: bool,
     pub(in crate::codegen) slots: std::collections::HashSet<(ISeqId, SlotId)>,
+}
+
+/// Join *other* into *joined*, frame by frame.
+fn join_chain(joined: &mut [FrameRef], other: &[FrameRef]) {
+    debug_assert_eq!(joined.len(), other.len());
+    for (t, e) in joined.iter_mut().zip(other.iter()) {
+        // Identity fast path: the frame no path has touched joins with
+        // itself — a pointer compare instead of a slot walk.
+        if FrameRef::ptr_eq(t, e) {
+            continue;
+        }
+        FrameRef::make_mut(t).join_no_alloc(e);
+    }
 }
 
 impl NoDeferral {
@@ -1818,6 +1852,38 @@ impl<'a> JitContext<'a> {
         }
     }
 
+    ///
+    /// A `break` or a `return` out of a block leaves here for the
+    /// continuation of the frame at *landing*, with the chain *state*
+    /// holds: one more edge of the merge that continuation is
+    /// (`JitStackFrame::exit_chains`).
+    ///
+    /// Unlike a return edge it gets no bridge to the join, which is not
+    /// known until the landing frame resumes. It needs none: the exit
+    /// boxed every deferred float home of the frames it lands on
+    /// (`AbstractState::box_deferred_homes_before_exit`), and a constant
+    /// one of those frames keeps unwritten across its call is written
+    /// ahead of that call as soon as the frame resumes without the claim
+    /// (`held` in `specialized_iseq`) — which it does once this edge or
+    /// any other of the join gave it up. So whatever the join says of a
+    /// slot is true on this path.
+    ///
+    pub(super) fn record_exit_edge(&mut self, landing: usize, state: &AbstractState) {
+        let chain = state.chain_prefix(landing);
+        self.merge_exit_chains(HashMap::from_iter([(landing, chain)]));
+    }
+
+    pub(super) fn merge_exit_chains(&mut self, chains: HashMap<usize, Vec<FrameRef>>) {
+        for (pos, chain) in chains {
+            match self.current_frame_mut().exit_chains.get_mut(&pos) {
+                Some(joined) => join_chain(joined, &chain),
+                None => {
+                    self.current_frame_mut().exit_chains.insert(pos, chain);
+                }
+            }
+        }
+    }
+
     // handling frame
 
     /// The innermost frame is a frameless specialized callee.
@@ -2036,15 +2102,21 @@ impl<'a> JitContext<'a> {
 
         // Every plain `Ret` in the callee branched to a return segment;
         // build them (and the join of the return-path chains) now, while
-        // the call-site stack bump is still applied.
-        let resume = self.build_return_segments(&mut frame);
+        // the call-site stack bump is still applied. The `break`s and
+        // non-local `return`s under the call that land in this frame
+        // arrive at the same continuation, and join with them.
+        let landing = self.current_frame_pos();
+        let exits = frame.exit_chains.remove(&landing);
+        let resume = self.build_return_segments(&mut frame, exits);
         let current = self.current_frame_mut();
         let innermost = current.abstract_state.take().unwrap();
         current.callid = None;
         current.stack_offset -= stack_offset;
         if let Some(mut chain) = resume {
-            // Resume from the join of the callee's compiled return paths —
-            // with one asymmetry the first attempt's bisection taught us.
+            // Resume from the join of the paths that come back here: the
+            // callee's compiled return paths and the exits that land in
+            // this frame — with one asymmetry the first attempt's
+            // bisection taught us.
             // The *resuming* frame's own bookkeeping beyond slot modes
             // (pc, liveness, hints) belongs to its own compile timeline:
             // replacing the whole frame with the callee's view of it broke
@@ -2062,20 +2134,34 @@ impl<'a> JitContext<'a> {
             state.set_frames(chain);
             state.overlay_kept_constants_innermost(joined_caller.slot_state());
         } else {
-            // No compiled return path: the caller's continuation is
-            // unreachable on compiled paths. Resume from this path's own
+            // No compiled path comes back, by a return or by an exit
+            // landing here: the caller's continuation is unreachable on
+            // compiled paths. Resume from this path's own
             // entry chain, re-widened by everything the callee's compile
             // widened (the log delta — position-addressed, and positions
             // below the caller's are stable across the call). Any claim
             // the placeholder still carries is vacuous — no execution
             // arrives here — and every later merge's claims are
             // established by its *reachable* entries' bridges.
+            //
+            // The claims are vacuous, but this frame's chain exit for
+            // the call is built from this state, and an exit taken under
+            // the call does run it. A float local the frame entered the
+            // call with deferred to a spill home is therefore kept
+            // deferred: the callee's stores wrote the home only (and
+            // widened the parked copy, as a store does), so a write-back
+            // that took the slot for current left it stale. `t = 1.0;
+            // m { |v| s = k.to_s; t += v; return t }` read `t` as `nil`
+            // once `k.to_s` deoptimized. Where the deferral did end
+            // under the call, the unit is compiled again without it
+            // (`NoDeferral`), as on any other path.
             let mut chain = fallback_chain;
-            *chain.last_mut().unwrap() = FrameRef::new(innermost);
+            let entry = std::mem::replace(chain.last_mut().unwrap(), FrameRef::new(innermost));
             state.set_frames(chain);
             for (pos, slot) in self.widened_outer_log[widen_mark..].to_vec() {
                 state.invalidate_at(pos, slot);
             }
+            state.keep_deferred_homes_innermost(entry.slot_state());
         }
         // Sync every frame's file with its home ledger: ids issued while
         // the frame was suspended stay reserved even when the claim they
@@ -2228,7 +2314,7 @@ impl<'a> JitContext<'a> {
         self.stack_frame.len().checked_sub(2)
     }
 
-    fn method_caller_pos(&self) -> Option<usize> {
+    pub(super) fn method_caller_pos(&self) -> Option<usize> {
         let offset = self.current_method_frame()?.1 + 1;
         let len = self.stack_frame.len();
         len.checked_sub(1)?.checked_sub(offset)
@@ -2973,12 +3059,27 @@ impl<'a> JitContext<'a> {
     /// exactly as from a plain specialized exit — while a hand-on
     /// registers nothing, as the exit itself did not: the next host's
     /// landing is a branch edge of that host's own CFG.
-    pub(super) fn spliced_arm(&mut self, route: SplicedRoute, state: &AbstractState) -> SplicedArm {
+    ///
+    /// A delivery is also where the exit becomes an edge of its
+    /// landing's merge (`JitStackFrame::exit_chains`), with the state
+    /// the `ensure` body left. The boxes of the deferred homes go ahead
+    /// of the `EnsureEnd`, so the body's plain completion runs them as
+    /// well, which costs it a few stores and changes nothing.
+    pub(super) fn spliced_arm(
+        &mut self,
+        route: SplicedRoute,
+        state: &AbstractState,
+        ir: &mut AsmIr,
+    ) -> SplicedArm {
         let (hop, claim) = route;
         match hop {
             SpliceHop::Final(pos) => {
                 self.unset_return_context_side_effect_guard();
                 self.new_spliced_exit_return(pos, state.as_return_like(&claim));
+                if let Some(landing) = pos.checked_sub(1) {
+                    state.box_deferred_homes_before_exit(self, ir, landing);
+                    self.record_exit_edge(landing, state);
+                }
                 SplicedArm::Final {
                     teardown: self.spliced_teardown_offset(pos),
                 }
@@ -3271,6 +3372,7 @@ impl<'a> JitContext<'a> {
             has_boxed_return,
             spill_home_ids,
             return_context,
+            exit_chains,
             abstract_state,
         } = &self.stack_frame[pos];
         spec_memo::FrameState {
@@ -3284,6 +3386,7 @@ impl<'a> JitContext<'a> {
             ivar_heap_accessed: self.stack_frame[pos].ivar_heap_accessed,
             spill_home_ids: spill_home_ids.clone(),
             return_context: return_context.clone(),
+            exit_chains: spec_memo::MemoExits(exit_chains.clone()),
             jit_type: self.stack_frame[pos].jit_type.clone(),
             abstract_state: spec_memo::MemoFrame(abstract_state.clone()),
         }
@@ -3308,6 +3411,7 @@ impl<'a> JitContext<'a> {
             ivar_heap_accessed,
             spill_home_ids,
             return_context,
+            exit_chains,
             abstract_state,
         } = state;
         let frame = &mut self.stack_frame[pos];
@@ -3318,6 +3422,7 @@ impl<'a> JitContext<'a> {
         frame.ivar_heap_accessed = *ivar_heap_accessed;
         frame.spill_home_ids = spill_home_ids.clone();
         frame.return_context = return_context.clone();
+        frame.exit_chains = exit_chains.0.clone();
         frame.abstract_state = abstract_state.0.clone();
     }
 
@@ -3386,6 +3491,7 @@ impl<'a> JitContext<'a> {
             frame.generic_yield.hash(&mut h);
             frame.ivar_heap_accessed.hash(&mut h);
             frame.return_context.len().hash(&mut h);
+            frame.exit_chains.len().hash(&mut h);
         }
         h.finish()
     }
@@ -4801,25 +4907,33 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    fn build_return_segments(&mut self, frame: &mut JitStackFrame) -> Option<Vec<FrameRef>> {
+    fn build_return_segments(
+        &mut self,
+        frame: &mut JitStackFrame,
+        exits: Option<Vec<FrameRef>>,
+    ) -> Option<Vec<FrameRef>> {
         let edges = std::mem::take(&mut frame.return_edges);
         if edges.is_empty() {
-            return None;
+            // Only exits come back (`loop { ...; break if done }`): the
+            // caller resumes from their join.
+            return exits;
         }
         frame.float_return = self.float_return_ok(frame, &edges);
         frame.return_virtual = self.return_virtual_ok(frame, &edges);
         let discarded = self.return_discarded_of(frame, self.current_frame_pos());
         let mut target: Vec<FrameRef> = edges[0].chain.clone();
         for ReturnEdge { chain, .. } in edges.iter().skip(1) {
-            debug_assert_eq!(target.len(), chain.len());
-            for (t, e) in target.iter_mut().zip(chain.iter()) {
-                // Identity fast path: the frame no path has touched joins
-                // with itself — a pointer compare instead of a slot walk.
-                if FrameRef::ptr_eq(t, e) {
-                    continue;
-                }
-                FrameRef::make_mut(t).join_no_alloc(e);
-            }
+            join_chain(&mut target, chain);
+        }
+        // The exits landing in the caller are edges of this merge too
+        // (`JitStackFrame::exit_chains`). Joined before the segments are
+        // built, so a claim an exit path gave up — it stored `t = 7`
+        // over a Float `t` and left with `break` — is given up by every
+        // return path as well, each with its surrender write below.
+        // Without them the continuation went on reading `t` as the
+        // Float the return paths still claimed (#2201).
+        if let Some(exits) = &exits {
+            join_chain(&mut target, exits);
         }
         let callee_frameless = frame.asm_info.frameless;
         for ReturnEdge {
