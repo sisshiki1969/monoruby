@@ -6094,6 +6094,7 @@ ef1e12a9b30d1bb651da8afa02c9ed6f	"out\\nerr\\n"	IO.popen(["sh", "-c", "echo out;
 ef255fadcdcddb1af8e9579fdab61af0	[[0, 0, 1], [0, 0, 1], [4, 6], [4, 6], [0, 0, 1]]	__a = [];__a << (100.digits);__a << (100.digits(10));__a << (100.digits(16));__a
 ef28a05aa1775528a6177475feb794a5	[true, "/no/such/path/at/all"]	m = Module.new\n        m.autoload :Foo, "/no/such/path/at/all"\n        
 ef32d22779cedffe0f701504d427c05e	true	b = nil\n        line = nil\n        1.times do\n          line = __LINE__
+ef3b552501743b3796789ad37dbe855f	["[\\"Errno::ECHILD: No child processes\\", \\"Errno::ECHILD: No child processes\\", nil, [[false, nil], [true, 7]], \\"ArgumentError: from the hook\\", \\"RuntimeError: Command failed with SIGKILL (signal 9): kill -9 $$\\", \\"RuntimeError: Command failed with SIGTERM (signal 15): kill -TERM $$\\"]", 0]	read, write = IO.pipe\n            if (pid = fork)\n              wri
 ef3cb8d743c54b9c9635050540db1420	[nil, 1, nil, 2]	k = "mut"\n        h = { k => 1, "other" => 2 }\n        k << "ated"\n    
 ef3e0b34557338d464351f96f18853dd	"exception object expected"	begin; raise "m", cause: Object.new; rescue TypeError => e; e.messa
 ef42d9c972bdd3f649ca4efa07a121fd	10000	def f(x) = x * 2 + 1\n            s = 0\n            i = 0\n          

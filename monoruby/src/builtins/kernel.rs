@@ -3731,6 +3731,19 @@ fn set_exec_failure_status(vm: &mut Executor, globals: &mut Globals) {
     }
 }
 
+/// A raw `poll(2)` / `read(2)` result: `None` where the call is simply to
+/// be made again (`EINTR`, `EAGAIN`).
+fn retriable(ret: isize) -> std::io::Result<Option<usize>> {
+    if ret >= 0 {
+        return Ok(Some(ret as usize));
+    }
+    let e = std::io::Error::last_os_error();
+    match e.kind() {
+        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock => Ok(None),
+        _ => Err(e),
+    }
+}
+
 /// Read a child's two pipes to EOF, taking from whichever has something
 /// next, so that neither fills up while the other is being drained --
 /// which is what `Child::wait_with_output` does with the two of them,
@@ -3762,13 +3775,7 @@ fn drain_child_output(
             .collect();
         // SAFETY: `polls` is a valid array of its length.
         let n = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as libc::nfds_t, -1) };
-        if n < 0 {
-            let e = std::io::Error::last_os_error();
-            if e.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(e);
-        }
+        retriable(n as isize)?;
         let mut done = vec![];
         for (slot, poll) in polls.iter().enumerate() {
             if poll.revents == 0 {
@@ -3778,21 +3785,12 @@ fn drain_child_output(
             // SAFETY: reading a descriptor we own into a local buffer.
             let got =
                 unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
-            if got > 0 {
-                bufs[which].extend_from_slice(&chunk[..got as usize]);
-                continue;
+            match retriable(got)? {
+                // End of file: the write end is gone.
+                Some(0) => done.push(slot),
+                Some(got) => bufs[which].extend_from_slice(&chunk[..got]),
+                None => {}
             }
-            if got < 0 {
-                let e = std::io::Error::last_os_error();
-                if e.kind() == std::io::ErrorKind::Interrupted
-                    || e.kind() == std::io::ErrorKind::WouldBlock
-                {
-                    continue;
-                }
-                return Err(e);
-            }
-            // End of file: the write end is gone.
-            done.push(slot);
         }
         for slot in done.into_iter().rev() {
             live.remove(slot);
@@ -3950,19 +3948,16 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut cmd = Command::new(&program);
     cmd.args(&args);
     crate::scheduler::command_for_child(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
+    let spawned = match cmd.spawn() {
         // ENOEXEC (an executable file without a shebang that isn't a
         // binary): retry through `sh`, like execvp-era shells and CRuby.
         Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
-            match Command::new("/bin/sh").arg(&program).args(&args).spawn() {
-                Ok(child) => child,
-                Err(_) => {
-                    set_exec_failure_status(vm, globals);
-                    return Ok(Value::nil());
-                }
-            }
+            Command::new("/bin/sh").arg(&program).args(&args).spawn()
         }
+        spawned => spawned,
+    };
+    let mut child = match spawned {
+        Ok(child) => child,
         Err(err) => {
             set_exec_failure_status(vm, globals);
             if exception {
@@ -3998,20 +3993,8 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             // Set `$?` / Process.last_status from the raw wait(2) status,
             // like CRuby does after #system.
             let raw = status.into_raw();
-            if let Ok(status_class) =
-                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-            {
-                if let Ok(status_obj) = vm.invoke_method_inner(
-                    globals,
-                    IdentId::get_id("__new"),
-                    status_class,
-                    &[Value::integer(raw as i64), Value::integer(pid as i64)],
-                    None,
-                    None,
-                ) {
-                    crate::scheduler::set_last_status(vm, status_obj);
-                }
-            }
+            let status_obj = crate::builtins::process::new_status(vm, globals, raw, pid as i32)?;
+            crate::scheduler::set_last_status(vm, status_obj);
             raw
         }
     };
@@ -4183,55 +4166,34 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // In a non-blocking fiber with a scheduler, waiting for the child is
     // the scheduler's `#process_wait` (CRuby reaches it through
     // `rb_io_close` on the pipe), and its answer is read as `rb_waitpid`
-    // reads it: nil leaves `$?` alone, anything but a Status raises. The
-    // pipes are drained first, so this cannot be `wait_with_output`,
-    // which waits as well.
+    // reads it: nil reaped nothing and leaves no `$?`, anything else but
+    // a Status raises. The pipes are drained first, so this cannot be
+    // `wait_with_output`, which waits as well.
     if !vm.is_fiber_blocking() && globals.fiber_scheduler.is_some() {
         let out = child.stdout.take();
         let err = child.stderr.take();
         let drained = crate::scheduler::without_gvl(vm, move || drain_child_output(out, err));
         let answer = crate::builtins::process::scheduler_process_wait(vm, globals, pid as i32, 0);
-        // Our own wait, for a scheduler without that hook; and after a
-        // failed read or a raising hook, so that no child is left behind.
-        let mut own_wait = |vm: &mut Executor| {
-            crate::scheduler::without_gvl(vm, || {
+        // Our own wait, wherever the hook did not take it: a scheduler
+        // without one, and one that raised, so that no child is left
+        // behind.
+        let own = match answer {
+            Ok(Some(_)) => None,
+            _ => Some(crate::scheduler::without_gvl(vm, || {
                 use std::os::unix::process::ExitStatusExt;
                 child.wait().map(|st| st.into_raw()).unwrap_or(0)
-            })
+            })),
         };
-        let answer = match answer {
-            Ok(answer) => answer,
-            Err(e) => {
-                own_wait(vm);
-                return Err(e);
-            }
-        };
-        let (stdout, stderr) = match drained {
-            Ok(pair) => pair,
-            Err(e) => {
-                if answer.is_none() {
-                    own_wait(vm);
-                }
-                return Err(MonorubyErr::from_io_err(
-                    &globals.store,
-                    &e,
-                    errno_description(&e),
-                ));
-            }
-        };
-        let status_obj = match answer {
-            Some(answer) => {
-                match crate::builtins::process::hooked_last_status(vm, globals, answer) {
-                    Ok(status) => status,
-                    Err(e) => return Err(e),
-                }
-            }
-            None => {
-                let raw = own_wait(vm);
-                Some(crate::builtins::process::new_status(
-                    vm, globals, raw, pid as i32,
-                )?)
-            }
+        let (stdout, stderr) = drained
+            .map_err(|e| MonorubyErr::from_io_err(&globals.store, &e, errno_description(&e)))?;
+        let status_obj = match (answer?, own) {
+            (Some(answer), _) => crate::builtins::process::hooked_last_status(vm, globals, answer)?,
+            (None, raw) => Some(crate::builtins::process::new_status(
+                vm,
+                globals,
+                raw.unwrap_or(0),
+                pid as i32,
+            )?),
         };
         std::io::stderr().write_all(&stderr).unwrap();
         if let Some(status_obj) = status_obj {
@@ -10751,6 +10713,34 @@ mod tests {
             "false.nil?",
             "[].nil?",
         ]);
+    }
+
+    /// The backtick's drain of the child's pipes ends with the error of
+    /// a read that failed, and makes again one that only had nothing
+    /// yet.
+    #[test]
+    fn drain_child_output_reports_a_failed_read() {
+        use std::os::fd::{AsRawFd, OwnedFd};
+        // A regular file always polls ready, and one opened for writing
+        // only cannot be read: `EBADF`.
+        let path = std::env::temp_dir().join(format!("monoruby_drain_{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        let out = std::process::ChildStdout::from(OwnedFd::from(file));
+        let err = super::drain_child_output(Some(out), None).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
+
+        // An empty non-blocking pipe: `EAGAIN`, which is no error.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let fd = reader.as_raw_fd();
+        let mut byte = 0u8;
+        // SAFETY: `fd` is the open read end, and `byte` a one-byte buffer.
+        let got = unsafe {
+            libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
+            libc::read(fd, &mut byte as *mut u8 as *mut libc::c_void, 1)
+        };
+        assert_eq!(super::retriable(got).unwrap(), None);
+        assert_eq!(super::retriable(3).unwrap(), Some(3));
     }
 
     #[test]

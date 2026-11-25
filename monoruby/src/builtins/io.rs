@@ -2646,8 +2646,7 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .as_io_inner_mut()
         .close_detaching_child(&globals.store)?;
     if let Some(pid) = detached
-        && let Some((_, status_obj)) =
-            crate::builtins::process::wait_popen_child(vm, globals, pid)?
+        && let Some((_, status_obj)) = crate::builtins::process::wait_popen_child(vm, globals, pid)?
     {
         crate::scheduler::set_last_status(vm, status_obj);
     }
@@ -3797,25 +3796,21 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             }
             let mut io_close = io_val;
             // Waited for outside the GVL, as `IO#close` does, or by the
-            // fiber scheduler's `#process_wait` where there is one. What
-            // that hook raises is this call's error, as in CRuby, and
-            // takes the place of the block's own value.
+            // fiber scheduler's `#process_wait` where there is one.
             // A stream the block closed itself is not this call's
             // error (as on master, where the close was `if let Ok`).
             let child = io_close
                 .as_io_inner_mut()
                 .close_detaching_child(&globals.store)
                 .unwrap_or(None);
-            if let Some(pid) = child {
-                // What the fiber scheduler's `#process_wait` raises is
-                // this call's error, as in CRuby, and takes the place of
-                // the block's own value.
-                match crate::builtins::process::wait_popen_child(vm, globals, pid) {
-                    Ok(Some((_, status_obj))) => crate::scheduler::set_last_status(vm, status_obj),
-                    Ok(None) => {}
-                    Err(err) if res.is_ok() => return Err(err),
-                    Err(_) => {}
-                }
+            // What that hook raises is this call's error, and takes the
+            // place of the block's own value and of what the block
+            // raised alike: CRuby closes from an `rb_ensure`.
+            if let Some(pid) = child
+                && let Some((_, status_obj)) =
+                    crate::builtins::process::wait_popen_child(vm, globals, pid)?
+            {
+                crate::scheduler::set_last_status(vm, status_obj);
             }
             res
         })

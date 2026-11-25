@@ -288,10 +288,13 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   渡す(CRuby の `rb_process_status_wait` → `rb_fiber_scheduler_process_wait`)。
   フックは任意(`rb_check_funcall` 相当)で、`WNOHANG` 付き・blocking fiber・スケジューラ
   なしのときは呼ばない。答えの読み方は呼び出し側ごとに CRuby と同じ:
-  `Process::Status.wait` は無検査でそのまま返し、`system` / `close` / バッククォートは
-  `Process::Status` 以外(`nil` も)なら TypeError、`Process.wait` 系は `nil` を
-  「何も回収しなかった」と読んで nil を返し `$?` を消す。pid が -1 の Status は子ではなく
-  errno(= `ECHILD`)を運ぶ。バッククォートはフックに渡す前に stdout / stderr を両方
+  `Process::Status.wait` は無検査でそのまま返し、`system` は `Process::Status` 以外
+  (`nil` も)なら TypeError(`rb_check_typeddata`)。`Process.wait` 系・`close`・
+  バッククォートは `rb_waitpid` の読み方で、`nil` は「何も回収しなかった」(`$?` は消えた
+  まま、`Process.wait` は nil を返す)、それ以外の非 Status だけが TypeError。pid が -1 の
+  Status は子ではなく errno(= `ECHILD`)を運ぶ。`IO.popen { }` の close でフックが
+  raise すると、ブロックが raise していてもフックの例外が残る(CRuby は `rb_ensure` から
+  閉じる)。バッククォートはフックに渡す前に stdout / stderr を両方
   `poll(2)` で読み切る(片方が詰まって子が止まらないように)。
   待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
   (M:1 グリーンモデルでは `without_gvl` が素通しなので、そこは従来どおり止まる)。

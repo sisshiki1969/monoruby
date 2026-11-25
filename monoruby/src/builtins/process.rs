@@ -969,9 +969,10 @@ pub(crate) fn scheduler_process_wait(
 
 /// The raw wait status and the pid of the `Process::Status` the hook
 /// answered with, read as CRuby's `rb_check_typeddata` reads it
-/// (`rb_f_system`, the wait in `rb_io_close`): anything that is not a
-/// Status, `nil` included, is a TypeError. One that was never
-/// initialized reads as zeroes, like CRuby's freshly allocated one.
+/// (`rb_f_system`, and `rb_waitpid` once it has taken `nil` out):
+/// anything that is not a Status, `nil` included, is a TypeError. One
+/// that was never initialized reads as zeroes, like CRuby's freshly
+/// allocated one.
 pub(crate) fn hooked_status_fields(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1872,8 +1873,7 @@ fn process_waitall(
                     }
                     Hooked::Reaped(pid, _, status) => {
                         crate::scheduler::set_last_status(vm, status);
-                        let pair =
-                            Value::array_from_vec(vec![Value::integer(pid as i64), status]);
+                        let pair = Value::array_from_vec(vec![Value::integer(pid as i64), status]);
                         vm.temp_at(pairs_idx).as_array().push(pair);
                         continue;
                     }
@@ -2276,11 +2276,87 @@ mod tests {
         );
     }
 
-    /// What the hook answers is read as CRuby reads it: `Kernel#system`,
-    /// the backtick and the waits behind `IO#close` want a
-    /// `Process::Status` and raise TypeError for anything else, `nil`
-    /// included, where `Process.wait` takes `nil` for "no child was
-    /// reaped" and answers nil with `$?` forgotten.
+    /// The corners of that reading, in a child of this process again
+    /// (they wait for any child): a hook's Status for "there is no
+    /// child" is `Errno::ECHILD`; a hook answering nil in
+    /// `Process.waitall` is noted as a pid of 0 and the walk goes on;
+    /// what the hook raises from `IO.popen { }`'s close replaces what
+    /// the block raised (CRuby closes from an `rb_ensure`). And
+    /// `system(..., exception: true)` names the signal that killed the
+    /// child on its own path too.
+    #[test]
+    fn process_wait_hook_corner_answers() {
+        run_test_once(
+            r##"
+            read, write = IO.pipe
+            if (pid = fork)
+              write.close
+              got = read.read
+              read.close
+              Process.wait(pid)
+              [got, $?.exitstatus]
+            else
+              read.close
+              class Sched
+                def initialize(answers) = @answers = answers
+                def block(*) = nil
+                def unblock(*) = nil
+                def kernel_sleep(*) = nil
+                def io_wait(io, events, _timeout)
+                  Fiber.blocking { events & 1 != 0 ? IO.select([io]) : IO.select(nil, [io]) }
+                  events
+                end
+                def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+                def process_wait(pid, flags)
+                  case @answers.shift
+                  when :nil then nil
+                  when :raise
+                    Fiber.blocking { Process::Status.wait(pid, flags) }
+                    raise ArgumentError, "from the hook"
+                  else Fiber.blocking { Process::Status.wait(pid, flags) }
+                  end
+                end
+              end
+              t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+              out = []
+              # No child at all: the hook's Status carries ECHILD (its pid is -1).
+              Fiber.set_scheduler(Sched.new([]))
+              Fiber.new(blocking: false) do
+                out << t.() { Process.wait }
+                out << t.() { Process.wait2(-1) }
+                out << $?
+              end.resume
+              Fiber.set_scheduler(nil)
+              # A hook answering nil once: waitall notes a pid of 0 and goes on.
+              Fiber.set_scheduler(Sched.new([:nil]))
+              Fiber.new(blocking: false) do
+                spawn("exit 7")
+                out << Process.waitall.map { |p, s| [p > 0, s && s.exitstatus] }
+              end.resume
+              Fiber.set_scheduler(nil)
+              # The block raises, and then so does the hook.
+              Fiber.set_scheduler(Sched.new([:raise]))
+              Fiber.new(blocking: false) do
+                out << t.() { IO.popen("exit 9") { |io| io.read; raise "from the block" } }
+              end.resume
+              Fiber.set_scheduler(nil)
+              # A child killed by a signal, on `system`'s own path.
+              out << t.() { system("kill -9 $$", exception: true) }
+              out << t.() { system("kill -TERM $$", exception: true) }
+              write.write(out.inspect)
+              write.close
+              exit!(0)
+            end
+            "##,
+        );
+    }
+
+    /// What the hook answers is read as CRuby reads it. `Kernel#system`
+    /// wants a `Process::Status` and raises TypeError for anything else,
+    /// `nil` included (`rb_check_typeddata`). The backtick, the wait
+    /// behind `IO#close` and `Process.wait` read it as `rb_waitpid`
+    /// does: `nil` is "no child was reaped", which leaves `$?`
+    /// forgotten, and only another kind of object is a TypeError.
     /// `Process::Status.wait` hands the answer back unread. A scheduler
     /// without the hook changes nothing: it is optional
     /// (`rb_check_funcall`).
