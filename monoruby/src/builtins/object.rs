@@ -713,7 +713,7 @@ fn instance_eval_inner(
         let outer_cfp = caller_cfp.nearest_ruby_frame();
         crate::codegen::runtime::convert_frame_for_capture(vm, cfp, outer_cfp)?;
         let path = if argc >= 2 {
-            args[1].coerce_to_str(vm, globals)?
+            crate::builtins::eval_file_name(vm, globals, args[1])?
         } else {
             let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
             format!("(eval at {})", caller_loc)

@@ -3395,6 +3395,11 @@ pub struct ClassInfoTable {
     pub(in crate::globals) new_instance_singletons: Vec<ClassId>,
     /// The index behind `Class#subclasses` — see `SubclassIndex`.
     pub(in crate::globals) subclass_index: std::cell::RefCell<SubclassIndex>,
+    /// The constants an autoload was registered for, by the name of the
+    /// file its feature names (`autoload_index_key`). Entries are only
+    /// ever added: a reader checks that the constant is still an
+    /// autoload. See `find_respelled_autoload_entries`.
+    pub(in crate::globals) autoload_index: HashMap<Vec<u8>, Vec<(ClassId, IdentId)>>,
 }
 
 /// Direct subclasses by superclass, built lazily from the class table.
@@ -3440,6 +3445,7 @@ impl ClassInfoTable {
             builtin_funcs: HashSet::default(),
             new_instance_singletons: vec![],
             subclass_index: Default::default(),
+            autoload_index: HashMap::default(),
         }
     }
 

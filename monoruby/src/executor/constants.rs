@@ -66,7 +66,7 @@ impl Executor {
         // A load another thread is running has to finish before we can
         // say anything about this constant.
         self.wait_for_foreign_autoload(globals, class_id, name)?;
-        let feature = match globals.get_constant(class_id, name) {
+        let (feature, feature_val) = match globals.get_constant(class_id, name) {
             None => return Ok(None),
             Some(state) => match &state.kind {
                 ConstStateKind::Loaded(v) => {
@@ -114,7 +114,9 @@ impl Executor {
                     {
                         return Ok(None);
                     }
-                    AutoloadState::Consumed | AutoloadState::Idle => entry.feature.clone(),
+                    AutoloadState::Consumed | AutoloadState::Idle => {
+                        (entry.feature.clone(), entry.feature_value())
+                    }
                 },
             },
         };
@@ -155,7 +157,6 @@ impl Executor {
         // so a redefined/mocked `main.require` intercepts the load.
         let res = {
             let main = globals.main_object;
-            let feature_val = Value::string_from_str(&feature.to_string_lossy());
             // Tell the `require` we are about to dispatch that it is an
             // autoload's own load, not a direct one.
             self.autoload_require = true;
@@ -257,12 +258,17 @@ impl Executor {
                         } else {
                             format!("{parent_name}::{}", name)
                         };
+                        // `rb_warning`: at the line of the reference
+                        // that set the load off (#2128).
+                        let at = self
+                            .const_read_location(globals)
+                            .map_or(String::new(), |loc| format!("{loc}: "));
                         let msg = format!(
-                            "Expected {} to define {} but it didn't",
+                            "{at}warning: Expected {} to define {} but it didn't\n",
                             feature.display(),
                             qualified
                         );
-                        crate::value::emit_verbose_warning(self, globals, &msg)?;
+                        self.write_warning(globals, msg);
                     }
                     globals.remove_constant(class_id, name);
                     Ok(None)
@@ -580,7 +586,14 @@ impl Executor {
                 // building it, exactly as they do for an idle autoload.
                 ConstStateKind::Loaded(_) | ConstStateKind::LazyToplevelBinding => true,
                 ConstStateKind::Autoload(entry) => match entry.state {
-                    AutoloadState::Idle => true,
+                    // Pending — unless its file is running on this
+                    // thread, for another constant registered to it:
+                    // CRuby finds the feature provided, so there is
+                    // nothing to load and the constant is not there yet
+                    // (#2128).
+                    AutoloadState::Idle => {
+                        !crate::builtins::autoload_running_here(globals, &entry.feature)
+                    }
                     // Retired, but only for as long as its file stays
                     // loaded — see `module::autoload_pending`.
                     AutoloadState::Consumed => {
@@ -697,11 +710,44 @@ impl Executor {
             } else {
                 module
             };
-            if Self::probe_constant_at(globals, module, name) {
+            // CRuby's `vm_get_ev_const` reads the constant table of each
+            // lexical scope itself, and an autoload entry it finds there
+            // is defined whatever state it is in — one whose file is
+            // running, or has run without defining the constant,
+            // included (#2128). Only the ancestor walk that follows asks
+            // whether there is anything left to load.
+            if globals
+                .store
+                .get_constant(module, name)
+                .is_some_and(|state| state.is_autoload())
+                || Self::probe_constant_at(globals, module, name)
+            {
                 return true;
             }
         }
         false
+    }
+
+    /// The `file:line` of the constant reference this frame is in the
+    /// middle of, for a warning raised while resolving it: the reading
+    /// instruction's line in a Ruby frame (found through the site
+    /// `find_constant` is working on, since the frame's pc is not
+    /// stored anywhere a callee can read), the calling line for a
+    /// builtin (`Module#const_get`).
+    pub(crate) fn const_read_location(&self, globals: &Globals) -> Option<String> {
+        let func_id = self.cfp().lfp().func_id();
+        let Some(iseq_id) = globals.store[func_id].is_iseq() else {
+            return self.nearest_caller_location(&globals.store);
+        };
+        let site = self.const_read_site?;
+        let iseq = &globals.store[iseq_id];
+        let index = (0..iseq.bytecode().len())
+            .find(|&i| iseq.get_pc(BcIndex::from(i)).const_read_site() == Some(site))?;
+        Some(format!(
+            "{}:{}",
+            iseq.sourceinfo.file_name(),
+            iseq.sourceinfo.get_line(&iseq.sourcemap[index])
+        ))
     }
 
     /// Resolve a `ConstSiteId` for `defined?` semantics: intermediate

@@ -56,6 +56,11 @@ pub(crate) enum ConstStateKind {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AutoloadEntry {
     pub feature: std::path::PathBuf,
+    /// The encoding of the feature String `autoload` was given.
+    /// `autoload?` answers in it, and the `require` the autoload
+    /// dispatches is handed a String in it, so the loaded file's path
+    /// follows it as it does for a direct `require` (#2096).
+    pub feature_encoding: crate::value::Encoding,
     pub state: AutoloadState,
     /// What the loading thread has assigned to the constant so far,
     /// held back from every other thread until the load finishes —
@@ -125,9 +130,13 @@ impl AutoloadState {
 }
 
 impl AutoloadEntry {
-    pub(crate) fn new(feature: std::path::PathBuf) -> Self {
+    pub(crate) fn new(
+        feature: std::path::PathBuf,
+        feature_encoding: crate::value::Encoding,
+    ) -> Self {
         Self {
             feature,
+            feature_encoding,
             state: AutoloadState::Idle,
             value: None,
             location: None,
@@ -162,6 +171,12 @@ impl AutoloadEntry {
         })
     }
 
+    /// The feature as the String `autoload` was given.
+    pub(crate) fn feature_value(&self) -> Value {
+        use std::os::unix::ffi::OsStrExt;
+        Value::string_from_source_bytes(self.feature.as_os_str().as_bytes(), self.feature_encoding)
+    }
+
     /// The thread running this entry's load, if one is in flight.
     pub(crate) fn loading_owner(&self) -> Option<u64> {
         self.state.loading_owner()
@@ -185,9 +200,9 @@ impl ConstState {
         }
     }
 
-    pub(crate) fn autoload(path: std::path::PathBuf) -> Self {
+    pub(crate) fn autoload(path: std::path::PathBuf, encoding: crate::value::Encoding) -> Self {
         Self {
-            kind: ConstStateKind::Autoload(AutoloadEntry::new(path)),
+            kind: ConstStateKind::Autoload(AutoloadEntry::new(path, encoding)),
             visibility: ConstVisibility::Public,
             deprecated: false,
         }
@@ -288,12 +303,16 @@ impl ClassInfoTable {
         class_id: ClassId,
         name: IdentId,
         file_name: String,
+        encoding: crate::value::Encoding,
     ) {
-        match self[class_id].constants.get_mut(&name) {
+        let feature = std::path::PathBuf::from(file_name);
+        // Whether this registers a feature the index does not have for
+        // the constant yet.
+        let indexed = match self[class_id].constants.get_mut(&name) {
             Some(state) => match &mut state.kind {
                 // If the constant is already loaded, autoload is a no-op
                 // (matches CRuby behavior).
-                ConstStateKind::Loaded(_) => {}
+                ConstStateKind::Loaded(_) => false,
                 // Re-registering autoload updates the path; visibility is
                 // preserved. CRuby leaves an in-progress load alone here
                 // and only swaps the feature, so we mirror that by keeping
@@ -303,22 +322,32 @@ impl ClassInfoTable {
                 // autoload is triggered by require, a new autoload with
                 // the same path is considered" spec).
                 ConstStateKind::Autoload(entry) => {
-                    entry.feature = file_name.into();
+                    let respelled = entry.feature != feature;
+                    entry.feature = feature.clone();
+                    entry.feature_encoding = encoding;
                     if let AutoloadState::Consumed = entry.state {
                         entry.state = AutoloadState::Idle;
                     }
+                    respelled
                 }
                 // `autoload :TOPLEVEL_BINDING, path` — the name is
                 // already defined (it just has not been built yet), so
                 // registering an autoload over it is the no-op the
                 // `Loaded` arm above performs.
-                ConstStateKind::LazyToplevelBinding => {}
+                ConstStateKind::LazyToplevelBinding => false,
             },
             None => {
                 self[class_id]
                     .constants
-                    .insert(name, ConstState::autoload(file_name.into()));
+                    .insert(name, ConstState::autoload(feature.clone(), encoding));
+                true
             }
+        };
+        if indexed {
+            self.autoload_index
+                .entry(autoload_index_key(&feature).to_vec())
+                .or_default()
+                .push((class_id, name));
         }
     }
 
@@ -405,6 +434,56 @@ impl ClassInfoTable {
                         bare.push((class_id, *name, entry.feature.clone()));
                     }
                 }
+            }
+        }
+        (result, bare)
+    }
+
+    /// [`Self::find_autoload_entries_for_paths`] for the load an autoload
+    /// of *feature* set off, which ran the file at *path*: the entries
+    /// registered to that file under **another spelling** than *feature*
+    /// (and not being loaded already), which is all such a load consumes
+    /// — see `Executor::require`.
+    ///
+    /// Every autoload read comes through here, so this looks the file's
+    /// name up in the index rather than walking every constant table.
+    /// The index is keyed by the name as written, so an entry that names
+    /// the file through a symbolic link of another name is not found and
+    /// stays as it was.
+    pub(crate) fn find_respelled_autoload_entries(
+        &self,
+        path: &std::path::PathBuf,
+        feature: &std::path::Path,
+    ) -> (
+        Vec<(ClassId, IdentId)>,
+        Vec<(ClassId, IdentId, std::path::PathBuf)>,
+    ) {
+        let mut result = Vec::new();
+        let mut bare: Vec<(ClassId, IdentId, std::path::PathBuf)> = Vec::new();
+        let Some(candidates) = self.autoload_index.get(autoload_index_key(path)) else {
+            return (result, bare);
+        };
+        let paths = std::slice::from_ref(path);
+        for &(class_id, name) in candidates {
+            let Some(entry) = self
+                .get_constant(class_id, name)
+                .and_then(|state| state.autoload_entry())
+            else {
+                continue;
+            };
+            if entry.feature == feature || entry.state.loading_owner().is_some() {
+                continue;
+            }
+            // A constant registered more than once is listed as often.
+            if result.contains(&(class_id, name))
+                || bare.iter().any(|&(c, n, _)| (c, n) == (class_id, name))
+            {
+                continue;
+            }
+            if Self::autoload_feature_matches_path(entry, paths) {
+                result.push((class_id, name));
+            } else if Self::bare_feature_may_name(&entry.feature, paths) {
+                bare.push((class_id, name, entry.feature.clone()));
             }
         }
         (result, bare)
@@ -834,3 +913,18 @@ impl Globals {
 }
 
 impl Globals {}
+
+/// The key of `Store::autoload_index` for *path*: its last component up
+/// to the first `.`, which an autoload's feature (`"v"`, `"v.rb"`,
+/// `"/dir/v.rb"`) and the file a `require` of it runs (`/dir/v.rb`,
+/// `/dir/v.so`) have in common.
+pub(crate) fn autoload_index_key(path: &std::path::Path) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    let name = path.file_name().map_or(&[][..], |name| name.as_bytes());
+    // A leading dot is part of the name (`.hidden.rb`).
+    let start = usize::from(name.starts_with(b"."));
+    match name[start..].iter().position(|&b| b == b'.') {
+        Some(i) => &name[..start + i],
+        None => name,
+    }
+}

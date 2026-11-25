@@ -358,8 +358,8 @@ class Thread
       locs = []
       if site
         locs << Thread::Backtrace::Location.new(
-          ["#{site[1]}:#{site[3]}:in 'Thread#backtrace_locations'",
-           site[1], site[2], site[3], "Thread#backtrace_locations"]
+          ["#{site[1]}:#{site[3]}:in 'Thread#backtrace_locations'".force_encoding(site[1].encoding),
+           site[1], site[2], site[3], "Thread#backtrace_locations".b]
         )
       end
       frames.each { |f| locs << Thread::Backtrace::Location.new(f) }
@@ -1077,59 +1077,73 @@ class Thread
 
       # Structured form (from `Kernel.__caller_frames`):
       # `[to_s, path, absolute_path, lineno, label]` — carries the
-      # load-time canonical absolute path. String form (from raw
+      # load-time canonical absolute path, and every String in the
+      # encoding and frozen state CRuby's has. String form (from raw
       # backtrace frame strings, e.g. `Thread#backtrace_locations` /
       # `Exception#backtrace_locations`): parsed lazily, with
       # `absolute_path` reconstructed best-effort via expand_path.
       def initialize(frame)
         if frame.is_a?(Array)
           @__frame, @__path, @__absolute_path, @__lineno, @__label = frame
-          @__absolute_known = true
           return
         end
-        @__absolute_known = false
+        # Not known: worked out from the path when asked for.
+        @__absolute_path = false
         @__frame = frame.to_s
         if @__frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
           @__path = $1
           @__lineno = $2.to_i
-          @__label = $3
+          @__label = Kernel.__location_label($3)
         elsif @__frame =~ /\A(<.+>):in ['`](.+)'\z/
           # Native frame without a resolvable call site.
           @__path = $1
           @__lineno = 0
-          @__label = $2
+          @__label = Kernel.__location_label($2)
         else
           @__path = @__frame
           @__lineno = 0
-          @__label = ""
+          @__label = Kernel.__location_label("")
         end
       end
 
       def path = @__path
       def lineno = @__lineno
-      def label = @__label
 
-      def base_label
+      # CRuby makes a label that has a qualifier or a prefix ("Foo#bar",
+      # "block in foo", "<class:Foo>") with `rb_sprintf`: a new String
+      # each time, BINARY while it is all ASCII. Any other label is the
+      # iseq's own name, one frozen US-ASCII String ("<main>", "foo"),
+      # and that is its base label too. A label with a non-ASCII name in
+      # it is UTF-8 either way.
+      #
+      # `@__label` is kept in that form, frozen when it is the iseq's
+      # name (`location_label` in builtins/kernel.rs).
+      def label
         l = @__label
-        l = $1 while l =~ /\Ablock (?:\(\d+ levels\) )?in (.+)\z/
-        # The owner qualifier is stripped too: the base label of
-        # "block in M::C.foo" is the bare "foo" (CRuby). Special
-        # frames (<main>, <top (required)>, <module:A>, singleton
-        # class) carry no qualifier and pass through.
-        l = $2 if !l.start_with?("<") && l =~ /\A(.+)[#.]([^#.]+)\z/
-        l
+        return l if l.frozen?
+        l.ascii_only? ? l.b : l.dup
+      end
+
+      # The label without its "block in" prefixes and its owner
+      # qualifier: the base label of "block in M::C.foo" is the bare
+      # "foo". Special frames (<main>, <top (required)>, <module:A>,
+      # singleton class) carry no qualifier and pass through.
+      def base_label
+        @__base_label ||= Kernel.__location_base_label(@__label)
       end
 
       # CRuby returns nil for frames without a real file (eval'd code,
       # internal frames).
       def absolute_path
-        return @__absolute_path if @__absolute_known
+        known = @__absolute_path
+        return known unless known == false
         return nil if @__path.start_with?("(") || @__path.start_with?("<")
-        File.expand_path(@__path)
+        File.expand_path(@__path).force_encoding(@__path.encoding)
       end
 
+      # A new String each time, as CRuby's `location_to_str` makes one.
       def to_s
-        @__frame
+        @__frame.dup
       end
 
       # CRuby's location_inspect: the string form, inspected.

@@ -792,6 +792,7 @@ pub(super) fn autoload_on(
         }
     }
     let feature = feature_arg.coerce_to_path_rstring(vm, globals)?;
+    let feature_encoding = feature.encoding();
     let feature = feature.to_str()?.to_string();
     if feature.is_empty() {
         return Err(MonorubyErr::argumenterr("empty file name"));
@@ -808,14 +809,14 @@ pub(super) fn autoload_on(
     // `$LOADED_FEATURES`. What it does not do is leave anything to
     // load, so the entry is born retired — `autoload?` answers nil and
     // `const_defined?` false for as long as the file stays loaded.
-    let already_loaded = autoload_feature_already_loaded(vm, globals, &feature);
+    let already_loaded = autoload_feature_already_loaded(globals, &feature);
     let was_autoload = match globals.store.get_constant(class_id, const_name) {
         None => true,
         Some(state) => state.is_autoload(),
     };
     globals
         .store
-        .set_constant_autoload(class_id, const_name, feature);
+        .set_constant_autoload(class_id, const_name, feature, feature_encoding);
     if already_loaded {
         globals
             .store
@@ -901,12 +902,17 @@ pub(super) fn autoload_query_on(
                     AutoloadState::Consumed if !autoload_pending(globals, &entry.feature) => {
                         return Ok(Value::nil());
                     }
+                    // The file is running on this thread — for another
+                    // constant registered to it. CRuby finds the feature
+                    // provided (`check_autoload_required`), so nothing is
+                    // pending until the load is over (#2128).
+                    AutoloadState::Idle if autoload_running_here(globals, &entry.feature) => {
+                        return Ok(Value::nil());
+                    }
                     AutoloadState::Idle
                     | AutoloadState::Consumed
                     | AutoloadState::Loading { .. } => {
-                        return Ok(Value::string(
-                            entry.feature.to_string_lossy().into_owned(),
-                        ));
+                        return Ok(entry.feature_value());
                     }
                 },
                 // A loaded constant, and a `TOPLEVEL_BINDING` that
@@ -952,14 +958,60 @@ pub(crate) fn autoload_pending(globals: &Globals, feature: &std::path::Path) -> 
         .any(|path| globals.is_feature_loaded(path))
 }
 
-fn autoload_feature_already_loaded(vm: &Executor, globals: &Globals, feature: &str) -> bool {
+fn autoload_feature_already_loaded(globals: &Globals, feature: &str) -> bool {
     let candidates = autoload_resolution_candidates(globals, feature);
     for path in &candidates {
-        if globals.is_feature_loaded(path) || vm.is_loading_path(path) {
+        if globals.is_feature_loaded(path) || globals.is_loading_here(path) {
             return true;
         }
     }
     false
+}
+
+/// Whether `feature` names a file this thread is in the middle of
+/// `require`ing, as far as that can be told without running anything:
+/// the candidates `$LOAD_PATH` gives it, and the stub tree's.
+///
+/// This is the question the non-triggering readers of an autoload ask
+/// (`autoload?`, `const_defined?`, `defined?`). CRuby's
+/// `check_autoload_required` finds a feature that is being loaded
+/// "provided", so to the thread running the file an autoload registered
+/// to it has nothing left to load: `autoload?` is nil and
+/// `const_defined?` false until the load is over (#2128). A file `load`
+/// runs provides no feature and does not count.
+pub(crate) fn autoload_running_here(globals: &Globals, feature: &std::path::Path) -> bool {
+    // Nearly every autoload is asked about while no file of its name is
+    // running; tell by the file name alone, before resolving anything.
+    let Some(stem) = feature.file_stem() else {
+        return false;
+    };
+    if !globals.is_loading_stem_here(stem) {
+        return false;
+    }
+    let name = feature.to_string_lossy();
+    if autoload_resolution_candidates(globals, &name)
+        .iter()
+        .any(|path| globals.is_loading_here(path))
+    {
+        return true;
+    }
+    // A bare feature may also resolve into the stub tree, which is
+    // searched ahead of `$LOAD_PATH` and is not listed on it.
+    if feature.is_absolute() || name.starts_with("./") || name.starts_with("../") {
+        return false;
+    }
+    crate::globals::stub_dirs().iter().any(|dir| {
+        let path = dir.join(feature);
+        if path.extension().is_some() && globals.is_loading_here(&path) {
+            return true;
+        }
+        ["rb", "so"].into_iter().any(|ext| {
+            let mut name = path.clone().into_os_string();
+            name.push(".");
+            name.push(ext);
+            globals.is_loading_here(std::path::Path::new(&name))
+        })
+    })
 }
 
 /// Whether `feature` names a file this thread is in the middle of
@@ -979,30 +1031,26 @@ pub(crate) fn autoload_feature_in_flight(
     globals: &mut Globals,
     feature: &std::path::Path,
 ) -> bool {
-    // Nearly every autoload fires for a file that is not running; tell
-    // by the file name alone, before resolving anything.
+    if autoload_running_here(globals, feature) {
+        return true;
+    }
+    // Whatever else the feature would resolve to: an installed gem's
+    // file, a host bundler's.
     let Some(stem) = feature.file_stem() else {
         return false;
     };
-    if !vm.is_loading_stem(stem) {
-        return false;
-    }
     let name = feature.to_string_lossy();
-    if autoload_resolution_candidates(globals, &name)
-        .iter()
-        .any(|path| vm.is_loading_path(path))
+    if !globals.is_loading_stem_here(stem)
+        || feature.is_absolute()
+        || name.starts_with("./")
+        || name.starts_with("../")
     {
-        return true;
-    }
-    // A bare feature may also resolve into the stub tree, which is
-    // searched ahead of `$LOAD_PATH` and is not listed on it.
-    if feature.is_absolute() || name.starts_with("./") || name.starts_with("../") {
         return false;
     }
     globals.search_lib(vm, feature).is_some_and(|found| {
         let found =
             crate::globals::lexically_normalize(&std::path::absolute(&found).unwrap_or(found));
-        vm.is_loading_path(&found)
+        globals.is_loading_here(&found)
     })
 }
 
@@ -1048,7 +1096,7 @@ fn autoload_resolution_candidates(
     };
     // Normalise candidates with `path::absolute` (expand `.`/`..`, no
     // symlink resolution) — NOT `canonicalize`. `require_lib_file`
-    // registers `$LOADED_FEATURES` entries and `Executor::loading_paths`
+    // registers `$LOADED_FEATURES` entries and `Globals::loading_features`
     // in the `path::absolute` form, so the already-loaded / currently-
     // loading probes below must use the same representation or they miss
     // on macOS where `/tmp`→`/private/tmp` (and `/var/folders`→
@@ -1129,7 +1177,7 @@ fn class_eval(
         let outer_cfp = caller_cfp.nearest_ruby_frame();
         crate::codegen::runtime::convert_frame_for_capture(vm, cfp, outer_cfp)?;
         let path = if supplied >= 2 {
-            args[1].coerce_to_str(vm, globals)?
+            crate::builtins::eval_file_name(vm, globals, args[1])?
         } else {
             let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
             format!("(eval at {})", caller_loc)

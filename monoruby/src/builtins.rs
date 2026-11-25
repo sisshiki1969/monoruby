@@ -38,7 +38,7 @@ pub(crate) mod process;
 mod random;
 pub(crate) mod range;
 mod regexp;
-pub(crate) use module::{autoload_feature_in_flight, autoload_pending};
+pub(crate) use module::{autoload_feature_in_flight, autoload_pending, autoload_running_here};
 pub(crate) use regexp::{
     check_match_encoding, check_regexp_preprocess, regexp_inner_from_parts,
     regexp_inner_from_string,
@@ -92,6 +92,21 @@ pub(crate) fn eval_src_encoding(code: Value) -> Option<String> {
     } else {
         Some(enc.name().to_string())
     }
+}
+
+/// The file name argument of an `eval` (`Kernel#eval`, `Binding#eval`,
+/// `instance_eval`, `class_eval`), with its encoding left for the parse
+/// that follows: the eval'd code's path — `__FILE__`, its backtrace
+/// lines — is that String, in the encoding it came in (#2096).
+pub(crate) fn eval_file_name(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: Value,
+) -> Result<String> {
+    let encoding = name.is_rstring_inner().map(|s| s.encoding());
+    let name = name.coerce_to_str(vm, globals)?;
+    crate::parser::set_eval_name_encoding(encoding);
+    Ok(name)
 }
 
 /// The source bytes of an `eval` argument. A String's bytes are taken

@@ -133,7 +133,7 @@ fn bare_native_stem(cand: &std::path::Path) -> Option<String> {
 
 /// The stub pin: monoruby's own stand-ins, searched ahead of `$LOAD_PATH`
 /// (see `Globals::search_candidate`).
-fn stub_dirs() -> [PathBuf; 2] {
+pub(crate) fn stub_dirs() -> [PathBuf; 2] {
     let stub_root = stub_dir();
     [stub_root.to_path_buf(), stub_root.join(ruby_platform())]
 }
@@ -712,60 +712,57 @@ impl Globals {
     }
 
     ///
-    /// Find and read a file for `Kernel#load`.
+    /// Find and read a file for `Kernel#load`, as CRuby's `rb_f_load`
+    /// over `rb_find_file` does. Returns the body and the path the file
+    /// goes by (`__FILE__`, backtrace lines, warnings):
     ///
-    /// Unlike `require_lib`, this function:
-    /// - Does NOT check or update `$LOADED_FEATURES`.
-    /// - Does NOT add `.rb` / `.so` extensions automatically.
-    /// - Absolute paths are loaded directly.
-    /// - Paths starting with `./` or `../` are resolved relative to CWD.
-    /// - Bare filenames are searched in `$LOAD_PATH`, then tried relative
-    ///   to CWD as a fallback.
+    /// - a `~/…`, absolute, or explicitly relative (`./…`, `../…`) name
+    ///   is expanded against the current directory and normalized
+    ///   (`load "./sub//f.rb"` runs `/dir/sub/f.rb`), symlinks left as
+    ///   they are;
+    /// - any other name is looked for under each `$LOAD_PATH` entry — the
+    ///   entry with its symlinks resolved, the name normalized under it;
+    /// - one found nowhere on `$LOAD_PATH` is read relative to the current
+    ///   directory and keeps the name *as it was written* (`load "f.rb"`
+    ///   runs `f.rb`, `load "sub/../f.rb"` runs `sub/../f.rb`). The
+    ///   returned flag is true for this case only.
+    ///
+    /// Unlike `require_lib`, nothing is added to the name and
+    /// `$LOADED_FEATURES` is neither read nor written. A failure names
+    /// the file as the caller wrote it.
     ///
     pub(crate) fn find_for_load(
         &mut self,
         vm: &mut Executor,
-        file_name: &std::path::Path,
-    ) -> Result<(Vec<u8>, std::path::PathBuf)> {
-        let file_name = &expand_tilde(file_name);
-        let path_str = file_name.to_string_lossy();
-
-        // Absolute path: load directly. `__FILE__` (and
-        // `Location#path`) keep the path *as given* — symlinks are NOT
-        // resolved (CRuby); the canonical form is captured separately
-        // at parse time for `Location#absolute_path`.
-        if path_str.starts_with('/') {
-            let (body, _) = load_file(file_name)?;
-            return Ok((body, file_name.to_path_buf()));
+        given: &std::path::Path,
+    ) -> Result<(Vec<u8>, std::path::PathBuf, bool)> {
+        let cant_load = |_| MonorubyErr::cant_load(given);
+        let expanded = expand_tilde(given);
+        let name = expanded.as_os_str().as_bytes();
+        if name.starts_with(b"/") || name.starts_with(b"./") || name.starts_with(b"../") {
+            let path =
+                lexically_normalize(&std::path::absolute(&expanded).unwrap_or(expanded.clone()));
+            let (body, _) = read_source_file(&path).map_err(cant_load)?;
+            return Ok((body, path, false));
         }
-
-        // Relative to CWD (starts with ./ or ../): resolve against CWD first.
-        if path_str.starts_with("./") || path_str.starts_with("../") {
-            let resolved = if let Ok(cwd) = std::env::current_dir() {
-                cwd.join(file_name)
-            } else {
-                file_name.into()
-            };
-            let (body, _) = load_file(&resolved)?;
-            return Ok((body, resolved));
-        }
-
-        // Bare filename: search $LOAD_PATH (entries go through the
-        // #to_path / #to_str protocol).
         for lib in self.load_path_entries(vm) {
-            let lib = std::path::PathBuf::from(lib).join(file_name);
-            if let Ok(res) = load_file(&lib) {
-                return Ok(res);
+            if lib.is_empty() {
+                continue;
             }
+            let lib = std::path::Path::new(&lib);
+            let Ok((body, _)) = read_source_file(&lib.join(given)) else {
+                continue;
+            };
+            // `rb_construct_expanded_load_path` keeps each entry's real
+            // path; the name under it is only normalized.
+            let dir = lib
+                .canonicalize()
+                .or_else(|_| std::path::absolute(lib))
+                .unwrap_or_else(|_| lib.to_path_buf());
+            return Ok((body, lexically_normalize(&dir.join(given)), false));
         }
-        // Fallback: try relative to CWD.
-        if let Ok(cwd) = std::env::current_dir() {
-            let resolved = cwd.join(file_name);
-            if resolved.is_file() {
-                return load_file(&resolved);
-            }
-        }
-        load_file(file_name)
+        let (body, _) = read_source_file(given).map_err(cant_load)?;
+        Ok((body, given.to_path_buf(), true))
     }
 }
 
