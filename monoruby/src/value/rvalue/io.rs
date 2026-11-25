@@ -698,6 +698,11 @@ pub enum ExtEnc {
     Fixed,
 }
 
+/// CRuby's `FMODE_PREP`: `fptr` is one of the three streams the process
+/// was started with. Kept in [`IoInner::capi_fmode`] with the other
+/// `fptr->mode` bits this struct does not model itself.
+const FMODE_PREP: i32 = 0x10000;
+
 /// A Ruby `IO` object's state.
 ///
 /// The per-object fields below used to live in hidden instance variables
@@ -880,6 +885,34 @@ impl IoInner {
             newline: NewlineMode::None,
             capi_fmode: 0,
         }
+    }
+
+    /// Whether this is one of the three streams the process was started
+    /// with, whose C `FILE *` has to be kept: CRuby's `FMODE_PREP`, which
+    /// makes `IO#reopen(path, mode)` refuse to drop an access mode the
+    /// stream has (`<STDIN> can't change access mode from "r" to "w"`).
+    /// It lives where every other `fptr->mode` bit this struct does not
+    /// model itself does, so a C extension reading `fptr->mode` sees it.
+    pub(crate) fn is_prep(&self) -> bool {
+        self.capi_fmode & FMODE_PREP != 0
+    }
+
+    /// `fptr->mode = fmode` in `rb_io_reopen`: the FMODE bits this struct
+    /// models, replaced wholesale by what the new mode and options say —
+    /// `FMODE_BINMODE`, the newline decorator's `FMODE_TEXTMODE`, and the
+    /// two bits no option can ask for, `FMODE_SIGNAL_ON_EPIPE` and
+    /// `FMODE_PREP` (the path form drops it, the IO form keeps the
+    /// receiver's own: `orig->mode | (fptr->mode & FMODE_PREP)`).
+    pub fn reset_mode_bits(&mut self, binmode: bool, newline: NewlineMode, prep: bool) {
+        self.binmode = binmode;
+        self.newline = newline;
+        self.signal_on_epipe = false;
+        self.capi_fmode = if prep {
+            self.capi_fmode | FMODE_PREP
+        } else {
+            self.capi_fmode & !FMODE_PREP
+        };
+        self.clear_char_pending();
     }
 
     pub(crate) fn signal_on_epipe(&self) -> bool {
@@ -1283,18 +1316,25 @@ impl IoInner {
     }
 
     pub(super) fn stdin() -> Self {
-        Self::with_kind(IoKind::Stdin)
+        // `rb_io_prep_stdin`: `FMODE_READABLE | FMODE_PREP`.
+        let mut io = Self::with_kind(IoKind::Stdin);
+        io.capi_fmode = FMODE_PREP;
+        io
     }
 
     pub(super) fn stdout() -> Self {
-        // `rb_io_prep_stdout`: `FMODE_WRITABLE | FMODE_SIGNAL_ON_EPIPE`.
+        // `rb_io_prep_stdout`: `FMODE_WRITABLE | FMODE_SIGNAL_ON_EPIPE |
+        // FMODE_PREP`.
         let mut io = Self::with_kind(IoKind::Stdout);
         io.signal_on_epipe = true;
+        io.capi_fmode = FMODE_PREP;
         io
     }
 
     pub(super) fn stderr() -> Self {
-        Self::with_kind(IoKind::Stderr)
+        let mut io = Self::with_kind(IoKind::Stderr);
+        io.capi_fmode = FMODE_PREP;
+        io
     }
 
     pub(crate) fn file(

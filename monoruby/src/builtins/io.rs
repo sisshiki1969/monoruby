@@ -77,7 +77,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func_with(IO_CLASS, "fcntl", io_fcntl, 1, 2, false);
     globals.define_builtin_func_with(IO_CLASS, "ioctl", io_ioctl, 1, 2, false);
     globals.define_builtin_func(IO_CLASS, "initialize_copy", io_initialize_copy, 1);
-    globals.define_builtin_func_with(IO_CLASS, "reopen", io_reopen, 1, 2, false);
+    globals.define_builtin_func_with_kw(IO_CLASS, "reopen", io_reopen, 1, 2, false, &[], true);
     globals.define_builtin_func(IO_CLASS, "to_io", io_to_io, 0);
     globals.define_builtin_func_with(IO_CLASS, "write", io_write_method, 0, 0, true);
     globals.define_builtin_func_with(IO_CLASS, "syswrite", io_syswrite, 1, 1, false);
@@ -249,6 +249,56 @@ fn parse_fmode(s: &str) -> Result<(String, bool, bool, Option<String>)> {
     Ok((base, bin, text, enc))
 }
 
+/// CRuby's `extract_binmode`: the `binmode:` / `textmode:` options read
+/// against the `b` / `t` the mode string already carries (`bin_str` /
+/// `text_str`). A keyword matching the flag the mode set is "specified
+/// twice", a keyword against the *other* flag is "both textmode and
+/// binmode specified", and a `false` keyword sets nothing. Answers the
+/// `(FMODE_BINMODE, FMODE_TEXTMODE)` pair.
+fn extract_binmode(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    kw: &Option<crate::value::Hashmap>,
+    bin_str: bool,
+    text_str: bool,
+) -> Result<(bool, bool)> {
+    let kw_bin = kw_opt(vm, globals, kw, "binmode")?;
+    let kw_text = kw_opt(vm, globals, kw, "textmode")?;
+    let mut bin = bin_str;
+    let mut text = text_str;
+    let both = || {
+        Err(MonorubyErr::argumenterr(
+            "both textmode and binmode specified",
+        ))
+    };
+    if let Some(v) = kw_text {
+        if text {
+            return Err(MonorubyErr::argumenterr("textmode specified twice"));
+        }
+        if bin {
+            return both();
+        }
+        if v.as_bool() {
+            text = true;
+        }
+    }
+    if let Some(v) = kw_bin {
+        if bin {
+            return Err(MonorubyErr::argumenterr("binmode specified twice"));
+        }
+        if text {
+            return both();
+        }
+        if v.as_bool() {
+            bin = true;
+        }
+    }
+    if bin && text {
+        return both();
+    }
+    Ok((bin, text))
+}
+
 /// The body of `IO#initialize`, and of `File#initialize` given a
 /// descriptor (CRuby's `rb_io_initialize` + `rb_io_extract_modeenc`):
 /// validates the fd, resolves mode/binmode/encodings from the positional
@@ -313,46 +363,7 @@ pub(super) fn io_init_from_fd(
         }
     };
 
-    // binmode/textmode keywords, replicating CRuby's `extract_binmode`
-    // exactly: a keyword matching a mode-string flag is "specified
-    // twice", a keyword against the *other* flag is "both textmode and
-    // binmode specified", and a `false` keyword sets nothing.
-    let kw_bin = kw_opt(vm, globals, &kw, "binmode")?;
-    let kw_text = kw_opt(vm, globals, &kw, "textmode")?;
-    let mut fmode_bin = bin_str;
-    let mut fmode_text = text_str;
-    if let Some(v) = kw_text {
-        if fmode_text {
-            return Err(MonorubyErr::argumenterr("textmode specified twice"));
-        }
-        if fmode_bin {
-            return Err(MonorubyErr::argumenterr(
-                "both textmode and binmode specified",
-            ));
-        }
-        if v.as_bool() {
-            fmode_text = true;
-        }
-    }
-    if let Some(v) = kw_bin {
-        if fmode_bin {
-            return Err(MonorubyErr::argumenterr("binmode specified twice"));
-        }
-        if fmode_text {
-            return Err(MonorubyErr::argumenterr(
-                "both textmode and binmode specified",
-            ));
-        }
-        if v.as_bool() {
-            fmode_bin = true;
-        }
-    }
-    if fmode_bin && fmode_text {
-        return Err(MonorubyErr::argumenterr(
-            "both textmode and binmode specified",
-        ));
-    }
-    let binmode = fmode_bin;
+    let (binmode, fmode_text) = extract_binmode(vm, globals, &kw, bin_str, text_str)?;
     if binmode && newline_decorator_given(vm, globals, kw)? {
         return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
     }
@@ -363,6 +374,17 @@ pub(super) fn io_init_from_fd(
     // A "BOM|utf-..." external asks for byte-order-mark detection; the
     // name after the prefix is the fallback when the stream has no BOM.
     let bom = names.is_some_and(|n| n.bom);
+
+    let (readable, writable) = match base.as_str() {
+        "r" => (true, false),
+        "w" | "a" => (false, true),
+        _ => (true, true), // "r+", "w+", "a+"
+    };
+    // Without a mode `rb_io_extract_modeenc` checks the encodings as for
+    // `"r"`; the descriptor's own access mode is taken only afterwards.
+    let mode_readable = mode_str.is_none() || readable;
+    let (slot, i) =
+        resolve_open_encodings(globals, names, binmode, mode_readable, readable, writable)?;
 
     // The descriptor itself is looked at only now: `rb_io_initialize`
     // reads the mode and the options (`rb_io_extract_modeenc`) first, so
@@ -375,11 +397,6 @@ pub(super) fn io_init_from_fd(
     }
 
     // The requested access mode must be satisfiable by the fd itself.
-    let (readable, writable) = match base.as_str() {
-        "r" => (true, false),
-        "w" | "a" => (false, true),
-        _ => (true, true), // "r+", "w+", "a+"
-    };
     if (readable && !fd_r) || (writable && !fd_w) {
         let err = std::io::Error::from_raw_os_error(libc::EINVAL);
         return Err(MonorubyErr::errno_plain(&globals.store, &err));
@@ -405,7 +422,6 @@ pub(super) fn io_init_from_fd(
     );
     *obj.as_io_inner_mut() = io_inner;
 
-    let (slot, i) = resolve_named_encodings(globals, names, binmode, readable, writable);
     store_io_encodings(globals, obj, slot, i);
     set_io_ecopts(globals, obj, ecopts)?;
     // Without a mode, `rb_io_initialize` takes the fmode from the
@@ -426,8 +442,8 @@ pub(super) fn io_init_from_fd(
     // FMODE_SETENC_BY_BOM is one more bit of the fmode a missing mode
     // replaces: `encoding: "BOM|UTF-8"` alone names the encoding and
     // leaves the mark in the stream.
-    if bom && readable && mode_str.is_some() {
-        detect_and_consume_bom(vm, globals, obj)?;
+    if bom && mode_str.is_some() {
+        set_encoding_by_bom_at_open(vm, globals, obj, readable)?;
     }
     Ok(())
 }
@@ -466,7 +482,7 @@ pub(super) fn fd_rw_mode(fd: i32) -> (bool, bool) {
 
 
 #[derive(Clone, Copy)]
-enum ExtSlot {
+pub(super) enum ExtSlot {
     Fixed(Value),
     /// Track `Encoding.default_external` live.
     Dynamic,
@@ -486,7 +502,7 @@ fn enc_by_name(globals: &Globals, name: &str) -> Option<Value> {
 /// `Encoding` normalizing names and made each read on an
 /// `ExtEnc::Dynamic` stream (any plain `File.open(name)`) ~40× slower.
 pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
-    if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+    if let Some(v) = globals.get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
         && !v.is_nil()
     {
         return v;
@@ -500,7 +516,7 @@ pub(super) fn enc_default_external_obj(globals: &mut Globals) -> Value {
 
 /// `Encoding.default_internal` object, or `None` if unset.
 pub(super) fn enc_default_internal_obj(globals: &mut Globals) -> Option<Value> {
-    let v = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))?;
+    let v = globals.get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)?;
     if v.is_nil() {
         None
     } else {
@@ -559,6 +575,35 @@ fn resolve_io_encodings(
     de: Value,
     di: Option<Value>,
 ) -> (ExtSlot, Option<Value>) {
+    resolve_io_encodings_bom(
+        globals,
+        explicit_ext,
+        explicit_int,
+        binmode,
+        readable,
+        writable,
+        de,
+        di,
+        false,
+    )
+}
+
+/// [`resolve_io_encodings`], told whether the external encoding came
+/// behind `BOM|` (`FMODE_SETENC_BY_BOM`): a conversion between an
+/// encoding and itself then stays, because the mark may still change the
+/// external one.
+#[allow(clippy::too_many_arguments)]
+fn resolve_io_encodings_bom(
+    globals: &Globals,
+    explicit_ext: Option<Value>,
+    explicit_int: Option<Value>,
+    binmode: bool,
+    readable: bool,
+    writable: bool,
+    de: Value,
+    di: Option<Value>,
+    bom: bool,
+) -> (ExtSlot, Option<Value>) {
     // `b`/binmode forces a BINARY external only when no encoding at all
     // was given (CRuby's `has_enc` check: an explicit *internal* encoding
     // also disables the binary default).
@@ -572,7 +617,7 @@ fn resolve_io_encodings(
         // `Encoding.default_internal`, so `set_encoding("UTF-8")` under a
         // default internal transcodes to it.
         let mut i = explicit_int.or(di);
-        if enc_is_binary(globals, e) || i.map(|x| enc_same(globals, x, e)).unwrap_or(false) {
+        if enc_is_binary(globals, e) || (!bom && i.is_some_and(|x| enc_same(globals, x, e))) {
             i = None;
         }
         return (ExtSlot::Fixed(e), i);
@@ -607,7 +652,7 @@ fn resolve_io_encodings(
         }
     } else {
         let it = explicit_int.unwrap();
-        let i = if enc_is_binary(globals, de) || enc_same(globals, it, de) {
+        let i = if enc_is_binary(globals, de) || (!bom && enc_same(globals, it, de)) {
             None
         } else {
             Some(it)
@@ -996,13 +1041,86 @@ fn resolve_named_encodings(
 ) -> (ExtSlot, Option<Value>) {
     let de = enc_default_external_obj(globals);
     let di = enc_default_internal_obj(globals);
+    resolve_names_with(globals, names, binmode, readable, writable, de, di)
+}
+
+/// [`resolve_named_encodings`] under the given defaults.
+fn resolve_names_with(
+    globals: &Globals,
+    names: Option<EncNames>,
+    binmode: bool,
+    readable: bool,
+    writable: bool,
+    de: Value,
+    di: Option<Value>,
+) -> (ExtSlot, Option<Value>) {
     match names {
         None => resolve_io_encodings(globals, None, None, binmode, readable, writable, de, di),
         Some(n) => {
             let di = if n.no_int { None } else { di };
-            resolve_io_encodings(globals, n.ext, n.int, false, readable, writable, de, di)
+            resolve_io_encodings_bom(
+                globals, n.ext, n.int, false, readable, writable, de, di, n.bom,
+            )
         }
     }
+}
+
+/// The encoding half of CRuby's `validate_enc_binmode`, for a resolved
+/// pair ([`resolve_io_encodings`]; `de` is `Encoding.default_external`):
+/// a readable stream in text mode cannot split characters of an external
+/// encoding that is not ASCII-compatible, unless what it reads is
+/// converted to an internal one.
+fn check_enc_binmode(
+    globals: &Globals,
+    slot: ExtSlot,
+    int: Option<Value>,
+    de: Value,
+    readable: bool,
+    binmode: bool,
+) -> Result<()> {
+    if !readable || binmode || int.is_some() {
+        return Ok(());
+    }
+    let ext = match slot {
+        ExtSlot::Fixed(e) => e,
+        ExtSlot::Dynamic | ExtSlot::Nil => de,
+    };
+    if super::encoding::encoding_object_ascii_compatible(globals, ext) {
+        return Ok(());
+    }
+    Err(MonorubyErr::argumenterr(
+        "ASCII incompatible encoding needs binmode",
+    ))
+}
+
+/// [`resolve_named_encodings`] for an open, ending as
+/// `rb_io_extract_modeenc` ends: in `validate_enc_binmode`
+/// ([`check_enc_binmode`]). This runs before the file, the descriptor or
+/// the command is touched, so a refused open creates, truncates and runs
+/// nothing.
+///
+/// `mode_readable` is what the *mode* says: an open that names none
+/// counts as `"r"` here, whatever the descriptor it wraps allows.
+pub(super) fn resolve_open_encodings(
+    globals: &mut Globals,
+    names: Option<EncNames>,
+    binmode: bool,
+    mode_readable: bool,
+    readable: bool,
+    writable: bool,
+) -> Result<(ExtSlot, Option<Value>)> {
+    let de = enc_default_external_obj(globals);
+    let di = enc_default_internal_obj(globals);
+    let (slot, int) = resolve_names_with(globals, names, binmode, readable, writable, de, di);
+    // Behind `BOM|` CRuby keeps a conversion between an encoding and
+    // itself (the mark may still change the external one), and that pair
+    // passes the check as any conversion does.
+    let pair_kept =
+        names.is_some_and(|n| n.bom && (n.int.is_some() || (!n.no_int && di.is_some())));
+    if !pair_kept {
+        check_enc_binmode(globals, slot, int, de, mode_readable, binmode)?;
+    }
+    Ok((slot, int))
 }
 
 /// CRuby's `io_encoding_set`: the encodings `IO#set_encoding(v1, v2)` and
@@ -1116,46 +1234,139 @@ fn class_read_opts(
     vm: &mut Executor,
     globals: &mut Globals,
     opts: Option<crate::value::Hashmap>,
-) -> Result<(String, Option<Value>, Option<Value>, bool)> {
+) -> Result<(String, Option<Value>, Option<Value>, Option<EncNames>)> {
     let mut mode = "r".to_string();
-    let Some(h) = opts else {
-        return Ok((mode, None, None, false));
-    };
-    // `open_args: [mode, opts]` stands for the mode and the options alike.
-    let mut hash = Some(h);
-    if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
-        && let Some(ary) = oa.try_array_ty()
-    {
-        hash = None;
-        for v in ary.iter() {
-            if let Some(s) = v.is_str() {
-                mode = s.to_string();
-            } else if let Some(hh) = v.try_hash_ty() {
-                hash = Some(hh);
+    // No options at all still goes through the encoding resolution below:
+    // `Encoding.default_external` alone can be one a text-mode read
+    // cannot take.
+    let mut hash = opts;
+    if let Some(h) = opts {
+        // `open_args: [mode, opts]` stands for the mode and the options
+        // alike.
+        if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
+            && let Some(ary) = oa.try_array_ty()
+        {
+            hash = None;
+            for v in ary.iter() {
+                if let Some(s) = v.is_str() {
+                    mode = s.to_string();
+                } else if let Some(hh) = v.try_hash_ty() {
+                    hash = Some(hh);
+                }
             }
         }
-    }
-    if let Some(m) = kw_opt(vm, globals, &hash, "mode")?
-        && let Some(s) = m.is_str()
-    {
-        mode = s.to_string();
+        if let Some(m) = kw_opt(vm, globals, &hash, "mode")?
+            && let Some(s) = m.is_str()
+        {
+            mode = s.to_string();
+        }
     }
     // `b` (or `binmode: true`) with no encoding given reads BINARY, as
     // `File.open(path, "rb")` does (`rb_io_extract_modeenc`).
     let (names, binmode) = parse_open_encodings(vm, globals, &mode, hash)?;
-    let (ext, int, bom) = match names {
+    // `validate_enc_binmode` too, before the file is opened: a read in
+    // text mode with an external encoding that is not ASCII-compatible is
+    // refused without creating or truncating anything.
+    let base = mode.split(':').next().unwrap_or("");
+    let readable = base.contains('r') || base.contains('+');
+    class_read_validate_encs(globals, names, binmode, readable)?;
+    let (ext, int) = match names {
         // The callers take `Encoding.default_internal` for an internal
         // encoding left out, and convert nothing between an encoding and
         // itself — which is how "no conversion" is said to them.
         Some(n) if n.no_int && n.int.is_none() => {
             let ext = n.ext.unwrap_or_else(|| enc_default_external_obj(globals));
-            (Some(ext), Some(ext), n.bom)
+            (Some(ext), Some(ext))
         }
-        Some(n) => (n.ext, n.int, n.bom),
-        None if binmode => (enc_by_name(globals, "ASCII-8BIT"), None, false),
-        None => (None, None, false),
+        Some(n) => (n.ext, n.int),
+        None if binmode => (enc_by_name(globals, "ASCII-8BIT"), None),
+        None => (None, None),
     };
-    Ok((mode, ext, int, bom))
+    Ok((mode, ext, int, names.filter(|n| n.bom)))
+}
+
+/// `validate_enc_binmode` for a class-level reader, from the names alone.
+/// The full resolution ([`resolve_open_encodings`]) would answer a pair
+/// these readers do not use — they keep encoding *objects* and resolve
+/// them per read — and asking it for one cost `File.read` some 1,600
+/// instructions in name normalization. What the check needs is only
+/// whether a conversion survives `rb_io_ext_int_to_encs`, which is
+/// whether the internal encoding differs from the external one.
+fn class_read_validate_encs(
+    globals: &mut Globals,
+    names: Option<EncNames>,
+    binmode: bool,
+    readable: bool,
+) -> Result<()> {
+    if !readable || binmode {
+        return Ok(());
+    }
+    // Each default is asked for only when it is the answer: reading
+    // `$DEFAULT_EXTERNAL` / `$DEFAULT_INTERNAL` means interning the name
+    // first, which is most of what a reader that names its encodings
+    // would pay here.
+    let int = match names {
+        // An internal encoding left out is `Encoding.default_internal`,
+        // unless the names said there is none (`"-"`, or two given).
+        Some(n) if n.no_int => n.int,
+        Some(n) => n.int.or_else(|| enc_default_internal_obj(globals)),
+        None => enc_default_internal_obj(globals),
+    };
+    let ext = match names.and_then(|n| n.ext) {
+        Some(e) => e,
+        None => enc_default_external_obj(globals),
+    };
+    if int.is_some_and(|i| i.id() != ext.id() && !enc_same(globals, i, ext)) {
+        // A conversion survives `rb_io_ext_int_to_encs`: characters of
+        // the external encoding are never handed out whole.
+        return Ok(());
+    }
+    if super::encoding::encoding_object_ascii_compatible(globals, ext) {
+        return Ok(());
+    }
+    Err(MonorubyErr::argumenterr(
+        "ASCII incompatible encoding needs binmode",
+    ))
+}
+
+/// What a class-level reader's `BOM|` request settles on once the head of
+/// the stream is known: the mark's encoding, or — with no mark — the
+/// internal encoding alone, as `io_set_encoding_by_bom` leaves the stream
+/// (see [`set_encoding_by_bom_at_open`]). The answer is in the readers'
+/// own convention, where an internal encoding equal to the external one
+/// says "convert nothing" (and keeps `Encoding.default_internal` out).
+fn class_read_bom_encs(
+    globals: &mut Globals,
+    names: EncNames,
+    detected: Option<Value>,
+) -> (Option<Value>, Option<Value>) {
+    let de = enc_default_external_obj(globals);
+    let declared = names.ext.unwrap_or(de);
+    let converted = if names.no_int {
+        None
+    } else {
+        names.int.or_else(|| enc_default_internal_obj(globals))
+    };
+    match (detected, converted) {
+        (Some(e), Some(i)) if !enc_same(globals, i, e) => (Some(e), Some(i)),
+        (Some(e), _) => (Some(e), Some(e)),
+        (None, Some(i)) => (Some(i), Some(i)),
+        (None, None) => (Some(declared), Some(declared)),
+    }
+}
+
+/// [`check_enc_binmode`] for a class-level reader's pair, after a `BOM|`
+/// request settled it ([`class_read_bom_encs`]).
+fn class_read_check_binmode(
+    globals: &mut Globals,
+    ext: Option<Value>,
+    int: Option<Value>,
+    binmode: bool,
+) -> Result<()> {
+    let de = enc_default_external_obj(globals);
+    let e = ext.unwrap_or(de);
+    let i = int.filter(|i| !enc_same(globals, *i, e));
+    check_enc_binmode(globals, ExtSlot::Fixed(e), i, de, true, binmode)
 }
 
 /// An IO keeps its read-conversion options — CRuby's `encs.ecflags` bits
@@ -1286,10 +1497,11 @@ fn class_read_ecopts(
     super::encoding::io_read_ecopts(globals, 0, Some(h))
 }
 
-/// Store the encodings [`parse_open_encodings`] read (`names`,
-/// `binmode`) on a freshly opened stream, with the rest of what the mode
-/// and the options ask of it. `opt_range` is the `lfp` arg span to scan
-/// for a trailing options Hash.
+/// Store the encodings an open settled on before it touched the file
+/// (`encs`, from [`resolve_open_encodings`]; `bom` and `binmode` as
+/// [`parse_open_encodings`] read them) on the freshly opened stream, with
+/// the rest of what the mode and the options ask of it. `opt_range` is
+/// the `lfp` arg span to scan for a trailing options Hash.
 pub(super) fn init_io_encodings(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1297,17 +1509,13 @@ pub(super) fn init_io_encodings(
     mut io: Value,
     mode: &str,
     readable: bool,
-    names: Option<EncNames>,
+    (slot, i): (ExtSlot, Option<Value>),
+    bom: bool,
     binmode: bool,
     opt_range: std::ops::Range<usize>,
     extra: Option<Value>,
 ) -> Result<()> {
-    let bom = names.is_some_and(|n| n.bom);
-    // The stream's write-ability decides whether a missing external
-    // encoding tracks default_external (read-only) or stays nil.
     let base = mode.split(':').next().unwrap_or("");
-    let writable = base.contains('w') || base.contains('a') || base.contains('+');
-    let (slot, i) = resolve_named_encodings(globals, names, binmode, readable, writable);
     store_io_encodings(globals, io, slot, i);
     if binmode {
         io.as_io_inner_mut().set_binmode();
@@ -1338,10 +1546,9 @@ pub(super) fn init_io_encodings(
         io.as_io_inner_mut().set_universal_newline(true);
     }
     // A "BOM|utf-..." encoding: peek the stream for a byte-order mark;
-    // a detected BOM is consumed and *overrides* the external encoding,
-    // otherwise the declared one stays.
-    if bom && readable {
-        detect_and_consume_bom(vm, globals, io)?;
+    // a detected BOM is consumed and *overrides* the external encoding.
+    if bom {
+        set_encoding_by_bom_at_open(vm, globals, io, readable)?;
     }
     Ok(())
 }
@@ -3007,6 +3214,7 @@ fn io_class_read(
     };
 
     let (mode, ext_obj, int_obj, bom) = class_read_opts(vm, globals, opts)?;
+    let binmode = mode.split(':').next().unwrap_or("").contains('b');
     let ecopts = class_read_ecopts(vm, globals, opts)?;
     let universal = class_reads_universal_newline(vm, globals, &mode, opts)?;
     // A write/append-only mode can't be used for reading.
@@ -3019,6 +3227,26 @@ fn io_class_read(
         file.seek(SeekFrom::Start(offset)).map_err(|err| {
             MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_seek", &filename)
         })?;
+    }
+
+    // A `BOM|` encoding: the mark is taken off the head of the stream
+    // before anything is read from it — a sized read starts after it, as
+    // on a stream opened that way.
+    let (mut ext_obj, mut int_obj) = (ext_obj, int_obj);
+    if let Some(names) = bom {
+        let mut head = [0u8; 4];
+        let n = read_head(&mut file, &mut head)
+            .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "io_fread", &filename))?;
+        let consumed = match bom_at(&head[..n]) {
+            Some((consume, name)) => (consume, enc_by_name(globals, name)),
+            None => (0, None),
+        };
+        file.seek(SeekFrom::Start(offset + consumed.0 as u64))
+            .map_err(|err| {
+                MonorubyErr::errno_with_path(&globals.store, &err, "rb_io_seek", &filename)
+            })?;
+        (ext_obj, int_obj) = class_read_bom_encs(globals, names, consumed.1);
+        class_read_check_binmode(globals, ext_obj, int_obj, binmode)?;
     }
 
     if let Some(n) = length {
@@ -3045,30 +3273,6 @@ fn io_class_read(
     }
 
     use crate::value::Encoding as E;
-    // A "BOM|..." mode: a leading byte-order mark is consumed and
-    // overrides the declared external encoding.
-    let mut ext_obj = ext_obj;
-    if bom {
-        let (consume, name): (usize, &str) = match buf.first() {
-            Some(0xEF) if buf.len() >= 3 && buf[1] == 0xBB && buf[2] == 0xBF => (3, "UTF-8"),
-            Some(0x00) if buf.len() >= 4 && buf[1] == 0x00 && buf[2] == 0xFE && buf[3] == 0xFF => {
-                (4, "UTF-32BE")
-            }
-            Some(0xFF) if buf.len() >= 2 && buf[1] == 0xFE => {
-                if buf.len() >= 4 && buf[2] == 0x00 && buf[3] == 0x00 {
-                    (4, "UTF-32LE")
-                } else {
-                    (2, "UTF-16LE")
-                }
-            }
-            Some(0xFE) if buf.len() >= 2 && buf[1] == 0xFF => (2, "UTF-16BE"),
-            _ => (0, ""),
-        };
-        if consume > 0 {
-            buf.drain(..consume);
-            ext_obj = enc_by_name(globals, name);
-        }
-    }
     let ext = match ext_obj {
         Some(o) => enc_obj_to_enum(globals, o).unwrap_or(E::UTF8),
         None => {
@@ -3119,7 +3323,7 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts) =
         class_getline_args(vm, globals, lfp)?;
     let universal = class_reads_universal_newline(
         vm,
@@ -3133,9 +3337,32 @@ fn io_class_readlines(
     reject_unreadable_mode(&path, &mode)?;
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
     set_io_ecopts(globals, io_val, ecopts)?;
+    // A `BOM|` encoding: the mark at the head of the stream is taken off
+    // and names the external encoding (#2217). The fresh IO is rooted
+    // while that read runs, and closed when the pair it settles on turns
+    // out to be one a text-mode read cannot take.
+    let (ext_obj, int_obj) = if let Some(names) = bom {
+        let binmode = mode.split(':').next().unwrap_or("").contains('b');
+        let settled = vm.with_temp_scope(|vm| {
+            vm.temp_push(io_val);
+            let detected = consume_bom(vm, globals, io_val)?;
+            let (ext, int) = class_read_bom_encs(globals, names, detected);
+            class_read_check_binmode(globals, ext, int, binmode)?;
+            Ok((ext, int))
+        });
+        match settled {
+            Ok(pair) => pair,
+            Err(e) => {
+                let _ = io_val.as_io_inner_mut().close(&globals.store);
+                return Err(e);
+            }
+        }
+    } else {
+        (ext_obj, int_obj)
+    };
+    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     if universal {
         io_val.as_io_inner_mut().set_universal_newline(true);
     }
@@ -3210,7 +3437,7 @@ fn class_getline_args(
     Option<Vec<u8>>,
     Option<usize>,
     bool,
-    (String, Option<Value>, Option<Value>, bool),
+    (String, Option<Value>, Option<Value>, Option<EncNames>),
     (i64, Option<Value>),
 )> {
     let opts = lfp.try_arg(3).and_then(|v| v.try_hash_ty());
@@ -3307,7 +3534,7 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .to_str()?
         .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    let (sep, limit, chomp, (mode, ext_obj, int_obj, _bom), ecopts) =
+    let (sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts) =
         class_getline_args(vm, globals, lfp)?;
     let universal = class_reads_universal_newline(
         vm,
@@ -3321,9 +3548,32 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     reject_unreadable_mode(&path, &mode)?;
     let file = std::fs::File::open(&path)
         .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     let mut io_val = Value::new_file(file, path, None, true, false);
     set_io_ecopts(globals, io_val, ecopts)?;
+    // A `BOM|` encoding: the mark at the head of the stream is taken off
+    // and names the external encoding (#2217). The fresh IO is rooted
+    // while that read runs, and closed when the pair it settles on turns
+    // out to be one a text-mode read cannot take.
+    let (ext_obj, int_obj) = if let Some(names) = bom {
+        let binmode = mode.split(':').next().unwrap_or("").contains('b');
+        let settled = vm.with_temp_scope(|vm| {
+            vm.temp_push(io_val);
+            let detected = consume_bom(vm, globals, io_val)?;
+            let (ext, int) = class_read_bom_encs(globals, names, detected);
+            class_read_check_binmode(globals, ext, int, binmode)?;
+            Ok((ext, int))
+        });
+        match settled {
+            Ok(pair) => pair,
+            Err(e) => {
+                let _ = io_val.as_io_inner_mut().close(&globals.store);
+                return Err(e);
+            }
+        }
+    } else {
+        (ext_obj, int_obj)
+    };
+    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
     if universal {
         io_val.as_io_inner_mut().set_universal_newline(true);
     }
@@ -3467,6 +3717,19 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         .find_map(|v| v.try_hash_ty())
         .filter(|_| takes_opts);
     let ecopts = super::encoding::io_read_ecopts(globals, 0, opts_hash)?;
+    // The read end's encodings, checked as `io_encoding_set` checks them
+    // (`validate_enc_binmode`; `binmode: true` is applied only afterwards
+    // and does not help). CRuby closes the pipe it had made when this
+    // raises; here nothing is made yet.
+    let read_encs = match names {
+        Some(n) if n.ext.is_some() || n.int.is_some() => {
+            let di = enc_default_internal_obj(globals);
+            let (slot, i) = resolve_names_with(globals, names, false, true, false, de, di);
+            check_enc_binmode(globals, slot, i, de, true, false)?;
+            Some((slot, i))
+        }
+        _ => None,
+    };
 
     // CLOEXEC by default, like CRuby: pipe ends do not leak across
     // exec unless explicitly redirected (or close_on_exec = false).
@@ -3493,12 +3756,34 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         )?;
         Ok(obj)
     };
-    let mut read_io = make_end(vm, globals, fds[0], "r")?;
+    // An `#initialize` that raises (a redefined one, or the read end's
+    // under an `Encoding.default_external` no text-mode stream can read)
+    // must not leave the descriptors open: `rb_io_s_pipe` closes them.
+    let close_fd = |fd: i32| {
+        // SAFETY: closing a descriptor of the pipe made above, which no
+        // IO object took over.
+        unsafe { libc::close(fd) };
+    };
+    let mut read_io = match make_end(vm, globals, fds[0], "r") {
+        Ok(io) => io,
+        Err(e) => {
+            close_fd(fds[0]);
+            close_fd(fds[1]);
+            return Err(e);
+        }
+    };
     // `read_io` lives only in this Rust local while the second
     // `#initialize` (and later the block) runs Ruby — root both ends.
     vm.with_temp_scope(|vm| {
     vm.temp_push(read_io);
-    let mut write_io = make_end(vm, globals, fds[1], "w")?;
+    let mut write_io = match make_end(vm, globals, fds[1], "w") {
+        Ok(io) => io,
+        Err(e) => {
+            close_fd(fds[1]);
+            let _ = read_io.as_io_inner_mut().close(&globals.store);
+            return Err(e);
+        }
+    };
     vm.temp_push(write_io);
     // CRuby's `rb_io_s_pipe` marks the write end synchronous. It is not a
     // nicety: both ends usually live in one process, so a buffered write
@@ -3508,10 +3793,7 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // The read end carries the requested (or default) encodings; the
     // write end carries none — `#initialize` with mode "w" already left
     // it encoding-less.
-    if let Some(n) = names
-        && (n.ext.is_some() || n.int.is_some())
-    {
-        let (slot, i) = resolve_named_encodings(globals, names, false, true, false);
+    if let Some((slot, i)) = read_encs {
         store_io_encodings(globals, read_io, slot, i);
     }
     set_io_ecopts(globals, read_io, ecopts)?;
@@ -3700,6 +3982,8 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         let from_opts = encoding_option_names(vm, globals, encoding, extenc, intenc)?;
         one_enc_spec(from_mode, from_opts)?
     };
+    let (slot, int_enc) =
+        resolve_open_encodings(globals, enc_names, binmode, readable, readable, !readable)?;
 
     let fork = cmd_val.try_array_ty().is_none()
         && cmd_val.is_rstring().is_some_and(|s| s.as_bytes() == b"-");
@@ -3787,8 +4071,7 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     let class_id = lfp.self_val().as_class_id();
     let io_val = Value::new_io_with_class(IoInner::popen(pid, reader, writer), class_id);
     {
-        let (slot, i) = resolve_named_encodings(globals, enc_names, binmode, readable, !readable);
-        store_io_encodings(globals, io_val, slot, i);
+        store_io_encodings(globals, io_val, slot, int_enc);
         let mut io = io_val;
         if binmode {
             io.as_io_inner_mut().set_binmode();
@@ -4185,14 +4468,18 @@ fn io_initialize_copy(
 ///
 /// ### IO#reopen
 /// - reopen(io) -> self
-/// - reopen(path, mode = <receiver's current mode>) -> self
+/// - reopen(path, mode = <receiver's current mode>, **opts) -> self
 ///
 /// Re-associates the receiver with another stream. The IO form
 /// `dup2(2)`s the other stream's fd onto the receiver's fd number
 /// (sharing the open file description, hence the position) and the
-/// receiver takes on the other IO's class/path/mode; the path form
-/// has `freopen(3)` semantics — the receiver's fd number is
-/// re-pointed at a fresh open of `path`, positioned at 0.
+/// receiver takes on the other IO's class/path/mode/encodings; the path
+/// form has `freopen(3)` semantics — the receiver's fd number is
+/// re-pointed at a fresh open of `path`, positioned at 0. A mode or
+/// options given to the path form are read as an open's are, and
+/// replace the stream's mode and encodings ([`io_reopen_path`]);
+/// an argument after the first keeps the IO form from being taken,
+/// `to_path` or `to_str` then standing in for a path (#2215).
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/reopen.html]
 #[monoruby_builtin]
@@ -4282,11 +4569,34 @@ fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Val
         (o.is_readable(), o.is_writable())
     };
     rebuild_reopened_inner(&mut self_, fd1, other.as_io_inner().path(), readable, writable);
-    // `fptr->mode = orig->mode | …`: the receiver takes the other
-    // stream's FMODE_SIGNAL_ON_EPIPE, so `STDOUT.reopen(pipe_w)` raises
-    // a plain `Errno::EPIPE` like the pipe itself would.
-    let signal_on_epipe = other.as_io_inner().signal_on_epipe();
-    self_.as_io_inner_mut().set_signal_on_epipe(signal_on_epipe);
+    // `fptr->mode = orig->mode | (fptr->mode & FMODE_PREP); fptr->encs =
+    // orig->encs`: the receiver takes the other stream's mode bits and
+    // encodings wholesale — its FMODE_SIGNAL_ON_EPIPE among them, so
+    // `STDOUT.reopen(pipe_w)` raises a plain `Errno::EPIPE` like the pipe
+    // itself would. Only `#lineno`, which is no part of `fptr->mode`,
+    // stays the receiver's.
+    let (signal_on_epipe, binmode, newline, ext_state, ext, int) = {
+        let o = other.as_io_inner();
+        (
+            o.signal_on_epipe(),
+            o.binmode(),
+            o.newline(),
+            o.ext_state(),
+            o.ext_enc(),
+            o.int_enc(),
+        )
+    };
+    {
+        let inner = self_.as_io_inner_mut();
+        let prep = inner.is_prep();
+        inner.reset_mode_bits(binmode, newline, prep);
+        inner.set_signal_on_epipe(signal_on_epipe);
+        inner.set_ext_enc(ext_state, ext);
+        inner.set_int_enc(int);
+    }
+    // `encs` carries the read-conversion options too.
+    let ecopts = io_ecopts(globals, other);
+    set_io_ecopts(globals, self_, ecopts)?;
     if let Some(pos) = other_pos {
         // Both fds now share one description; seeking re-syncs the
         // kernel offset to the logical position and drops both sides'
@@ -4303,73 +4613,238 @@ fn io_reopen_io(globals: &mut Globals, self_: Value, other: Value) -> Result<Val
     Ok(self_)
 }
 
-/// `IO#reopen(path, mode)`: freopen(3) semantics. Opens `path` and
-/// re-points the receiver's fd number at it (or installs a fresh fd
-/// when the receiver is closed — allowed for the path form).
+/// What a mode and options hand `IO#reopen(path, mode, **opts)` before
+/// the stream is touched: `rb_io_extract_modeenc`'s answer for the path
+/// form, down to the newline decorator and the read-conversion options.
+struct ReopenMode {
+    /// Flags for the fresh `open(2)`.
+    oflags: i32,
+    readable: bool,
+    writable: bool,
+    binmode: bool,
+    newline: crate::value::rvalue::io::NewlineMode,
+    /// The resolved external / internal encodings
+    /// ([`resolve_open_encodings`]).
+    encs: (ExtSlot, Option<Value>),
+    /// `invalid:` / `undef:` / `replace:` ([`set_io_ecopts`]).
+    ecopts: (i64, Option<Value>),
+}
+
+/// `rb_io_extract_modeenc` as `IO#reopen`'s path form calls it: every
+/// error it can raise (an unknown encoding name, a mode conflict, a bad
+/// `newline:` / `invalid:` value, a text-mode read of an
+/// ASCII-incompatible encoding) is raised here, before the receiver's
+/// stream is disturbed.
+fn reopen_extract(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pos_mode: Option<Value>,
+    kw: Option<crate::value::Hashmap>,
+) -> Result<ReopenMode> {
+    use crate::value::rvalue::io::NewlineMode;
+    let kw_mode = kw_opt(vm, globals, &kw, "mode")?;
+    if pos_mode.is_some() && kw_mode.is_some() {
+        return Err(MonorubyErr::argumenterr("mode specified twice"));
+    }
+    // The mode is an Integer of open(2) flags (through `to_int`, which
+    // `rb_check_to_integer` asks for first) or else a String; with
+    // neither given it is `"r"`.
+    let (mut oflags, bin_str, text_str, menc) = match pos_mode.or(kw_mode) {
+        None => (libc::O_RDONLY as i64, false, false, None),
+        Some(v) => {
+            if v.is_str().is_none()
+                && let Some(n) = v.check_to_int(vm, globals)?
+            {
+                (n.coerce_to_int_i64(vm, globals)?, false, false, None)
+            } else {
+                let s = v.coerce_to_string(vm, globals)?;
+                let (flags, _) = super::file::oflags_from_mode_string(&s)?;
+                let (_, bin, text, enc) = parse_fmode(&s)?;
+                (flags, bin, text, enc)
+            }
+        }
+    };
+    // `flags:` ORs extra open(2) bits onto whatever the mode asked for.
+    if let Some(f) = kw_opt(vm, globals, &kw, "flags")? {
+        oflags |= f.coerce_to_int_i64(vm, globals)?;
+    }
+    let access = (oflags as i32) & libc::O_ACCMODE;
+    let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
+    let writable = access == libc::O_WRONLY || access == libc::O_RDWR;
+    let (binmode, textmode) = extract_binmode(vm, globals, &kw, bin_str, text_str)?;
+    if binmode && newline_decorator_given(vm, globals, kw)? {
+        return Err(MonorubyErr::argumenterr(
+            "newline decorator with binary mode",
+        ));
+    }
+    // `perm:` is not read at all here: `rb_io_reopen` hands the
+    // extraction no `vperm` and opens with 0666.
+    let names = open_enc_names(vm, globals, menc.as_deref(), kw)?;
+    let ecopts = super::encoding::io_read_ecopts(globals, 0, kw)?;
+    let mut newline = match kw {
+        Some(h) if !binmode => newline_decorator_of(vm, globals, h)?.unwrap_or(NewlineMode::None),
+        _ => NewlineMode::None,
+    };
+    if !binmode
+        && newline == NewlineMode::None
+        && readable
+        && reads_universal_newline(vm, globals, textmode, kw)?
+    {
+        newline = NewlineMode::Universal;
+    }
+    let encs = resolve_open_encodings(globals, names, binmode, readable, readable, writable)?;
+    Ok(ReopenMode {
+        oflags: oflags as i32,
+        readable,
+        writable,
+        binmode,
+        newline,
+        encs,
+        ecopts,
+    })
+}
+
+/// `rb_io_fmode_modestr`: how CRuby spells a stream's own access mode in
+/// the message of a refused stdio reopen.
+fn fmode_modestr(
+    readable: bool,
+    writable: bool,
+    append: bool,
+    create: bool,
+    binmode: bool,
+    textmode: bool,
+) -> String {
+    let base = if append {
+        if readable && writable { "a+" } else { "a" }
+    } else if readable && writable {
+        if create { "w+" } else { "r+" }
+    } else if writable {
+        "w"
+    } else {
+        "r"
+    };
+    let bt = if binmode {
+        "b"
+    } else if textmode {
+        "t"
+    } else {
+        ""
+    };
+    match base.strip_suffix('+') {
+        Some(b) => format!("{b}{bt}+"),
+        None => format!("{base}{bt}"),
+    }
+}
+
+/// `IO#reopen(path, mode = nil, **opts)`: freopen(3) semantics. Opens
+/// `path` and re-points the receiver's fd number at it (or installs a
+/// fresh fd when the receiver is closed — allowed for the path form).
+///
+/// A mode or options replace the stream's whole mode and encoding
+/// state (`fptr->mode = fmode; fptr->encs = convconfig`); with neither,
+/// everything the receiver had — access mode, binmode, newline
+/// decorator, encodings, conversion options, `sync` — is kept.
 fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Value> {
     let mut self_ = lfp.self_val();
+    // The `**opts` Hash stays in its frame slot, so it is rooted across
+    // the conversions below (`to_path`, the mode's `to_str` / `to_int`,
+    // `flags:`'s `to_int`).
+    let kw_hash = lfp.try_arg(2).filter(|v| v.try_hash_ty().is_some());
+    // `rb_scan_args`'s ":" hands `rb_io_reopen` nil for `**{}`, and
+    // whether anything is extracted at all hangs on that nil.
+    let kw = kw_hash.map(|h| h.as_hash()).filter(|h| !h.is_empty());
+    let pos_mode = lfp.try_arg(1).filter(|v| !v.is_nil());
+    // `FilePathValue(fname)` runs before the mode and the options are
+    // read.
     let path = super::file::to_path_str(vm, globals, lfp.arg(0))?;
-    let was_open = !self_.as_io_inner().is_closed();
-    // Resolve the mode: an explicit argument wins; otherwise
-    // reconstruct it from the receiver's current state (CRuby reuses
-    // fptr->mode). F_GETFL recovers O_APPEND, which monoruby's inner
-    // doesn't store; write-only non-append receivers are treated as
-    // "w" (create + truncate), matching the common `File.open(_, "w")`
-    // origin.
-    let explicit_mode = lfp.try_arg(1).is_some();
-    let mode_base = if let Some(m) = lfp.try_arg(1) {
-        let mode = if let Some(n) = m.try_fixnum() {
-            super::file::mode_string_from_flags(n)
-        } else {
-            m.coerce_to_string(vm, globals)?
-        };
-        mode.split(':').next().unwrap().replace('b', "")
+    let mode = if pos_mode.is_some() || kw.is_some() {
+        Some(reopen_extract(vm, globals, pos_mode, kw)?)
     } else {
-        let (readable, writable) = {
-            let i = self_.as_io_inner();
-            (i.is_readable(), i.is_writable())
-        };
-        let append = if was_open {
-            let fd = self_.as_io_inner().fileno()?;
-            // SAFETY: F_GETFL on the receiver's open fd; reads no memory.
-            unsafe { libc::fcntl(fd, libc::F_GETFL) & libc::O_APPEND != 0 }
-        } else {
-            false
-        };
-        match (readable, writable, append) {
-            (true, false, _) | (false, false, _) => "r".to_string(),
-            (false, true, true) => "a".to_string(),
-            (false, true, false) => "w".to_string(),
-            (true, true, true) => "a+".to_string(),
-            (true, true, false) => "r+".to_string(),
+        None
+    };
+    let was_open = !self_.as_io_inner().is_closed();
+    // F_GETFL recovers O_APPEND, which monoruby's inner doesn't store.
+    let was_append = was_open && {
+        let fd = self_.as_io_inner().fileno()?;
+        // SAFETY: F_GETFL on the receiver's open fd; reads no memory.
+        unsafe { libc::fcntl(fd, libc::F_GETFL) & libc::O_APPEND != 0 }
+    };
+    let (readable, writable, oflags) = match &mode {
+        Some(m) => (m.readable, m.writable, m.oflags),
+        None => {
+            // `oflags = rb_io_fmode_oflags(fptr->mode)`: the receiver's
+            // own mode opens the new file. A write-only non-append
+            // receiver is treated as "w" (create + truncate), matching
+            // the common `File.open(_, "w")` origin.
+            let (r, w) = {
+                let i = self_.as_io_inner();
+                (i.is_readable(), i.is_writable())
+            };
+            let oflags = match (r, w, was_append) {
+                (_, false, _) => libc::O_RDONLY,
+                (false, true, true) => libc::O_WRONLY | libc::O_CREAT | libc::O_APPEND,
+                (false, true, false) => libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                (true, true, true) => libc::O_RDWR | libc::O_CREAT | libc::O_APPEND,
+                (true, true, false) => libc::O_RDWR,
+            };
+            (r || !w, w, oflags)
         }
     };
-    let (readable, writable) = match mode_base.as_str() {
-        "r" => (true, false),
-        "w" | "a" | "w-" | "-w" => (false, true),
-        "r+" | "+r" | "w+" | "+w" | "a+" | "+a" => (true, true),
-        _ => {
-            return Err(MonorubyErr::argumenterr(format!(
-                "invalid access mode {mode_base}"
-            )));
+    // `sync` lives in the write buffer, which the rebuild below replaces:
+    // keep it when the mode was not replaced (a replaced one drops
+    // FMODE_SYNC with the rest).
+    let was_sync = was_open && mode.is_none() && self_.as_io_inner().sync();
+    if let Some(m) = &mode {
+        let inner = self_.as_io_inner();
+        // One of the process's own three streams may *gain* an access
+        // mode but not lose one — its C `FILE *` has to stay usable.
+        if inner.is_prep() {
+            let (old_r, old_w) = (inner.is_readable(), inner.is_writable());
+            if (old_r && !m.readable) || (old_w && !m.writable) {
+                let name = inner.kind().descriptor().to_string();
+                let old = fmode_modestr(old_r, old_w, was_append, false, inner.binmode(), false);
+                let new = fmode_modestr(
+                    m.readable,
+                    m.writable,
+                    m.oflags & libc::O_APPEND != 0,
+                    m.oflags & libc::O_CREAT != 0,
+                    m.binmode,
+                    m.newline == crate::value::rvalue::io::NewlineMode::Universal,
+                );
+                return Err(MonorubyErr::argumenterr(format!(
+                    "{name} can't change access mode from \"{old}\" to \"{new}\""
+                )));
+            }
         }
-    };
-    let mut opt = std::fs::OpenOptions::new();
-    match mode_base.as_str() {
-        "r" => opt.read(true),
-        "w" => opt.write(true).create(true).truncate(true),
-        "w-" => opt.write(true).create(true),
-        "-w" => opt.write(true),
-        "a" => opt.write(true).create(true).append(true),
-        "r+" | "+r" => opt.read(true).write(true),
-        "w+" | "+w" => opt.read(true).write(true).create(true).truncate(true),
-        "a+" | "+a" => opt.read(true).write(true).create(true).append(true),
-        _ => unreachable!(),
-    };
-    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opt, libc::O_CLOEXEC);
-    let file = opt.open(&path).map_err(|e| {
-        MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path)
-    })?;
+        // `fptr->mode = fmode; fptr->encs = convconfig`, *before* the
+        // open: a failed open leaves the receiver with the new mode and
+        // encodings, as on CRuby. (The access bits are the exception —
+        // they belong to the stream the rebuild below installs.)
+        self_
+            .as_io_inner_mut()
+            .reset_mode_bits(m.binmode, m.newline, false);
+        store_io_encodings(globals, self_, m.encs.0, m.encs.1);
+        set_io_ecopts(globals, self_, m.ecopts)?;
+    }
+    // NUL bytes were rejected by `to_path_str`, so this cannot fail.
+    let cpath = std::ffi::CString::new(path.clone())
+        .map_err(|_| MonorubyErr::argumenterr("path name contains null byte"))?;
+    // `rb_sysopen(fptr->pathv, oflags, 0666)`.
+    // SAFETY: open(2) with a NUL-terminated path; the returned fd (when
+    // valid) is owned by the File constructed below.
+    let fd = unsafe { libc::open(cpath.as_ptr(), oflags | libc::O_CLOEXEC, 0o666) };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(MonorubyErr::errno_with_path(
+            &globals.store,
+            &err,
+            "rb_sysopen",
+            &path,
+        ));
+    }
+    // SAFETY: `fd` is a fresh descriptor from open(2); ownership
+    // transfers to the File here.
+    let file = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fd) };
     if was_open {
         if self_.as_io_inner().is_writable() {
             self_.as_io_inner_mut().flush(&globals.store)?;
@@ -4397,10 +4872,8 @@ fn io_reopen_path(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<
         fresh.copy_state_from(inner);
         *inner = fresh;
     }
-    if explicit_mode {
-        // `fptr->mode = fmode`: an explicit mode replaces the FMODE bits,
-        // FMODE_SIGNAL_ON_EPIPE among them; without one they are kept.
-        self_.as_io_inner_mut().set_signal_on_epipe(false);
+    if was_sync {
+        self_.as_io_inner_mut().set_sync(true);
     }
     Ok(self_)
 }
@@ -6406,16 +6879,8 @@ fn set_encoding(
     // set up (CRuby's `validate_enc_binmode`, which looks at the
     // *resolved* pair: an internal encoding taken from
     // `Encoding.default_internal` counts too).
-    if readable
-        && i.is_none()
-        && !self_.as_io_inner().binmode()
-        && let Some(e) = ext.or(Some(de)).and_then(|o| enc_obj_to_enum(globals, o))
-        && !e.is_ascii_compatible()
-    {
-        return Err(MonorubyErr::argumenterr(
-            "ASCII incompatible encoding needs binmode",
-        ));
-    }
+    let binmode = self_.as_io_inner().binmode();
+    check_enc_binmode(globals, slot, i, de, readable, binmode)?;
     store_io_encodings(globals, self_, slot, i);
     set_io_ecopts(globals, self_, ecopts)?;
     // `io_encoding_set` ends in `clear_codeconv`: the read converter
@@ -6533,6 +6998,83 @@ fn set_encoding_by_bom(
     }
 }
 
+/// CRuby's `io_set_encoding_by_bom` as an open with a `BOM|` encoding
+/// ends in it. A mark at the head of a readable stream is consumed and
+/// names the external encoding ([`detect_and_consume_bom`]). Without one
+/// the *external* half of a conversion is dropped (`encs.enc2 = NULL`),
+/// which leaves the internal encoding as the stream's only one: after
+/// `"r:BOM|UTF-8:EUC-JP"` on a file with no mark, `external_encoding` is
+/// EUC-JP and nothing is converted. That is what CRuby does, on a stream
+/// that is not readable too.
+fn set_encoding_by_bom_at_open(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    io: Value,
+    readable: bool,
+) -> Result<()> {
+    if readable && detect_and_consume_bom(vm, globals, io)?.is_some() {
+        return Ok(());
+    }
+    if let Some(int) = io.as_io_inner().int_enc() {
+        store_io_encodings(globals, io, ExtSlot::Fixed(int), None);
+    }
+    Ok(())
+}
+
+/// Fill `buf` from `file`, answering how many bytes came (short reads
+/// included, as `read_to_end` handles them).
+fn read_head(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    use std::io::Read;
+    let mut n = 0;
+    while n < buf.len() {
+        match file.read(&mut buf[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    Ok(n)
+}
+
+/// The byte-order mark `head` starts with: how many bytes it takes and
+/// the encoding it names. Four bytes are enough to tell every mark apart
+/// (UTF-16LE and UTF-32LE share the `FF FE` prefix).
+fn bom_at(head: &[u8]) -> Option<(usize, &'static str)> {
+    match head.first()? {
+        0xEF if head.len() >= 3 && head[1] == 0xBB && head[2] == 0xBF => Some((3, "UTF-8")),
+        0x00 if head.len() >= 4 && head[1] == 0x00 && head[2] == 0xFE && head[3] == 0xFF => {
+            Some((4, "UTF-32BE"))
+        }
+        0xFF if head.len() >= 2 && head[1] == 0xFE => {
+            if head.len() >= 4 && head[2] == 0x00 && head[3] == 0x00 {
+                Some((4, "UTF-32LE"))
+            } else {
+                Some((2, "UTF-16LE"))
+            }
+        }
+        0xFE if head.len() >= 2 && head[1] == 0xFF => Some((2, "UTF-16BE")),
+        _ => None,
+    }
+}
+
+/// Take a byte-order mark off the head of `io`, answering the encoding it
+/// names. Without one every byte read is pushed back.
+fn consume_bom(vm: &mut Executor, globals: &mut Globals, mut io: Value) -> Result<Option<Value>> {
+    // Read up to 4 bytes — enough for [`bom_at`] to decide.
+    let head = blocking_io_region(vm, globals, io, libc::POLLIN, |_store| {
+        io.as_io_inner_mut().read(Some(4))
+    })?;
+    let Some((consume, name)) = bom_at(&head) else {
+        // No BOM: push everything back and report nothing.
+        io.as_io_inner_mut().unget(&head)?;
+        return Ok(None);
+    };
+    // Consume the BOM, push the trailing bytes back for later reads.
+    io.as_io_inner_mut().unget(&head[consume..])?;
+    let enc = enc_by_name(globals, name)
+        .ok_or_else(|| MonorubyErr::runtimeerr(format!("encoding {name} not found")))?;
+    Ok(Some(enc))
+}
+
 /// Peek the stream head for a byte-order mark. A detected BOM is
 /// consumed and installs its encoding as the external encoding
 /// (returned as `Some`); otherwise every byte is pushed back and the
@@ -6542,34 +7084,9 @@ fn detect_and_consume_bom(
     globals: &mut Globals,
     mut io: Value,
 ) -> Result<Option<Value>> {
-    // Read up to 4 bytes — enough to disambiguate every BOM (and to
-    // tell UTF-16LE from UTF-32LE, which share the FF FE prefix).
-    let head = blocking_io_region(vm, globals, io, libc::POLLIN, |_store| {
-        io.as_io_inner_mut().read(Some(4))
-    })?;
-    let (consume, enc_name): (usize, &str) = match head.first() {
-        Some(0xEF) if head.len() >= 3 && head[1] == 0xBB && head[2] == 0xBF => (3, "UTF-8"),
-        Some(0x00) if head.len() >= 4 && head[1] == 0x00 && head[2] == 0xFE && head[3] == 0xFF => {
-            (4, "UTF-32BE")
-        }
-        Some(0xFF) if head.len() >= 2 && head[1] == 0xFE => {
-            if head.len() >= 4 && head[2] == 0x00 && head[3] == 0x00 {
-                (4, "UTF-32LE")
-            } else {
-                (2, "UTF-16LE")
-            }
-        }
-        Some(0xFE) if head.len() >= 2 && head[1] == 0xFF => (2, "UTF-16BE"),
-        _ => {
-            // No BOM: push everything back and report nothing.
-            io.as_io_inner_mut().unget(&head)?;
-            return Ok(None);
-        }
+    let Some(enc) = consume_bom(vm, globals, io)? else {
+        return Ok(None);
     };
-    // Consume the BOM, push the trailing bytes back for later reads.
-    io.as_io_inner_mut().unget(&head[consume..])?;
-    let enc = enc_by_name(globals, enc_name)
-        .ok_or_else(|| MonorubyErr::runtimeerr(format!("encoding {enc_name} not found")))?;
     // `io_encoding_set(fptr, extenc, rb_io_internal_encoding(io), Qnil)`:
     // the internal encoding stays, and so do the `invalid:` / `undef:`
     // choices, but not the `replace:` string.
@@ -6577,6 +7094,11 @@ fn detect_and_consume_bom(
         .as_io_inner()
         .int_enc()
         .filter(|&i| !enc_same(globals, i, enc));
+    // `io_encoding_set` ends in `validate_enc_binmode`: a UTF-16 or
+    // UTF-32 mark found on a text-mode stream that converts to nothing
+    // is refused. (`IO#set_encoding_by_bom` asks for binary mode first.)
+    let binmode = io.as_io_inner().binmode();
+    check_enc_binmode(globals, ExtSlot::Fixed(enc), int, enc, true, binmode)?;
     store_io_encodings(globals, io, ExtSlot::Fixed(enc), int);
     let (flags, _) = io_ecopts(globals, io);
     set_io_ecopts(globals, io, (flags, None))?;
@@ -9258,6 +9780,245 @@ mod tests {
             io.close
             File.delete(a, b)
             r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_reopen_mode_and_options() {
+        // #2215: a mode or options make `IO#reopen` read them as
+        // `rb_io_extract_modeenc` does and replace the stream's mode bits
+        // and encodings wholesale; with neither, everything is kept.
+        run_test_once(
+            r##"
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            base = "/tmp/monoruby_test_reopenopt_#{Process.pid}_#{rand(100000)}"
+            a = base + "_a"; b = base + "_b"
+            File.binwrite(a, "abc\r\ndef\n"); File.binwrite(b, "xyz\n")
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            st = ->(f) { [ee.(f), f.binmode?, f.sync] }
+            op = ->(m) { m ? File.open(a, m) : File.open(a) }
+            r = []
+            # The encodings a mode names replace the ones the stream had,
+            # and a mode that names none resets them to the defaults.
+            f = op.("r:euc-jp"); f.reopen(a, "r:utf-8"); r << ee.(f); f.close
+            f = op.("r:euc-jp"); f.reopen(a, "r"); r << ee.(f); f.close
+            f = op.("r:euc-jp:utf-8"); f.reopen(a, "r"); r << ee.(f); f.close
+            f = op.("w:euc-jp"); f.reopen(b, "w"); r << ee.(f); f.close
+            # No mode and no options keeps them (`**{}` included).
+            f = op.("r:euc-jp"); f.reopen(a); r << ee.(f); f.close
+            f = op.("r:euc-jp"); f.reopen(a, nil); r << ee.(f); f.close
+            f = op.("r:euc-jp"); f.reopen(a, nil, **{}); r << ee.(f); f.close
+            # The options are read too, with or without a mode.
+            f = op.("r:euc-jp"); f.reopen(a, "r", encoding: "sjis"); r << ee.(f); f.close
+            f = op.("r:euc-jp"); f.reopen(a, encoding: "sjis"); r << ee.(f); f.close
+            f = op.(nil)
+            f.reopen(a, external_encoding: "utf-8", internal_encoding: "euc-jp")
+            r << ee.(f); f.close
+            f = op.("r:euc-jp"); f.reopen(a, mode: "r:utf-8"); r << ee.(f); f.close
+            f = op.(nil); f.reopen(a, "r", unknown_key: 1); r << ee.(f); f.close
+            # `perm:` is accepted and ignored; a 3rd positional is not an
+            # option Hash.
+            f = op.(nil); f.reopen(a, "r", perm: 0644); r << ee.(f); f.close
+            f = op.(nil)
+            r << (begin; f.reopen(a, "r", 0644); rescue ArgumentError => e; e.message; end)
+            f.close
+            # Binary mode: set by the mode string or by `binmode:`, and
+            # cleared by a mode without `b`.
+            f = op.("r:euc-jp"); f.reopen(a, "rb"); r << st.(f); f.close
+            f = op.("rb"); f.reopen(a, "r"); r << st.(f); f.close
+            f = op.("rb"); f.reopen(a); r << st.(f); f.close
+            f = op.(nil); f.binmode; f.reopen(a, "r"); r << st.(f); f.close
+            f = op.(nil); f.reopen(a, binmode: true); r << st.(f); f.close
+            f = op.("rb"); f.reopen(a, textmode: true); r << st.(f); f.close
+            # Text mode and the newline options replace the decorator.
+            f = op.("rt"); r << f.read; f.reopen(a, "r"); r << f.read; f.close
+            f = op.(nil); f.reopen(a, "rt"); r << f.read; f.close
+            f = op.(nil); f.reopen(a, "r", newline: :universal); r << f.read; f.close
+            f = op.(nil); f.reopen(a, "r", universal_newline: true); r << f.read; f.close
+            f = File.open(a, "r", newline: :universal); r << f.read
+            f.reopen(a); r << f.read; f.close
+            f = File.open(b, "w"); f.reopen(b, "w", newline: :crlf)
+            f.write("a\nb\n"); f.close; r << File.binread(b)
+            f = File.open(b, "w", newline: :crlf); f.reopen(b, "w")
+            f.write("a\nb\n"); f.close; r << File.binread(b)
+            # `flags:` ORs open(2) bits onto the mode's.
+            File.binwrite(b, "xyz\n")
+            f = op.(nil); f.reopen(b, flags: File::WRONLY | File::APPEND)
+            f.write("q"); f.close; r << File.read(b)
+            f = op.(nil); f.reopen(b, "w", flags: File::APPEND)
+            f.write("r"); f.close; r << File.read(b)
+            # The read-conversion options are replaced as well.
+            File.binwrite(b, "\xE3\x81\x82\xFF\n")
+            f = op.(nil)
+            f.reopen(b, "r:utf-8:euc-jp", invalid: :replace, replace: "?")
+            r << f.read.bytes; f.close
+            f = File.open(b, "r:utf-8:euc-jp", invalid: :replace, replace: "?")
+            f.reopen(b, "r:utf-8:euc-jp")
+            r << (begin; f.read; rescue Encoding::InvalidByteSequenceError => e; e.message; end)
+            f.close
+            # `sync` goes with the mode bits, and `#lineno` does not.
+            f = File.open(b, "w"); f.sync = true; f.reopen(b, "w"); r << f.sync; f.close
+            f = File.open(b, "w"); f.sync = true; f.reopen(b); r << f.sync; f.close
+            f = op.(nil); f.gets; f.reopen(a, "r"); r << [f.lineno, f.pos]; f.close
+            # The IO form takes the other stream's encodings, and ignores
+            # the options.
+            f = op.("r:euc-jp"); g = op.("r:utf-8")
+            f.reopen(g, encoding: "sjis"); r << ee.(f); f.close; g.close
+            # A closed receiver may be reopened with a mode.
+            f = op.("r:euc-jp"); f.close; f.reopen(a, "r:utf-8")
+            r << [ee.(f), f.closed?]; f.close
+            File.delete(a, b)
+            Encoding.default_external = de
+            r
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_reopen_mode_and_options_errors() {
+        // #2215: every error `rb_io_extract_modeenc` can raise reaches
+        // `IO#reopen`, before the receiver's stream is disturbed, and one
+        // of the process's own streams may not lose an access mode.
+        run_test_once(
+            r##"
+            $w = []
+            def Warning.warn(m, category: nil) = $w << m.sub(/\A.+?:\d+: warning: /, "LOC ").chomp
+            def t
+              $w.clear
+              v = yield
+              [v, $w.dup]
+            rescue Exception => e
+              [e.class, e.message, $w.dup]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            base = "/tmp/monoruby_test_reopenerr_#{Process.pid}_#{rand(100000)}"
+            a = base + "_a"
+            File.binwrite(a, "abc\r\ndef\n")
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            io = File.open(a)
+            res = [
+              t { io.reopen(a, "r", mode: "r:utf-8") },
+              t { io.reopen(a, "r:utf-8", encoding: "sjis") },
+              t { io.reopen(a, "rb", textmode: true) },
+              t { io.reopen(a, "rt", binmode: true) },
+              t { io.reopen(a, "rb", newline: :universal) },
+              t { io.reopen(a, "r", newline: :bogus) },
+              t { io.reopen(a, "r", invalid: :bogus) },
+              t { io.reopen(a, external_encoding: "nosuch") },
+              t { io.reopen(a, "r", internal_encoding: "nosuch") },
+              t { io.reopen(a, "z") },
+              t { io.reopen(a, :r) },
+              # An unknown name in the mode string is a warning.
+              t { io.reopen(a, "r:nosuch"); ee.(io) },
+              # #2216 reaches the reopen paths too.
+              t { io.reopen(a, "r:utf-16le") },
+              t { (io.reopen(a, "rb:utf-16le"); [ee.(io), io.binmode?]) },
+              t { io.reopen(a, "r:utf-16le:utf-8"); ee.(io) },
+              # A `BOM|` name is read, but the mark is not consumed.
+              t { io.reopen(a, "r:BOM|utf-8"); [ee.(io), io.read(3)] },
+              # A failed extraction leaves the old state, a failed open
+              # the new one.
+              t { io.reopen(a, "r:euc-jp"); ee.(io) },
+              t { (io.reopen(a, "r", external_encoding: "nosuch") rescue nil); ee.(io) },
+              t { (io.reopen("/nonexistent/x", "r:utf-8") rescue nil); [ee.(io), io.closed?] },
+              # The three streams the process started with.
+              t { $stdin.reopen(a, "w") },
+              t { $stderr.reopen(a, "r") },
+            ]
+            io.close
+            File.delete(a)
+            Encoding.default_external = de
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn ascii_incompatible_encoding_needs_binmode() {
+        // #2216: a readable text-mode stream cannot take an external
+        // encoding that is not ASCII-compatible unless what it reads is
+        // converted. The check runs before anything is opened, created,
+        // truncated or run.
+        run_test_once(
+            r##"
+            def t
+              yield
+            rescue Exception => e
+              [e.class, e.message]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            path = "/tmp/mr_asc_#{Process.pid}.txt"
+            File.binwrite(path, "abc\n")
+            made = path + ".made"
+            ex = -> { v = File.exist?(made); File.delete(made) if v; v }
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            fd = -> { IO.sysopen(path) }
+            res = [
+              # The issue's cases.
+              t { File.open(path, "r:utf-16le") { |f| ee.(f) } },
+              t { File.open(path, external_encoding: "utf-16le") { |f| ee.(f) } },
+              t { IO.new(fd.(), "r:utf-16le") },
+              t { File.read(path, encoding: "utf-16le") },
+              t { IO.popen("true", "r:utf-16le") { } },
+              t { r, w = IO.pipe("utf-16le"); r.close; w.close },
+              t { File.open(path) { |f| f.set_encoding("utf-16le") } },
+              # Binary mode or a conversion makes it fine, and a write
+              # stream is never checked.
+              t { File.open(path, "rb:utf-16le") { |f| [ee.(f), f.binmode?] } },
+              t { File.open(path, "r:utf-16le:utf-8") { |f| ee.(f) } },
+              t { File.open(path, "r", binmode: true, encoding: "utf-16le") { |f| ee.(f) } },
+              t { File.open(path, flags: File::BINARY, encoding: "utf-16le") { |f| ee.(f) } },
+              t { File.open(made, "w:utf-16le") { |f| ee.(f) } }, ex.(),
+              t { IO.popen("cat", "w:utf-16le") { |f| ee.(f) } },
+              t { r, w = IO.pipe("utf-16le:utf-8"); a = ee.(r); r.close; w.close; a },
+              t { r, w = IO.pipe("utf-16le", "utf-8"); a = ee.(r); r.close; w.close; a },
+              # Nothing is created, truncated or run by a refused open.
+              t { File.open(made, "w+:utf-16le") { } }, ex.(),
+              t { File.open(made, "a+", encoding: "utf-32be") { } }, ex.(),
+              t { File.open(made, File::RDWR | File::CREAT, encoding: "utf-16be") { } }, ex.(),
+              t { IO.popen("touch #{made}", "r:utf-16le") { } }, ex.(),
+              t { IO.popen("touch #{made}", "r+", external_encoding: "utf-16le") { } }, ex.(),
+              # `"-"` and the external encoding twice mean no conversion.
+              t { File.open(path, "r:utf-16le:-") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-16le:utf-16le") { |f| ee.(f) } },
+              t { File.open(path, "r", external_encoding: "utf-16le", internal_encoding: "utf-16le") { |f| ee.(f) } },
+              # A conversion *to* one is fine; so is a `BOM|` name with a
+              # conversion behind it.
+              t { File.open(path, "r:utf-8:utf-16le") { |f| ee.(f) } },
+              t { File.open(path, "r:BOM|utf-16le") { |f| ee.(f) } },
+              t { File.open(path, "rb:BOM|utf-16le") { |f| ee.(f) } },
+              # Every encoding `rb_enc_asciicompat` says no to.
+              t { File.open(path, "r:utf-16") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-32") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-7") { |f| ee.(f) } },
+              t { File.open(path, "r:iso-2022-jp") { |f| ee.(f) } },
+              t { File.open(path, "r:cp50221") { |f| ee.(f) } },
+              t { File.open(path, "r:ibm037") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-32le") { |f| ee.(f) } },
+              t { File.open(path, "r:sjis") { |f| ee.(f) } },
+              # Text mode spelled by the mode string or an option.
+              t { File.open(path, "rt:utf-16le") { |f| ee.(f) } },
+              t { File.open(path, "r", textmode: true, encoding: "utf-16le") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-16le", newline: :universal) { |f| ee.(f) } },
+              t { File.open(path, "r+:utf-16le") { |f| ee.(f) } },
+              # The other open entry points.
+              t { IO.for_fd(fd.(), "r:utf-16le") },
+              t { File.new(path, "r:utf-16le") },
+              t { open(path, "r:utf-16le") { } },
+              t { File.readlines(path, encoding: "utf-16le") },
+              t { File.foreach(path, encoding: "utf-16le") { } },
+              t { IO.read(path, open_args: ["r:utf-16le"]) },
+              t { IO.readlines(path, open_args: ["rb:utf-16le"]).size },
+              t { File.write(made, "a", encoding: "utf-16le") }, ex.(),
+              t { File.write(made, "a", mode: "r+", encoding: "utf-16le") }, ex.(),
+            ]
+            File.delete(path)
+            Encoding.default_external = de
+            res
             "##,
         );
     }

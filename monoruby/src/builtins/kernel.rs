@@ -3465,7 +3465,7 @@ fn feature_encoding(globals: &mut Globals, arg: Value) -> Option<crate::value::E
     let enc = arg.is_rstring_inner()?.encoding();
     Some(match enc {
         Encoding::UsAscii | Encoding::Ascii8 => globals
-            .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+            .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
             .and_then(|v| globals.encoding_of_object(v))
             .unwrap_or_else(super::encoding::locale_encoding),
         enc => enc,

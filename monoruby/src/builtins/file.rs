@@ -1374,9 +1374,12 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
     // creating or truncating the file, and an unknown name in the mode
     // string is warned about even when the open then fails.
     let (enc_names, _) = super::io::parse_open_encodings(vm, globals, &mode, kw)?;
-    // CRuby rejects newline decorators on a binary-mode stream
-    // (`validate_enc_binmode`, the last thing `rb_io_extract_modeenc`
-    // does).
+    // `validate_enc_binmode`, the last thing `rb_io_extract_modeenc` does:
+    // a text-mode read of an encoding that is not ASCII-compatible is
+    // refused, and so are newline decorators on a binary-mode stream.
+    let encs = super::io::resolve_open_encodings(
+        globals, enc_names, binmode, readable, readable, writable,
+    )?;
     if binmode && super::io::newline_decorator_given(vm, globals, kw)? {
         return Err(MonorubyErr::argumenterr(
             "newline decorator with binary mode",
@@ -1455,7 +1458,8 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
         obj,
         &mode,
         readable,
-        enc_names,
+        encs,
+        enc_names.is_some_and(|n| n.bom),
         binmode,
         0..0,
         kw_hash,
@@ -5306,6 +5310,80 @@ mod tests {
               t { Dir.entries(dir, encoding: Encoding::EUC_JP).first.encoding.to_s },
             ]
             [path, path + ".w", mark].each { |f| File.delete(f) if File.exist?(f) }
+            Encoding.default_external = de
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn class_readers_consume_a_bom() {
+        // #2217: `File.read` / `readlines` / `foreach` consume a
+        // byte-order mark under a `BOM|` encoding, as an opened stream
+        // does, and a stream that finds no mark drops the external half
+        // of the pair (`io_set_encoding_by_bom`).
+        run_test_once(
+            r##"
+            def t
+              yield
+            rescue Exception => e
+              [e.class, e.message]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            pre = "/tmp/mr_bomread_#{Process.pid}"
+            b = pre + "_b"; n = pre + "_n"; e = pre + "_e"; s = pre + "_s"
+            File.binwrite(b, "\xEF\xBB\xBFabc\ndef\n")
+            File.binwrite(n, "abc\ndef\n")
+            File.binwrite(e, "\xEF\xBB\xBF")
+            File.binwrite(s, "\xEF\xBB")
+            d = ->(a) { a.map { |x| [x.b, x.encoding.to_s] } }
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            res = [
+              # The mark is consumed and names the external encoding.
+              t { d.(File.readlines(b, encoding: "BOM|utf-8")) },
+              t { d.(File.foreach(b, encoding: "BOM|utf-8").to_a) },
+              t { d.(File.readlines(b, mode: "r:BOM|utf-8")) },
+              t { d.(File.foreach(b, mode: "r:BOM|utf-8").to_a) },
+              t { d.([File.read(b, encoding: "BOM|utf-8")]) },
+              t { d.([File.read(b, mode: "r:BOM|utf-8")]) },
+              t { d.(IO.readlines(b, open_args: ["r:BOM|utf-8"])) },
+              t { d.(IO.foreach(b, open_args: ["r:BOM|utf-8"]).to_a) },
+              # Without `BOM|` the mark is data.
+              t { d.(File.readlines(b, encoding: "utf-8")) },
+              # A sized or offset read strips it too.
+              t { d.([File.read(b, 4, encoding: "BOM|utf-8")]) },
+              t { d.([File.read(b, 4, 1, encoding: "BOM|utf-8")]) },
+              t { d.([File.read(b, nil, 1, encoding: "BOM|utf-8")]) },
+              # The other line-read arguments still apply.
+              t { d.(File.readlines(b, chomp: true, encoding: "BOM|utf-8")) },
+              t { d.(File.readlines(b, nil, encoding: "BOM|utf-8")) },
+              t { d.(File.readlines(b, 2, encoding: "BOM|utf-8")) },
+              t { d.(File.readlines(b, "", encoding: "BOM|utf-8")) },
+              t { r = []; File.foreach(b, encoding: "BOM|utf-8") { |l| r << [l.b, $.] }; r },
+              # A mark of another encoding than the one named wins.
+              t { d.(File.readlines(b, encoding: "BOM|utf-16le:utf-8")) },
+              # No mark: the named external encoding is dropped and the
+              # internal one is all that is left.
+              t { d.(File.readlines(n, encoding: "BOM|utf-8")) },
+              t { d.(File.readlines(n, encoding: "BOM|utf-8:euc-jp")) },
+              t { d.([File.read(n, encoding: "BOM|utf-8:euc-jp")]) },
+              t { d.(File.readlines(b, encoding: "BOM|utf-8:euc-jp")) },
+              # A truncated or absent mark leaves the bytes alone.
+              t { d.(File.readlines(e, encoding: "BOM|utf-8")) },
+              t { d.(File.readlines(s, encoding: "BOM|utf-8")) },
+              t { d.([File.read(e, encoding: "BOM|utf-8")]) },
+              # The same on an opened stream, for comparison.
+              t { File.open(n, "r:BOM|utf-8:euc-jp") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(b, "r:BOM|utf-8:euc-jp") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(n, "r:BOM|utf-8") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(b, "r:BOM|utf-8") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(n, "r:BOM|utf-8:utf-8") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(b, "r:BOM|utf-8:utf-8") { |f| [ee.(f), d.([f.read])] } },
+              t { File.open(n, "r+:BOM|utf-8:euc-jp") { |f| [ee.(f), d.([f.read])] } },
+              t { IO.new(IO.sysopen(n), "r:BOM|utf-8:euc-jp").then { |f| [ee.(f), d.([f.read])] } },
+            ]
+            [b, n, e, s].each { |f| File.delete(f) if File.exist?(f) }
             Encoding.default_external = de
             res
             "##,

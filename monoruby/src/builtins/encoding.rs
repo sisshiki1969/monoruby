@@ -1145,7 +1145,7 @@ fn encoding_from_canonical_name(name: &str) -> Option<crate::value::Encoding> {
 /// `Encoding.default_internal=`). Returns `None` when unset
 /// (matches CRuby's "no transcoding" default).
 pub(super) fn current_default_internal(globals: &mut Globals) -> Option<crate::value::Encoding> {
-    let v = globals.get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))?;
+    let v = globals.get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)?;
     if v.is_nil() {
         return None;
     }
@@ -1815,7 +1815,7 @@ fn enc_default_external(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    if let Some(v) = globals.get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL")) {
+    if let Some(v) = globals.get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL) {
         if !v.is_nil() {
             return Ok(v);
         }
@@ -1897,7 +1897,7 @@ fn enc_set_default_external(
         return Err(MonorubyErr::argumenterr("default external can not be nil"));
     }
     let enc_val = resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?;
-    globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), enc_val);
+    globals.set_gvar(IdentId::GVAR_DEFAULT_EXTERNAL, enc_val);
     refresh_inspect_escape(globals);
     Ok(enc_val)
 }
@@ -1922,11 +1922,11 @@ pub(crate) fn inspect_result_encoding(globals: &mut Globals) -> Encoding {
 
 fn inspect_escape_encoding(globals: &mut Globals) -> Option<Encoding> {
     let resenc = globals
-        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)
         .filter(|v| !v.is_nil())
         .or_else(|| {
             globals
-                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
                 .filter(|v| !v.is_nil())
         })?;
     let enc = globals.encoding_of_object(resenc)?;
@@ -2122,11 +2122,11 @@ impl InspectBuf {
 /// `rb_inspect` measures a rendering against.
 fn default_internal_or_external(globals: &mut Globals) -> Option<Encoding> {
     let resenc = globals
-        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)
         .filter(|v| !v.is_nil())
         .or_else(|| {
             globals
-                .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+                .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
                 .filter(|v| !v.is_nil())
         })?;
     globals.encoding_of_object(resenc)
@@ -2251,7 +2251,7 @@ fn enc_default_internal(
     _: BytecodePtr,
 ) -> Result<Value> {
     Ok(globals
-        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)
         .unwrap_or(Value::nil()))
 }
 
@@ -3971,7 +3971,7 @@ fn enc_set_default_internal(
     } else {
         resolve_default_encoding_arg(vm, globals, lfp.self_val(), val)?
     };
-    globals.set_gvar(IdentId::get_id("$DEFAULT_INTERNAL"), enc_val);
+    globals.set_gvar(IdentId::GVAR_DEFAULT_INTERNAL, enc_val);
     refresh_inspect_escape(globals);
     Ok(enc_val)
 }
@@ -4143,7 +4143,7 @@ fn locale_encoding_value(globals: &Globals) -> Value {
 /// fallbacks only cover a `Globals` this never ran on.
 pub(crate) fn init_default_external(globals: &mut Globals) {
     let v = locale_encoding_value(globals);
-    globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), v);
+    globals.set_gvar(IdentId::GVAR_DEFAULT_EXTERNAL, v);
     // `Encoding.find("filesystem")` needs nothing of its own: it is an
     // alias of `default_external`, which the reference CRuby confirms
     // on both CI platforms — under no locale it answers US-ASCII on
@@ -4175,7 +4175,7 @@ pub(crate) fn set_default_external_utf8(globals: &mut Globals) {
         .store
         .get_constant_noautoload(enc_class, IdentId::UTF_8)
     {
-        globals.set_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"), utf8);
+        globals.set_gvar(IdentId::GVAR_DEFAULT_EXTERNAL, utf8);
     }
     refresh_inspect_escape(globals);
 }
@@ -4917,7 +4917,7 @@ fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)
             .and_then(|ev| ev.is_str().map(|s| s.to_string()))
     }
     let external_val = globals
-        .get_gvar(IdentId::get_id("$DEFAULT_EXTERNAL"))
+        .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
         .filter(|v| !v.is_nil());
     let locale_val = locale_encoding_value(globals);
     let locale = canonical_of(globals, locale_val);
@@ -4929,7 +4929,7 @@ fn dynamic_encoding_aliases(globals: &mut Globals) -> Vec<(&'static str, String)
     // no encoding at all, and appears in `Encoding.name_list` without
     // appearing in any encoding's `#names` (#1520).
     let internal = globals
-        .get_gvar(IdentId::get_id("$DEFAULT_INTERNAL"))
+        .get_gvar(IdentId::GVAR_DEFAULT_INTERNAL)
         .filter(|v| !v.is_nil())
         .and_then(|v| canonical_of(globals, v));
     DYNAMIC_ALIASES
@@ -5476,19 +5476,10 @@ fn enc_ascii_compatible_p(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let self_ = lfp.self_val();
-    // Compare the name in place (no `String` copy): `cgi/escape` asks this
-    // for every escaped string.
-    let compatible = match globals.store.get_ivar(self_, IdentId::_ENCODING) {
-        Some(v) => match v.is_str() {
-            Some(s) => {
-                is_ascii_compatible_encoding(std::str::from_utf8(s.as_bytes()).unwrap_or(""))
-            }
-            None => is_ascii_compatible_encoding(""),
-        },
-        None => is_ascii_compatible_encoding(""),
-    };
-    Ok(Value::bool(compatible))
+    Ok(Value::bool(encoding_object_ascii_compatible(
+        globals,
+        lfp.self_val(),
+    )))
 }
 
 ///
@@ -5511,23 +5502,42 @@ fn enc_dummy_p(
     Ok(Value::bool(is_dummy_encoding(&name)))
 }
 
+/// `rb_enc_asciicompat` for an `Encoding` object.
+pub(super) fn encoding_object_ascii_compatible(globals: &Globals, enc: Value) -> bool {
+    // Compare the name's bytes in place — no `String` copy and no UTF-8
+    // check: `cgi/escape` asks `Encoding#ascii_compatible?` for every
+    // escaped string, and every open asks this of what it will read.
+    match globals.store.get_ivar(enc, IdentId::_ENCODING) {
+        Some(v) => match v.is_str() {
+            Some(s) => is_ascii_compatible_name(s.as_bytes()),
+            None => true,
+        },
+        None => true,
+    }
+}
+
 fn is_ascii_compatible_encoding(name: &str) -> bool {
+    is_ascii_compatible_name(name.as_bytes())
+}
+
+/// `rb_enc_asciicompat` by canonical encoding name.
+fn is_ascii_compatible_name(name: &[u8]) -> bool {
     !matches!(
         name,
-        "UTF-16"
-            | "UTF-32"
-            | "UTF-16BE"
-            | "UTF-16LE"
-            | "UTF-32BE"
-            | "UTF-32LE"
-            | "ISO-2022-JP"
-            | "ISO-2022-JP-2"
-            | "ISO-2022-JP-KDDI"
-            | "CP50220"
-            | "CP50221"
-            | "UTF-7"
+        b"UTF-16"
+            | b"UTF-32"
+            | b"UTF-16BE"
+            | b"UTF-16LE"
+            | b"UTF-32BE"
+            | b"UTF-32LE"
+            | b"ISO-2022-JP"
+            | b"ISO-2022-JP-2"
+            | b"ISO-2022-JP-KDDI"
+            | b"CP50220"
+            | b"CP50221"
+            | b"UTF-7"
             // EBCDIC does not even agree with ASCII on the letters.
-            | "IBM037"
+            | b"IBM037"
     )
 }
 

@@ -395,6 +395,12 @@ impl IdentId {
     /// `/receiver`: the receiver a NameError / NoMethodError / KeyError
     /// / FrozenError is about, read every time a NameError message is.
     pub const _RECEIVER: IdentId = id!(222);
+    /// The globals `Encoding.default_external` / `.default_internal` are
+    /// kept in. Every open, and every read that resolves its encodings,
+    /// asks for them, so they are interned up front rather than by name
+    /// each time.
+    pub const GVAR_DEFAULT_EXTERNAL: IdentId = id!(223);
+    pub const GVAR_DEFAULT_INTERNAL: IdentId = id!(224);
 
     /// Name ↔ id pairing for the block above — the single source of truth:
     /// `IdentifierTable::new` interns from it, and [`Self::special_gvar_name`]
@@ -682,7 +688,7 @@ impl IdentifierTable {
     /// Slots the predefined ids occupy; new names are numbered after
     /// them. The ASCII range below `IdentId::PREDEFINED_FIRST` holds only
     /// the operators, the other slots there stay unnamed.
-    const PREDEFINED_LEN: usize = 222;
+    const PREDEFINED_LEN: usize = 224;
 
     pub(crate) fn new() -> Self {
         let mut table = IdentifierTable {
@@ -790,6 +796,8 @@ impl IdentifierTable {
         table.set_id("/ecopts", IdentId::_IO_ECOPTS);
         table.set_id("coerce", IdentId::COERCE);
         table.set_id("/receiver", IdentId::_RECEIVER);
+        table.set_id("$DEFAULT_EXTERNAL", IdentId::GVAR_DEFAULT_EXTERNAL);
+        table.set_id("$DEFAULT_INTERNAL", IdentId::GVAR_DEFAULT_INTERNAL);
         table
     }
 
