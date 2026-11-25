@@ -905,13 +905,13 @@ pub(super) fn hash(
         if let Some(s) = self_val.try_struct() {
             for i in 0..s.len() {
                 let v = s.get(i);
-                let h = v.calculate_hash(vm, globals)?;
-                hasher.write_u64(h);
+                let h = v.hash_value(vm, globals)?;
+                hasher.write_i64(h);
             }
         }
         Ok(Value::from_hash_digest(hasher.finish()))
     };
-    // An immediate hashes without calling Ruby (`ruby_hash_packed`), so a
+    // An immediate hashes without calling Ruby (`packed_hash_value`), so a
     // struct of immediates cannot recur into itself: skip the guard.
     if let Some(s) = self_val.try_struct()
         && (0..s.len()).all(|i| s.get(i).is_packed_value())

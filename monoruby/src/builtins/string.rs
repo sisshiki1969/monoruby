@@ -449,8 +449,11 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/hash.html]
 #[monoruby_builtin]
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let h = lfp.self_val().calculate_hash(vm, globals)?;
-    Ok(Value::from_hash_digest(h))
+    // The number a Hash files a String key under (`Value::hash_value`).
+    let _ = (vm, globals);
+    Ok(Value::integer(
+        lfp.self_val().as_rstring_inner().hash_value(),
+    ))
 }
 
 /// JIT inliner for `String#==` (and its aliases `===` / `eql?`): when the

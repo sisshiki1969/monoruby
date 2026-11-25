@@ -104,7 +104,7 @@ mod util;
 pub mod map;
 pub mod set;
 
-pub use crate::hasher::{RubyHasher, RubyRandomState};
+pub use crate::hasher::{RubyHasher, RubyRandomState, digest_of_hash_value};
 pub use crate::map::RubyMap;
 pub use crate::set::RubySet;
 pub use ruby_traits::{Equivalent, RubyEql, RubyHash, RubySymEql, RubySymHash};

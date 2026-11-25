@@ -95,6 +95,30 @@ impl RubyHasher {
     fn add(&mut self, v: u64) {
         self.h = fold(self.h ^ v, P0);
     }
+
+    /// The digest so far as a *hash value*: the number a Ruby `#hash`
+    /// answers with, which has to be a Fixnum (63 bits, signed). See
+    /// [`digest_of_hash_value`].
+    #[inline(always)]
+    pub fn hash_value(&self) -> i64 {
+        (self.h as i64) >> 1
+    }
+}
+
+/// The digest a map files a key under, from the key's *hash value* — what
+/// its `#hash` answers, or would if it were asked.
+///
+/// A Ruby Hash finds a key by that number and `eql?`, whoever computed
+/// it: an object whose `#hash` answers `"str".hash` shares a bucket with
+/// the String itself. So a key the map hashes natively must be filed
+/// under a function of the very number its `#hash` method returns, and
+/// this is that function — the hasher's own last step,
+/// [`finish`](Hasher::finish), applied to the hash value. A native key's
+/// hash value is [`RubyHasher::hash_value`] of its content, which makes
+/// its digest one shift away from `finish` on that content.
+#[inline(always)]
+pub fn digest_of_hash_value(hash_value: i64) -> u64 {
+    fold(hash_value as u64, P2)
 }
 
 impl Hasher for RubyHasher {

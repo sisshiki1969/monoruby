@@ -41,20 +41,6 @@ impl RubyEql<Executor, Globals, MonorubyErr> for RangeInner {
     }
 }
 
-impl RubyHash<Executor, Globals, MonorubyErr> for RangeInner {
-    fn ruby_hash<H: std::hash::Hasher>(
-        &self,
-        state: &mut H,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<()> {
-        self.start.ruby_hash(state, vm, globals)?;
-        self.end.ruby_hash(state, vm, globals)?;
-        self.exclude_end().hash(state);
-        Ok(())
-    }
-}
-
 impl RangeInner {
     /// `exclude_end` sentinel for a `Range.allocate`d, not-yet-initialized
     /// range. Only `Range#initialize` consults it (to reject a second

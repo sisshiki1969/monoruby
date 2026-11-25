@@ -919,8 +919,22 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/hash.html]
 #[monoruby_builtin]
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let self_val = lfp.self_val();
-    let recursive_marker = Value::integer(0);
+    Ok(Value::integer(hash_hash_value(
+        vm,
+        globals,
+        lfp.self_val(),
+    )?))
+}
+
+/// `rb_hash_hash`: what `Hash#hash` answers, and the hash value a Hash
+/// files a Hash key under ([`Value::hash_value`]) while that method is
+/// the builtin one.
+pub(crate) fn hash_hash_value(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    self_val: Value,
+) -> Result<i64> {
+    let recursive_marker = 0;
     // Outer-recursion collapse (CRuby rb_exec_recursive_outer): a cycle
     // detected at any depth collapses the *outermost* #hash to the
     // sentinel, so `h.hash == {x: h}.hash` when h[:x] = h (h.eql?(x: h)).
@@ -937,26 +951,18 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             const VAL_MIX: i64 = 0xc6bc279692b5c323u64 as i64;
             const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
             let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
-            let hash_id = IdentId::HASH;
             // Walked as `rb_hash_foreach(hash, hash_i)` walks it: a key's
             // or a value's `hash` may change the receiver.
             h.walk(vm, globals, |vm, globals, _, k, v| {
-                let kh = vm
-                    .invoke_method_inner(globals, hash_id, k, &[], None, None)?
-                    .try_fixnum()
-                    .unwrap_or(0);
-                let vh = vm
-                    .invoke_method_inner(globals, hash_id, v, &[], None, None)?
-                    .try_fixnum()
-                    .unwrap_or(0);
+                let kh = k.hash_value(vm, globals)?;
+                let vh = v.hash_value(vm, globals)?;
                 let kpart = kh.wrapping_add(KEY_OFFSET).wrapping_mul(KEY_MIX);
                 let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
                 acc = acc.wrapping_add(kpart ^ vpart);
                 Ok(false)
             })?;
-            // Fold into Fixnum range: a Bignum digest would degrade to 0
-            // when this hash is itself an element of an outer Hash.
-            Ok(Value::from_hash_digest(acc as u64))
+            // Fold into Fixnum range.
+            Ok(acc >> 1)
         },
         recursive_marker,
     )
@@ -1291,10 +1297,10 @@ fn hash_index(
             return true;
         }
     }
-    // The probe in line, when the key is one of the immediates whose digest
-    // is its bits through the mixer (a fixnum's goes through SipHash first
-    // — `Value::ruby_hash_packed` — and stays on the call until that is
-    // split), or a String of class `String` itself (a subclass's `eql?` is
+    // The probe in line, when the key is a Symbol, `nil`, `true` or `false`
+    // (an immediate's digest is its bits through the mixer —
+    // `Value::packed_hash_value`; a fixnum's is too since #2204, and could
+    // join them), or a String of class `String` itself (a subclass's `eql?` is
     // dispatched — see `string_key_eq`). The key's class comes from this
     // site's inline cache, so it is guarded; the receiver's shape is checked
     // inside the probe, and a shape it does not handle is answered by the

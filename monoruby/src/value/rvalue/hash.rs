@@ -1,4 +1,5 @@
 use super::*;
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -149,28 +150,27 @@ pub(super) fn sanitize_dup_flags(flags: u8) -> u8 {
 }
 
 /// The boxed map's digest of a packed (immediate) key, computed without
-/// the vm: the same builder and the same digest stream as
-/// `RubyMap::hash(&Some(k))` (an `Option` key digests as its payload, and
-/// a packed payload digests via [`Value::ruby_hash_packed`]), so the
-/// prehashed probe and the general probe always agree on buckets.
-fn packed_digest<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> usize {
-    use std::hash::Hasher;
-    debug_assert!(k.is_packed_value());
-    let mut h = hash_builder.build_hasher();
-    k.ruby_hash_packed(&mut h);
-    h.finish() as usize
+/// the vm: what `RubyMap::hash(&Some(k))` answers (an `Option` key
+/// digests as its payload, and a Value by its hash value —
+/// [`Value::packed_hash_value`] for a packed one), so the prehashed
+/// probe and the general probe always agree on buckets.
+fn packed_digest(hash_builder: &rubymap::RubyRandomState, k: Value) -> usize {
+    packed_digest_zero(hash_builder, k).0
 }
 
 /// [`packed_digest`], and whether `k` is the flonum `0.0`: a heap `-0.0`
 /// key is `eql?` to it, which the prehashed probe's bit equality cannot
 /// see, so that one key takes the general probe.
 #[inline(always)]
-fn packed_digest_zero<S: std::hash::BuildHasher>(hash_builder: &S, k: Value) -> (usize, bool) {
-    use std::hash::Hasher;
-    debug_assert!(k.is_packed_value());
-    let mut h = hash_builder.build_hasher();
-    let zero = k.ruby_hash_packed_zero(&mut h);
-    (h.finish() as usize, zero)
+fn packed_digest_zero(hash_builder: &rubymap::RubyRandomState, k: Value) -> (usize, bool) {
+    let (hash_value, zero) = k.packed_hash_value(hash_builder);
+    (rubymap::digest_of_hash_value(hash_value) as usize, zero)
+}
+
+/// The boxed map's digest of a key whose hash value is `hash_value`.
+#[inline(always)]
+fn digest_of(hash_value: i64) -> usize {
+    rubymap::digest_of_hash_value(hash_value) as usize
 }
 
 ///
@@ -222,18 +222,14 @@ pub(crate) extern "C" fn string_key_eq_c(stored: u64, key: u64) -> u64 {
     string_key_eq(&stored, k, s) as u64
 }
 
-/// The boxed map's digest of a String key, computed without the vm: the
-/// same builder and the same digest stream as `RubyMap::hash(&Some(k))`
-/// for an `ObjTy::STRING` payload — `Value::ruby_hash`'s STRING arm
-/// digests the byte content via `RStringInner::hash`, unconditionally (a
-/// redefined `String#hash` is never consulted for string-key bucketing)
-/// — so the prehashed probe and the general probe always agree on
-/// buckets.
-fn string_digest<S: std::hash::BuildHasher>(hash_builder: &S, s: &RStringInner) -> usize {
-    use std::hash::{Hash, Hasher};
-    let mut h = hash_builder.build_hasher();
-    s.hash(&mut h);
-    h.finish() as usize
+/// The boxed map's digest of a String key, computed without the vm: what
+/// `RubyMap::hash(&Some(k))` answers for an `ObjTy::STRING` payload —
+/// `Value::hash_value`'s STRING arm takes the byte content,
+/// unconditionally (a redefined `String#hash` is never consulted for
+/// string-key bucketing) — so the prehashed probe and the general probe
+/// always agree on buckets.
+fn string_digest(hash_builder: &rubymap::RubyRandomState, s: &RStringInner) -> usize {
+    rubymap::digest_of_hash_value(s.hash_value_with(hash_builder)) as usize
 }
 
 /// The `eql?` verdict of a stored boxed-map key against a String probe
@@ -728,17 +724,6 @@ impl RubyEql<Executor, Globals, MonorubyErr> for HashmapInner {
     }
 }
 
-impl RubyHash<Executor, Globals, MonorubyErr> for HashmapInner {
-    fn ruby_hash<H: std::hash::Hasher>(
-        &self,
-        state: &mut H,
-        e: &mut Executor,
-        g: &mut Globals,
-    ) -> Result<()> {
-        self.as_ref().ruby_hash(state, e, g)
-    }
-}
-
 /// Can `k` be stored inline? Packed immediates: their identity *is*
 /// their content, so equality is bit comparison and the digest
 /// recomputed at probe time can never disagree with an insert-time one.
@@ -764,6 +749,121 @@ fn is_inline_key(k: Value) -> bool {
 /// map.
 fn inline_string_key_eq(ek: Value, k: Value, s: &RStringInner) -> bool {
     ek.id() == k.id() || ek.is_rstring_inner().is_some_and(|es| es == s)
+}
+
+/// Whether a probe of an eql?-keyed Hash for `k` has to ask the key:
+/// its `#hash` or its `eql?` may be Ruby code, and that code may change
+/// the Hash under the probe. Such a key takes the probe that is built for
+/// it ([`HashRef::pos_observed`]); every other one is settled without a
+/// call:
+///
+/// - an immediate, by its bits (`packed_digest`);
+/// - a String of class String, by its bytes (`string_digest`,
+///   `string_key_eq`);
+/// - a heap key that asks nothing ([`unasked_digest`]): a Bignum, a Float
+///   other than zero, an object that is a key by its identity.
+///
+/// What is left has a `#hash` or an `eql?` of its own, in Ruby or
+/// builtin: a String subclass (whose `eql?` is sent), an Array or a Hash
+/// (whose elements are asked), a Struct, any object of a class that
+/// defines either method — and `-0.0`, the one heap value `eql?` to an
+/// immediate.
+#[inline(always)]
+fn is_observed_key(k: Value, globals: &Globals) -> bool {
+    let Some(rv) = k.try_rvalue() else {
+        return false;
+    };
+    // SAFETY: `ty()` names the variant of the union the arm reads.
+    unsafe {
+        match rv.ty() {
+            ObjTy::STRING => rv.class() != STRING_CLASS,
+            ObjTy::ARRAY | ObjTy::HASH => true,
+            ObjTy::BIGNUM => false,
+            ObjTy::FLOAT => rv.as_float() == 0.0,
+            _ => !globals.store.is_identity_key_class(rv.class()),
+        }
+    }
+}
+
+/// The boxed map's digest of a heap key, other than a String, that is
+/// hashed and compared without a call — `None` for one that has to be
+/// asked ([`is_observed_key`]) and for a String, which has probes of its
+/// own:
+///
+/// - a Bignum and a Float, by value: `any_hash` takes `rb_big_hash` /
+///   `rb_dbl_long_hash` for them whatever `Integer#hash` / `Float#hash`
+///   have been made to answer, and `Value::eql` compares the values. A
+///   zero is left out: a heap zero is `-0.0`, which is `eql?` to the
+///   immediate `0.0` and may be a key of the inline representation, where
+///   only the asked probe looks for it;
+/// - an object that inherits both `Kernel#hash` and `Kernel#eql?`
+///   (`Store::is_identity_key_class`), by its identity: it is `eql?` to nothing
+///   but itself.
+///
+/// [`unasked_key_eq`] is the comparison that goes with it.
+#[inline(always)]
+fn unasked_digest(k: Value, globals: &Globals) -> Option<usize> {
+    let rv = k.try_rvalue()?;
+    // SAFETY: `ty()` names the variant of the union the arm reads.
+    let hash_value = unsafe {
+        match rv.ty() {
+            ObjTy::BIGNUM => Value::bignum_hash_value(rv.as_bignum()),
+            ObjTy::FLOAT => {
+                let f = rv.as_float();
+                if f == 0.0 {
+                    return None;
+                }
+                Value::float_hash_value(f)
+            }
+            ObjTy::STRING | ObjTy::ARRAY | ObjTy::HASH => return None,
+            _ => {
+                if !globals.store.is_identity_key_class(rv.class()) {
+                    return None;
+                }
+                k.identity_hash_value()
+            }
+        }
+    };
+    Some(digest_of(hash_value))
+}
+
+/// The `eql?` verdict of a stored boxed-map key against a probe key `k`
+/// that [`unasked_digest`] answers for: the object itself, or a Bignum /
+/// a Float of the same value.
+#[inline(always)]
+fn unasked_key_eq(stored: &Option<Value>, k: Value) -> bool {
+    match stored {
+        Some(sk) => sk.id() == k.id() || numeric_key_eq(*sk, k),
+        None => false,
+    }
+}
+
+/// Two heap numbers of one value. Out of line: an object that is a key
+/// by its identity, the usual key of [`unasked_key_eq`], is settled by
+/// the comparison before it.
+#[inline(never)]
+fn numeric_key_eq(sk: Value, k: Value) -> bool {
+    let (Some(s), Some(r)) = (sk.try_rvalue(), k.try_rvalue()) else {
+        return false;
+    };
+    // SAFETY: `ty()` names the variant of the union each arm reads.
+    unsafe {
+        match (s.ty(), r.ty()) {
+            (ObjTy::BIGNUM, ObjTy::BIGNUM) => s.as_bignum() == r.as_bignum(),
+            (ObjTy::FLOAT, ObjTy::FLOAT) => s.as_float() == r.as_float(),
+            _ => false,
+        }
+    }
+}
+
+/// The hash value of a key the inline representation holds
+/// (`is_inline_key`: an immediate or a plain String), or of any key of
+/// an identity-keyed one, which is never asked.
+fn native_hash_value(k: Value) -> i64 {
+    match k.is_rstring_inner() {
+        Some(s) => s.hash_value(),
+        None => k.identity_hash_value(),
+    }
 }
 
 /// A tag-resolved view of the content, so read paths can match on the
@@ -893,47 +993,192 @@ impl<'a> HashRef<'a> {
             .position(|(ek, _)| inline_string_key_eq(*ek, k, s))
     }
 
-    /// Position of `k` among the inline pairs, observing the same
-    /// `#hash` protocol a boxed-map lookup would: an eql?-keyed heap
-    /// probe other than a String is hashed exactly once (dispatching a
-    /// user-defined `#hash` and propagating its errors) even though it
-    /// can never be eql? to a packed or String key. A String probe digests
-    /// vm-free in the boxed map too (`string_digest`), so it observes
-    /// nothing here either; identity-keyed lookups never hash (matching
-    /// the IdentKey map, which digests ids natively).
-    fn inline_pos(
+    /// The pair of an eql?-keyed Hash whose key is `eql?` to `k`, for a
+    /// `k` whose `#hash` or `eql?` may be Ruby code ([`is_observed_key`]):
+    /// its position, and its value.
+    ///
+    /// `#hash` is sent first, with nothing of the table in hand: the
+    /// method may change the Hash, or empty it. A lookup in an empty Hash
+    /// sends nothing, as `ar_lookup` (#2127); a store or a removal hashes
+    /// its key all the same, and goes to [`Self::pos_with_hash`] itself.
+    #[inline(never)]
+    fn pos_observed(
         &self,
         k: Value,
         vm: &mut Executor,
         globals: &mut Globals,
-    ) -> Result<Option<usize>> {
-        if self.is_ident_inline() || k.is_packed_value() || k.is_plain_rstring_inner().is_some() {
-            Ok(self.inline_pos_noobs(k))
-        } else {
-            // A heap probe that needs dispatch — a String subclass, or any
-            // other object. Ruby key identity is hash equality AND `eql?`,
-            // in that order: hash the probe once (dispatching a
-            // user-defined `#hash`, exactly as the boxed map would) and
-            // consult `eql?` only against a key with the same digest. A
-            // subclass that redefines `#hash` therefore misses a plain
-            // String key even when its `eql?` says true, as CRuby answers.
-            // (The converse — an object whose `#hash` deliberately returns
-            // a builtin key's hash value, which CRuby then matches — stays
-            // a miss here: builtin keys digest their content directly
-            // rather than through the Ruby-visible `#hash` integer, so the
-            // two domains never meet. Pre-existing, and shared with the
-            // boxed map.) Stored inline keys are packed values or plain
-            // frozen Strings (`is_inline_key`), so their digests compute
-            // without dispatching any Ruby code.
-            let probe_hash = k.calculate_hash(vm, globals)?;
-            let pairs = self.inline_pairs().to_vec();
-            for (i, (ek, _)) in pairs.iter().enumerate() {
-                if ek.calculate_hash(vm, globals)? == probe_hash && k.eql(ek, vm, globals)? {
-                    return Ok(Some(i));
+    ) -> Result<Option<(usize, Value)>> {
+        if self.entry_count() == 0 {
+            return Ok(None);
+        }
+        let hash_value = k.hash_value(vm, globals)?;
+        self.pos_with_hash(k, hash_value, vm, globals)
+    }
+
+    /// [`Self::pos_observed`] for a key whose hash value is known.
+    ///
+    /// CRuby's `st_lookup` asks `eql?` from inside its probe and starts
+    /// over when the table was rebuilt meanwhile. Here the probe is taken
+    /// apart instead, so that no reference into the table is held while
+    /// Ruby runs (#2199 — a key's `eql?` that cleared the Hash left the
+    /// probe in storage the Hash had given back): the pairs filed under
+    /// the digest are collected first, which compares nothing; `eql?` is
+    /// asked of each key in probe order, the keys rooted, since `eql?`
+    /// may delete them; and the pair of the one accepted is read again
+    /// from whatever the table is by then. The position answered is one
+    /// no Ruby code has run since.
+    fn pos_with_hash(
+        &self,
+        k: Value,
+        hash_value: i64,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Option<(usize, Value)>> {
+        // A round is repeated only when `eql?` deleted the very key it
+        // accepted; a method that keeps doing so gets no answer.
+        for _ in 0..3 {
+            // (position, key, value)
+            let mut cands: SmallVec<[(usize, Value, Value); 2]> = SmallVec::new();
+            match self.content() {
+                ContentRef::Inline(pairs) => {
+                    if self.is_ident_inline() {
+                        // `#hash` made the Hash compare by identity.
+                        return Ok(self.pos_ident(k, hash_value, vm, globals));
+                    }
+                    // Inline keys are immediates and plain Strings
+                    // (`is_inline_key`): their hash values take no call.
+                    for (i, (ek, ev)) in pairs.iter().enumerate() {
+                        if native_hash_value(*ek) == hash_value {
+                            cands.push((i, *ek, *ev));
+                        }
+                    }
+                }
+                ContentRef::Map(m) => m.each_filed_under(
+                    digest_of(hash_value),
+                    |i, ek, ev| {
+                        if let Some(ek) = ek {
+                            cands.push((i, *ek, *ev));
+                        }
+                    },
+                    vm,
+                    globals,
+                )?,
+                ContentRef::Ident(_) => {
+                    return Ok(self.pos_ident(k, hash_value, vm, globals));
                 }
             }
-            Ok(None)
+            let (i, ek) = match cands.as_slice() {
+                [] => return Ok(None),
+                // The key itself: no `eql?` is asked (`rb_eql`), and
+                // nothing has run since the pair was read.
+                [(i, ek, ev)] if ek.id() == k.id() => return Ok(Some((*i, *ev))),
+                _ => {
+                    let accepted = vm.with_temp_scope(|vm| {
+                        for (_, ek, _) in &cands {
+                            vm.temp_push(*ek);
+                        }
+                        for &(i, ek, _) in &cands {
+                            if k.eql(&ek, vm, globals)? {
+                                return Ok(Some((i, ek)));
+                            }
+                        }
+                        Ok(None)
+                    })?;
+                    match accepted {
+                        Some(found) => found,
+                        // Every candidate was asked and none accepted.
+                        // `k` itself was not among them, but an `eql?`
+                        // may have stored it.
+                        None => return Ok(self.pos_ident(k, hash_value, vm, globals)),
+                    }
+                }
+            };
+            match self.entry_at(i) {
+                Some((sk, sv)) if sk.id() == ek.id() => return Ok(Some((i, sv))),
+                _ => {}
+            }
+            // `eql?` moved the key it accepted, or deleted it.
+            if let Some(found) = self.pos_ident(ek, hash_value, vm, globals) {
+                return Ok(Some(found));
+            }
         }
+        Ok(None)
+    }
+
+    /// The pair whose key is the object `k` itself, filed under
+    /// `hash_value`: its position and its value. No Ruby code runs.
+    #[inline(never)]
+    fn pos_ident(
+        &self,
+        k: Value,
+        hash_value: i64,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Option<(usize, Value)> {
+        match self.content() {
+            ContentRef::Inline(pairs) => pairs
+                .iter()
+                .position(|(ek, _)| ek.id() == k.id())
+                .map(|i| (i, pairs[i].1)),
+            // The probes below compare ids and call nothing: they cannot
+            // fail. Only a key filed under this very digest counts — the
+            // object may be in the table under another, from a `#hash`
+            // that has changed its answer since.
+            ContentRef::Map(m) => {
+                let mut found = None;
+                let _ = m.each_filed_under(
+                    digest_of(hash_value),
+                    |i, ek, ev| {
+                        if ek.is_some_and(|ek| ek.id() == k.id()) {
+                            found = Some((i, *ev));
+                        }
+                    },
+                    vm,
+                    globals,
+                );
+                found
+            }
+            ContentRef::Ident(m) => m
+                .get_full(&IdentKey(k), vm, globals)
+                .unwrap_or(None)
+                .map(|(i, _, v)| (i, *v)),
+        }
+    }
+
+    /// The position of the pair whose key is `eql?` to `k`, as
+    /// [`Self::get`] finds it. No Ruby code has run since the position
+    /// was read, so the caller may use it at once.
+    fn pos(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<Option<usize>> {
+        Ok(match self.content() {
+            ContentRef::Inline([]) => None,
+            ContentRef::Inline(_) => match self.inline_pos_noobs(k) {
+                Some(i) => Some(i),
+                None if !self.is_ident_inline() && is_observed_key(k, globals) => {
+                    self.pos_observed(k, vm, globals)?.map(|(i, _)| i)
+                }
+                None => None,
+            },
+            ContentRef::Map(m) => {
+                if k.is_packed_value() {
+                    let (hash, zero) = packed_digest_zero(m.hasher(), k);
+                    if zero {
+                        // See `get`. Neither the digest of `0.0` nor its
+                        // `eql?` is a call.
+                        m.get_index_of(&k, vm, globals)?
+                    } else {
+                        m.get_index_of_prehashed_with(hash, |ek| *ek == Some(k), vm, globals)?
+                    }
+                } else if let Some(s) = k.is_plain_rstring_inner() {
+                    let hash = string_digest(m.hasher(), s);
+                    m.get_index_of_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
+                } else if let Some(hash) = unasked_digest(k, globals) {
+                    m.get_index_of_prehashed_with(hash, |ek| unasked_key_eq(ek, k), vm, globals)?
+                } else {
+                    self.pos_observed(k, vm, globals)?.map(|(i, _)| i)
+                }
+            }
+            ContentRef::Ident(m) => m.get_index_of(&IdentKey(k), vm, globals)?,
+        })
     }
 
     /// Tombstoned entries currently in the boxed entry vector (zero for the
@@ -1045,7 +1290,15 @@ impl<'a> HashRef<'a> {
             // An empty inline table answers without hashing the key, as
             // `ar_lookup` does for an empty AR table (#2127).
             ContentRef::Inline([]) => None,
-            ContentRef::Inline(pairs) => self.inline_pos(k, vm, globals)?.map(|i| pairs[i].1),
+            ContentRef::Inline(pairs) => match self.inline_pos_noobs(k) {
+                Some(i) => Some(pairs[i].1),
+                // Nothing but a key that has to be asked is `eql?` to an
+                // immediate or a String.
+                None if !self.is_ident_inline() && is_observed_key(k, globals) => {
+                    self.pos_observed(k, vm, globals)?.map(|(_, v)| v)
+                }
+                None => None,
+            },
             ContentRef::Map(m) => {
                 // See `HashRefMut::insert`: a packed key probes vm-free,
                 // and so does a String key (vm-free digest and byte
@@ -1063,8 +1316,11 @@ impl<'a> HashRef<'a> {
                     let hash = string_digest(m.hasher(), s);
                     m.get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
                         .copied()
+                } else if let Some(hash) = unasked_digest(k, globals) {
+                    m.get_prehashed_with(hash, |ek| unasked_key_eq(ek, k), vm, globals)?
+                        .copied()
                 } else {
-                    m.get(&k, vm, globals)?.copied()
+                    self.pos_observed(k, vm, globals)?.map(|(_, v)| v)
                 }
             }
             ContentRef::Ident(m) => m.get(&IdentKey(k), vm, globals)?.copied(),
@@ -1080,7 +1336,13 @@ impl<'a> HashRef<'a> {
         match self.content() {
             // See `get` (#2127).
             ContentRef::Inline([]) => Ok(false),
-            ContentRef::Inline(_) => Ok(self.inline_pos(k, vm, globals)?.is_some()),
+            ContentRef::Inline(_) => match self.inline_pos_noobs(k) {
+                Some(_) => Ok(true),
+                None if !self.is_ident_inline() && is_observed_key(k, globals) => {
+                    Ok(self.pos_observed(k, vm, globals)?.is_some())
+                }
+                None => Ok(false),
+            },
             ContentRef::Map(m) => {
                 // See `HashRefMut::insert`: a packed key probes vm-free,
                 // and so does a String key (vm-free digest and byte
@@ -1095,11 +1357,17 @@ impl<'a> HashRef<'a> {
                     }
                 } else if let Some(s) = k.is_plain_rstring_inner() {
                     let hash = string_digest(m.hasher(), s);
-                    Ok(m
-                        .get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
-                        .is_some())
+                    Ok(
+                        m.get_prehashed_with(hash, |ek| string_key_eq(ek, k, s), vm, globals)?
+                            .is_some(),
+                    )
+                } else if let Some(hash) = unasked_digest(k, globals) {
+                    Ok(
+                        m.get_prehashed_with(hash, |ek| unasked_key_eq(ek, k), vm, globals)?
+                            .is_some(),
+                    )
                 } else {
-                    m.contains_key(&k, vm, globals)
+                    Ok(self.pos_observed(k, vm, globals)?.is_some())
                 }
             }
             ContentRef::Ident(m) => m.contains_key(&IdentKey(k), vm, globals),
@@ -1460,31 +1728,6 @@ impl RubyEql<Executor, Globals, MonorubyErr> for HashRef<'_> {
     }
 }
 
-impl RubyHash<Executor, Globals, MonorubyErr> for HashRef<'_> {
-    fn ruby_hash<H: std::hash::Hasher>(
-        &self,
-        state: &mut H,
-        e: &mut Executor,
-        g: &mut Globals,
-    ) -> Result<()> {
-        // Walked, not iterated: a key's or a value's `hash` is Ruby code
-        // (`HashRef::walk`). An identity-keyed Hash digests its keys by
-        // id, matching `IdentKey::ruby_hash`, so its inline and boxed
-        // forms digest alike.
-        let ident = self.is_compare_by_identity();
-        self.walk(e, g, |e, g, _, key, val| {
-            if ident {
-                key.id().hash(state);
-            } else {
-                key.ruby_hash(state, e, g)?;
-            }
-            val.ruby_hash(state, e, g)?;
-            Ok(false)
-        })?;
-        Ok(())
-    }
-}
-
 impl alloc::GC<RValue> for HashRef<'_> {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         match self.default_ref() {
@@ -1697,8 +1940,9 @@ impl<'a> HashRefMut<'a> {
             // live — when this compacts.)
             if !self.as_ref().iter_active() {
                 self.compact_if_dirty();
-            }
-            if self.as_ref().iter_active() && !self.as_ref().contains_key(k, vm, globals)? {
+            } else if !COPY && self.observes(k, globals) {
+                return self.store_observed(k, v, vm, globals);
+            } else if !self.as_ref().contains_key(k, vm, globals)? {
                 return Err(MonorubyErr::runtimeerr(
                     "can't add a new key into hash during iteration",
                 ));
@@ -1711,6 +1955,11 @@ impl<'a> HashRefMut<'a> {
                 // SAFETY: rep is inline; i < len.
                 unsafe { self.body_mut().inline[i].1 = v };
                 return Ok(());
+            }
+            if !COPY && !FRESH && !ident && is_observed_key(k, globals) {
+                // It may be `eql?` to one of the keys all the same, and
+                // has to be asked.
+                return self.store_observed(k, v, vm, globals);
             }
             // A new key.
             let k = if COPY {
@@ -1727,9 +1976,9 @@ impl<'a> HashRefMut<'a> {
                 self.set_rep(len as u8 + 1);
             } else {
                 // 4th pair — or, in eql? mode, a heap key: move to the
-                // boxed map. An eql?-keyed heap key's user-defined
-                // #hash is observed (once) by the map insert, matching
-                // the boxed-representation protocol.
+                // boxed map. The key is one that is not asked (an
+                // observed one has left above), so the insert below
+                // calls nothing.
                 self.promote(ident, vm, globals)?;
                 match &mut self.boxed_mut().content {
                     HashContent::Map(m) => m.insert(Some(k), v, vm, globals)?,
@@ -1777,9 +2026,71 @@ impl<'a> HashRefMut<'a> {
                     } else {
                         m.insert_prehashed_with(hash, Some(k), v, |ek| string_key_eq(ek, k, s));
                     }
+                } else if let Some(hash) = unasked_digest(k, globals) {
+                    m.insert_prehashed_with(hash, Some(k), v, |ek| unasked_key_eq(ek, k));
                 } else {
-                    m.insert(Some(k), v, vm, globals)?;
+                    return self.store_observed(k, v, vm, globals);
                 }
+            }
+            HashContent::IdentMap(m) => {
+                m.insert(Some(IdentKey(k)), v, vm, globals)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a store or a removal of `k` has to ask the key
+    /// ([`is_observed_key`]); a Hash that compares by identity asks none.
+    #[inline(always)]
+    fn observes(&self, k: Value, globals: &Globals) -> bool {
+        !self.as_ref().is_compare_by_identity() && is_observed_key(k, globals)
+    }
+
+    /// The store of a key that has to be asked ([`is_observed_key`]) into
+    /// an eql?-keyed Hash: `st_update` taken apart, as the lookup is
+    /// ([`HashRef::pos_with_hash`]). `#hash` is sent once, before anything
+    /// of the table is looked at; the pair is then either found, and its
+    /// value replaced where it stands, or appended under the digest of
+    /// that hash value, with no further call in between.
+    #[inline(never)]
+    fn store_observed(
+        &mut self,
+        k: Value,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
+        let hash_value = k.hash_value(vm, globals)?;
+        if let Some((i, _)) = self.as_ref().pos_with_hash(k, hash_value, vm, globals)? {
+            self.set_value_at(i, v);
+            return Ok(());
+        }
+        // A new key. The key's methods may have started a traversal that
+        // is still open (an external enumerator), or left tombstones.
+        if self.as_ref().iter_active() {
+            return Err(MonorubyErr::runtimeerr(
+                "can't add a new key into hash during iteration",
+            ));
+        }
+        self.compact_if_dirty();
+        if self.is_inline() {
+            let ident = self.as_ref().is_ident_inline();
+            let len = self.inline_len();
+            if ident && len < INLINE_CAP {
+                // `#hash` made the Hash compare by identity.
+                // SAFETY: rep is inline; the slot exists (len < CAP).
+                unsafe { self.body_mut().inline[len] = (k, v) };
+                self.set_rep(len as u8 + 1);
+                return Ok(());
+            }
+            // The inline keys are immediates and plain Strings: filing
+            // them calls nothing.
+            self.promote(ident, vm, globals)?;
+        }
+        match &mut self.boxed_mut().content {
+            HashContent::Map(m) => {
+                // The probe has just missed: append, comparing nothing.
+                m.insert_prehashed_with(digest_of(hash_value), Some(k), v, |_| false);
             }
             HashContent::IdentMap(m) => {
                 m.insert(Some(IdentKey(k)), v, vm, globals)?;
@@ -1836,36 +2147,97 @@ impl<'a> HashRefMut<'a> {
         // visited (or the current) one skips nothing. The inline form
         // cannot hold a dead slot, so it promotes to boxed first (its
         // iteration depth migrates with it).
-        if self.as_ref().iter_active() {
-            if self.is_inline() {
-                let ident = self.as_ref().is_compare_by_identity();
-                self.promote(ident, vm, globals)?;
+        //
+        // A key that is asked is found first and removed by its position
+        // (#2199: a removal that asked the key's `eql?` from inside the
+        // table's own probe was left in freed storage when that method
+        // cleared the Hash). `pos_with_hash` answers a position nothing
+        // has run since.
+        let iterating = self.as_ref().iter_active();
+        if !iterating {
+            self.compact_if_dirty();
+            if !self.is_inline() {
+                // No traversal and no tombstone: a key that is settled
+                // without a call is taken out by the map's own probe.
+                match &mut self.boxed_mut().content {
+                    HashContent::Map(m) => {
+                        if k.is_packed_value() {
+                            let (hash, zero) = packed_digest_zero(m.hasher(), k);
+                            if !zero {
+                                return m.shift_remove_prehashed_with(
+                                    hash,
+                                    |ek| *ek == Some(k),
+                                    vm,
+                                    globals,
+                                );
+                            }
+                        } else if let Some(s) = k.is_plain_rstring_inner() {
+                            let hash = string_digest(m.hasher(), s);
+                            return m.shift_remove_prehashed_with(
+                                hash,
+                                |ek| string_key_eq(ek, k, s),
+                                vm,
+                                globals,
+                            );
+                        } else if let Some(hash) = unasked_digest(k, globals) {
+                            return m.shift_remove_prehashed_with(
+                                hash,
+                                |ek| unasked_key_eq(ek, k),
+                                vm,
+                                globals,
+                            );
+                        }
+                    }
+                    HashContent::IdentMap(m) => {
+                        return m.shift_remove(&IdentKey(k), vm, globals);
+                    }
+                }
             }
-            let removed = match &mut self.boxed_mut().content {
-                HashContent::Map(m) => m
-                    .tombstone_remove(&k, None, Value::nil(), vm, globals)?
-                    .map(|(_, _, v)| v),
-                HashContent::IdentMap(m) => m
-                    .tombstone_remove(&IdentKey(k), None, Value::nil(), vm, globals)?
-                    .map(|(_, _, v)| v),
-            };
-            if removed.is_some() {
-                let dead = &self.boxed_mut().dead;
-                dead.set(dead.get() + 1);
-            }
-            return Ok(removed);
         }
-        if self.is_inline() {
-            return Ok(match self.as_ref().inline_pos(k, vm, globals)? {
-                Some(i) => Some(self.inline_remove_at(i)),
+        let found = if self.observes(k, globals) {
+            // `ar_delete` hashes the key before it looks at the table,
+            // an empty one included.
+            let hash_value = k.hash_value(vm, globals)?;
+            self.as_ref().pos_with_hash(k, hash_value, vm, globals)?
+        } else {
+            match self.as_ref().pos(k, vm, globals)? {
+                Some(i) => self.as_ref().entry_at(i).map(|(_, v)| (i, v)),
                 None => None,
-            });
+            }
+        };
+        let Some((i, v)) = found else {
+            return Ok(None);
+        };
+        if self.as_ref().iter_active() {
+            self.delete_at(i, vm, globals)?;
+        } else if self.is_inline() {
+            self.inline_remove_at(i);
+        } else if self.boxed_mut().dead.get() != 0 {
+            // The key's own methods traversed the Hash and deleted from
+            // it: the entries cannot be shifted over a tombstone, so this
+            // one joins them and all go together.
+            match &mut self.boxed_mut().content {
+                HashContent::Map(m) => {
+                    m.tombstone_index(i, None, Value::nil(), vm, globals)?;
+                }
+                HashContent::IdentMap(m) => {
+                    m.tombstone_index(i, None, Value::nil(), vm, globals)?;
+                }
+            }
+            let dead = &self.boxed_mut().dead;
+            dead.set(dead.get() + 1);
+            self.compact_dirty();
+        } else {
+            match &mut self.boxed_mut().content {
+                HashContent::Map(m) => {
+                    m.shift_remove_index(i, vm, globals)?;
+                }
+                HashContent::IdentMap(m) => {
+                    m.shift_remove_index(i, vm, globals)?;
+                }
+            }
         }
-        self.compact_if_dirty();
-        match &mut self.boxed_mut().content {
-            HashContent::Map(m) => m.shift_remove(&k, vm, globals),
-            HashContent::IdentMap(m) => m.shift_remove(&IdentKey(k), vm, globals),
-        }
+        Ok(Some(v))
     }
 
     /// Overwrite the value of the `index`-th entry in place (the
@@ -2839,12 +3211,6 @@ mod tests {
         }
         assert!(inline.eql(&boxed, e, g).unwrap());
         assert!(boxed.eql(&inline, e, g).unwrap());
-        let digest = |m: &HashmapInner, e: &mut Executor, g: &mut Globals| {
-            let mut s = crate::value::seeded_hasher();
-            m.ruby_hash(&mut s, e, g).unwrap();
-            std::hash::Hasher::finish(&s)
-        };
-        assert_eq!(digest(&inline, e, g), digest(&boxed, e, g));
 
         // shift walks the inline pairs in insertion order
         let mut s = HashmapInner::default();
@@ -2970,8 +3336,6 @@ mod tests {
             .unwrap();
         assert!(!i1.eql(&plain, e, g).unwrap());
         assert!(!plain.eql(&i1, e, g).unwrap());
-        let mut s = crate::value::seeded_hasher();
-        i1.ruby_hash(&mut s, e, g).unwrap();
 
         // eql: length mismatch and value mismatch
         let mut short = HashmapInner::default();
@@ -3151,12 +3515,6 @@ mod tests {
         }
         assert!(inline_i.eql(&boxed_i, e, g).unwrap());
         assert!(boxed_i.eql(&inline_i, e, g).unwrap());
-        let digest = |m: &HashmapInner, e: &mut Executor, g: &mut Globals| {
-            let mut s = crate::value::seeded_hasher();
-            m.ruby_hash(&mut s, e, g).unwrap();
-            std::hash::Hasher::finish(&s)
-        };
-        assert_eq!(digest(&inline_i, e, g), digest(&boxed_i, e, g));
 
         // clone keeps the identity mode (and the inline representation)
         let copy = inline_i.clone();

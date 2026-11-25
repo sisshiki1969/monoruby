@@ -3285,6 +3285,24 @@ impl std::hash::Hash for RStringInner {
     }
 }
 
+impl RStringInner {
+    /// The hash value of a String ([`Value::hash_value`]): its bytes,
+    /// and its encoding where they are not all ASCII, through the
+    /// hasher `hash_builder` makes.
+    #[inline(always)]
+    pub(crate) fn hash_value_with(&self, hash_builder: &rubymap::RubyRandomState) -> i64 {
+        use std::hash::{BuildHasher, Hash};
+        let mut h = hash_builder.build_hasher();
+        self.hash(&mut h);
+        h.hash_value()
+    }
+
+    /// [`Self::hash_value_with`] the process seed.
+    pub(crate) fn hash_value(&self) -> i64 {
+        self.hash_value_with(&rubymap::RubyRandomState::new())
+    }
+}
+
 impl std::cmp::PartialOrd<Self> for RStringInner {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let lhs = self.as_bytes();

@@ -17,7 +17,7 @@ pub use self::slice::Slice;
 
 use ::core::cmp::Ordering;
 use ::core::fmt;
-use ::core::hash::{BuildHasher, Hasher};
+use ::core::hash::BuildHasher;
 use ::core::mem;
 use ::core::ops::{Index, IndexMut, RangeBounds};
 use alloc::boxed::Box;
@@ -516,6 +516,51 @@ where
         )
     }
 
+    /// Removal twin of [`Self::get_prehashed_with`]: the entry it finds
+    /// is taken out, the entries after it shifting down as in
+    /// [`Self::shift_remove`], and its value answered.
+    #[inline]
+    pub fn shift_remove_prehashed_with(
+        &mut self,
+        hash: usize,
+        eq: impl FnMut(&K) -> bool,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<V>, R> {
+        Ok(self
+            .core
+            .shift_remove_full_prehashed_with(HashValue(hash), eq, e, g)?
+            .map(third))
+    }
+
+    /// The position of the entry [`Self::get_prehashed_with`] finds.
+    #[inline]
+    pub fn get_index_of_prehashed_with(
+        &self,
+        hash: usize,
+        eq: impl FnMut(&K) -> bool,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<usize>, R> {
+        self.core
+            .get_index_of_prehashed_with(HashValue(hash), eq, e, g)
+    }
+
+    /// Hand `f` the position, the key and the value of every entry filed
+    /// under the digest `hash`, in probe order, comparing nothing: the
+    /// candidates for a key whose `eql?` is Ruby code, to be asked about
+    /// once no reference into the map is held.
+    #[inline]
+    pub fn each_filed_under(
+        &self,
+        hash: usize,
+        f: impl FnMut(usize, &K, &V),
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        self.core.each_filed_under(HashValue(hash), f, e, g)
+    }
+
     /// Insert a key-value pair in the map at its ordered position among sorted keys.
     ///
     /// This is equivalent to finding the position with
@@ -778,15 +823,13 @@ where
         e: &mut E,
         g: &mut G,
     ) -> Result<HashValue, R> {
-        let mut h = self.hash_builder.build_hasher();
-        key.ruby_hash(&mut h, e, g)?;
-        Ok(HashValue(h.finish() as usize))
+        Ok(HashValue(
+            key.ruby_digest(&self.hash_builder, e, g)? as usize
+        ))
     }
 
     pub(crate) fn hash_sym<Q: ?Sized + RubySymHash>(&self, key: &Q) -> HashValue {
-        let mut h = self.hash_builder.build_hasher();
-        key.ruby_hash(&mut h);
-        HashValue(h.finish() as usize)
+        HashValue(key.ruby_digest(&self.hash_builder) as usize)
     }
 
     /// Return `true` if an equivalent to `key` exists in the map.

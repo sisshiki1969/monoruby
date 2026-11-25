@@ -524,6 +524,12 @@ pub struct ClassInfo {
     ///
     hash_method_at: std::cell::Cell<Option<(u32, Option<FuncId>)>>,
     ///
+    /// Version-stamped memo of `Store::is_identity_key_class`: as of
+    /// class_version `.0`, whether an instance inherits both
+    /// `Kernel#hash` and `Kernel#eql?`.
+    ///
+    identity_key_at: std::cell::Cell<Option<(u32, bool)>>,
+    ///
     /// Some instance of this class has been given a singleton class
     /// (`def obj.m`, `extend`, `singleton_class`, …) — one-way. Until then
     /// an object the JIT has proved to be of this class is still of this
@@ -692,6 +698,7 @@ impl ClassInfo {
             eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
+            identity_key_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
             singleton_requested: false,
@@ -724,6 +731,7 @@ impl ClassInfo {
             eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
+            identity_key_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
             singleton_requested: false,
@@ -831,6 +839,14 @@ impl ClassInfo {
 
     pub(super) fn set_hash_method_at(&self, version: u32, fid: Option<FuncId>) {
         self.hash_method_at.set(Some((version, fid)));
+    }
+
+    pub(super) fn identity_key_at(&self) -> Option<(u32, bool)> {
+        self.identity_key_at.get()
+    }
+
+    pub(super) fn set_identity_key_at(&self, version: u32, answer: bool) {
+        self.identity_key_at.set(Some((version, answer)));
     }
 
     pub(super) fn set_match_method_at(&self, version: u32, fid: FuncId) {

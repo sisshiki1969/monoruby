@@ -1,11 +1,6 @@
 use num::ToPrimitive;
 use rubymap::RubyEql;
-use std::{
-    collections::HashSet,
-    fmt::Debug,
-    hash::{Hash, Hasher},
-    ops::Deref,
-};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, ops::Deref};
 
 use super::*;
 use crate::{
@@ -403,41 +398,6 @@ where
     result
 }
 
-/// Like [`exec_recursive_outer`], but does **not** register an id in the
-/// recursion guard: the callee is expected to register the ids it visits
-/// itself (e.g. `calculate_hash` → `ruby_hash`, whose Array/Hash arms
-/// insert into the same `HASH_RECURSION_GUARD`). Only the outer-collapse
-/// bookkeeping (depth counter + hit flag) is provided, so a cycle detected
-/// anywhere inside `f` still collapses the outermost call to
-/// `on_recursive`. Registering the id here as well would immediately
-/// self-collide with the callee's own registration.
-pub(crate) fn exec_recursive_outer_unregistered<T, F>(f: F, on_recursive: T) -> Result<T>
-where
-    F: FnOnce() -> Result<T>,
-{
-    let is_outer = OUTER_RECURSION_DEPTH.with(|d| {
-        let was = *d.borrow() == 0;
-        *d.borrow_mut() += 1;
-        was
-    });
-    if is_outer {
-        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = false);
-    }
-    let result = f();
-    OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
-    if is_outer {
-        let hit = OUTER_RECURSION_HIT.with(|h| {
-            let v = *h.borrow();
-            *h.borrow_mut() = false;
-            v
-        });
-        if hit {
-            return Ok(on_recursive);
-        }
-    }
-    result
-}
-
 /// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
 ///
 /// Uses a `(lhs_id, rhs_id)` pair to detect when the same pair of containers
@@ -464,152 +424,269 @@ where
     result
 }
 
+/// Salt of a Float's hash value, written after its bits: the bits of a
+/// heap Float can be those of any immediate, and would otherwise hash
+/// as it does.
+const FLOAT_HASH_SALT: u64 = 0x9e37_79b9_7f4a_7c15;
+
+/// A hasher on the process seed: the one every hash value of a natively
+/// hashed object comes from (see [`Value::hash_value`]).
+#[inline(always)]
+pub(crate) fn hash_value_hasher() -> rubymap::RubyHasher {
+    use std::hash::BuildHasher;
+    rubymap::RubyRandomState::new().build_hasher()
+}
+
 impl Value {
-    /// The digest contribution of a packed (immediate) `Value` — the
-    /// `try_rvalue() == None` arm of [`RubyHash::ruby_hash`], factored out
-    /// infallibly so the vm-free bucketing fast paths (`insert_prehashed` /
-    /// `get_prehashed` in `rvalue/hash.rs`) replicate the exact digest the
-    /// general path computes. Any change here changes both in lockstep.
-    pub(crate) fn ruby_hash_packed<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.ruby_hash_packed_zero(state);
+    /// The hash value of a packed (immediate) `Value`, and whether it is
+    /// the flonum `0.0`. See [`Self::hash_value`]; this is its arm for an
+    /// immediate, apart and infallible so that the vm-free probes
+    /// (`packed_digest` in `rvalue/hash.rs`, the JIT's inline probe) file
+    /// a key exactly where the general one does.
+    ///
+    /// An immediate is its own identity, so its tagged bits are the
+    /// content: one fold of them into the seed. `0.0` is the exception —
+    /// it is `eql?` to a heap Float, `-0.0`, which has no flonum form
+    /// (CRuby's `flo_eql` compares the values) — and takes the hash value
+    /// of that one ([`Self::float_hash_value`]). Bit equality is not
+    /// `eql?` for it either, which is what a caller wants the flag for;
+    /// the answer is a constant in every other use.
+    #[inline(always)]
+    pub(crate) fn packed_hash_value(self, hash_builder: &rubymap::RubyRandomState) -> (i64, bool) {
+        use std::hash::{BuildHasher, Hasher};
+        debug_assert!(self.is_packed_value());
+        if self.id() == FLOAT_ZERO {
+            return (Self::float_hash_value(0.0), true);
+        }
+        let mut h = hash_builder.build_hasher();
+        h.write_u64(self.id());
+        (h.hash_value(), false)
     }
 
-    /// [`Self::ruby_hash_packed`], also answering whether `self` is the
-    /// flonum `0.0` — the one packed key bit equality is not `eql?` for
-    /// (see the arm below). The answer is a constant in every arm, so a
-    /// caller that branches on it pays nothing on the others.
-    #[inline(always)]
-    pub(crate) fn ruby_hash_packed_zero<H: std::hash::Hasher>(&self, state: &mut H) -> bool {
-        use std::hash::{Hash, Hasher};
-        match self.unpack() {
-            // `Integer#hash`/`Float#hash` digest the numeric *value*
-            // (not the tagged bits), so a numeric element must mix the
-            // same digest whether reached here or through a Ruby-level
-            // `#hash` result that Array#hash/Hash#hash coerce via
-            // `#to_int` (see the "calls to_int on result of calling
-            // hash on each element" core/array spec). Reproduce the
-            // reduction inline rather than dispatching `#hash`: this
-            // path also backs internal Hash bucketing and must not
-            // re-enter the interpreter. Numeric keys only ever use the
-            // Value-keyed `Map` variant, so both insert and lookup
-            // reach this arm — bucketing stays self-consistent.
-            RV::Fixnum(i) => {
-                let mut s = crate::value::seeded_hasher();
-                i.hash(&mut s);
-                ((s.finish() as i64) >> 1).hash(state);
+    /// The hash value of a Float that is not a non-zero flonum: a heap
+    /// Float, or either zero.
+    #[inline]
+    pub(crate) fn float_hash_value(f: f64) -> i64 {
+        use std::hash::Hasher;
+        // `0.0` and `-0.0` are `eql?`.
+        let bits = if f == 0.0 { 0 } else { f.to_bits() };
+        let mut h = hash_value_hasher();
+        h.write_u64(bits);
+        h.write_u64(FLOAT_HASH_SALT);
+        h.hash_value()
+    }
+
+    /// The hash value of an Integer that is not a Fixnum.
+    pub(crate) fn bignum_hash_value(b: &BigInt) -> i64 {
+        use std::hash::Hash;
+        let mut h = hash_value_hasher();
+        b.hash(&mut h);
+        h.hash_value()
+    }
+
+    /// The hash value of an object that inherits `Kernel#hash`: its
+    /// identity.
+    #[inline]
+    pub(crate) fn identity_hash_value(self) -> i64 {
+        use std::hash::Hasher;
+        match self.try_rvalue() {
+            None => self.packed_hash_value(&rubymap::RubyRandomState::new()).0,
+            Some(_) => {
+                let mut h = hash_value_hasher();
+                h.write_u64(self.id());
+                h.hash_value()
             }
-            // `0.0` is the one flonum that is `eql?` to a heap Float —
-            // `-0.0`, which has no flonum form (CRuby's `flo_eql`
-            // compares the values) — so it takes the digest
-            // `ruby_hash` gives that one.
-            RV::Float(f) if f == 0.0 => {
-                (-0.0f64).to_bits().hash(state);
-                return true;
-            }
-            RV::Float(f) => {
-                let mut s = crate::value::seeded_hasher();
-                f.to_bits().hash(&mut s);
-                ((s.finish() as i64) >> 1).hash(state);
-            }
-            // nil / true / false / Symbol hash by identity. This keeps
-            // parity with `IdentKey` (used for symbol-keyed Hash
-            // bucketing), which digests `id()`; changing it here would
-            // desynchronise the two hash functions for Symbol keys.
-            _ => self.0.hash(state),
         }
-        false
+    }
+
+    ///
+    /// The *hash value* of `self`: the Integer its `#hash` answers, found
+    /// without a call where the method is the builtin one.
+    ///
+    /// This number is all a Hash knows a key by, together with `eql?`. A
+    /// map files every key under [`rubymap::digest_of_hash_value`] of it
+    /// (`RubyHash::ruby_digest` below), so that an object whose `#hash`
+    /// answers another object's hash value — a delegator, a wrapper
+    /// around a String or an Integer — meets that object in its bucket
+    /// and `eql?` decides, as in CRuby, whose `any_hash` is one function
+    /// for both (#2204). The builtin `#hash` methods of the types hashed
+    /// here answer this same function, each from its own entry.
+    ///
+    /// The values come from the map's own hasher on the process seed
+    /// ([`hash_value_hasher`]), so they differ from process to process.
+    ///
+    pub(crate) fn hash_value(self, e: &mut Executor, g: &mut Globals) -> Result<i64> {
+        let Some(rv) = self.try_rvalue() else {
+            return Ok(self.packed_hash_value(&rubymap::RubyRandomState::new()).0);
+        };
+        // SAFETY: the RValue pointer is valid, and `ty()` names the
+        // variant of the union each arm reads.
+        unsafe {
+            match rv.ty() {
+                ObjTy::BIGNUM => Ok(Self::bignum_hash_value(rv.as_bignum())),
+                ObjTy::FLOAT => Ok(Self::float_hash_value(rv.as_float())),
+                // By content, whatever the class: CRuby's `any_hash`
+                // takes `rb_str_hash` for every `T_STRING` and never
+                // calls a subclass's `#hash`.
+                ObjTy::STRING => Ok(rv.as_rstring().hash_value()),
+                // The native structural hash applies only while the
+                // object's `:hash` still resolves to the builtin one (a
+                // class-version-cached probe): a singleton/mock or
+                // monkey-patched `#hash` on an Array or Hash key must be
+                // dispatched — the mock-count specs pin exactly one
+                // `#hash` call per probe. `Set` (`ObjTy::HASH` with its
+                // own, order-independent `Set#hash`) falls through the
+                // same way.
+                ObjTy::ARRAY if g.store.has_builtin_container_hash(self, ObjTy::ARRAY) => {
+                    self.array_hash_value(e, g)
+                }
+                ObjTy::HASH if g.store.has_builtin_container_hash(self, ObjTy::HASH) => {
+                    crate::builtins::hash::hash_hash_value(e, g, self)
+                }
+                // A plain object — one that inherits the builtin identity
+                // `hash` — is the common case for a Hash or Set keyed by
+                // object identity, and dispatching `#hash` for every
+                // lookup was the one place monoruby lost to CRuby (whose
+                // `rb_any_hash` special cases exactly this).
+                _ if g.store.has_builtin_identity_hash(self) => Ok(self.identity_hash_value()),
+                _ => {
+                    // `rb_hash`: send `#hash`, and coerce an answer that
+                    // is not an Integer with `#to_int`.
+                    let h = e.invoke_method_inner(g, IdentId::HASH, self, &[], None, None)?;
+                    match h.unpack() {
+                        RV::Fixnum(i) => Ok(i),
+                        RV::BigInt(b) => Ok(Self::bignum_hash_value(b)),
+                        _ => h.coerce_to_int_i64(e, g),
+                    }
+                }
+            }
+        }
+    }
+
+    /// `rb_ary_hash`: the length, then each element's hash value. A
+    /// structure that is cyclic at any depth hashes to the one sentinel
+    /// (CRuby's `rb_exec_recursive_outer`), so `rec.hash == [[rec]].hash`
+    /// when `rec.eql?([[rec]])`.
+    pub(crate) fn array_hash_value(self, e: &mut Executor, g: &mut Globals) -> Result<i64> {
+        use std::hash::Hasher;
+        // An Array of leaves — the composite key `[id, :name]` — cannot
+        // lead back to itself, and none of its elements is asked: no
+        // guard, no call.
+        let ary = self.as_array();
+        let mut h = hash_value_hasher();
+        h.write_u64(ary.len() as u64);
+        if ary.iter().all(|v| match v.leaf_hash_value() {
+            Some(hash_value) => {
+                h.write_i64(hash_value);
+                true
+            }
+            None => false,
+        }) {
+            return Ok(h.hash_value());
+        }
+        exec_recursive_outer(
+            self.id(),
+            || {
+                let mut h = hash_value_hasher();
+                h.write_u64(self.as_array().len() as u64);
+                // An element's `#hash` is Ruby and may change the
+                // receiver, so the length is read and the element taken
+                // afresh each round (#2172) — and through a reference
+                // made afresh too: one `&ArrayInner` held over the calls
+                // lets the compiler read the length once, and the loop
+                // then walks elements the method has popped.
+                let mut i = 0;
+                while let Some(v) = self.as_array().get(i).copied() {
+                    h.write_i64(v.hash_value(e, g)?);
+                    i += 1;
+                }
+                Ok(h.hash_value())
+            },
+            0,
+        )
+    }
+
+    /// `recursive_eql` of array.c: whether each element of the Array
+    /// `self` is `eql?` to the one of the Array `other` at its position.
+    ///
+    /// An element's `eql?` is Ruby and may shrink, clear or grow either
+    /// Array, so nothing of them is held over the call: the length of
+    /// `self` is read and both elements are taken afresh each round, an
+    /// element `other` no longer has being nil (`rb_ary_elt`).
+    pub(crate) fn array_elements_eql(
+        self,
+        other: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<bool> {
+        // The leading elements that are settled without a call — the
+        // whole of a composite key like `[id, :name]` — are compared
+        // through the two slices: nothing runs meanwhile.
+        let mut i = 0;
+        for (lhs, rhs) in self.as_array().iter().zip(other.as_array().iter()) {
+            if lhs.id() != rhs.id() {
+                if lhs.is_packed_value() && rhs.is_packed_value() {
+                    return Ok(false);
+                }
+                break;
+            }
+            i += 1;
+        }
+        while let Some(lhs) = self.as_array().get(i).copied() {
+            let rhs = other.as_array().get(i).copied().unwrap_or_default();
+            if !lhs.eql(&rhs, vm, globals)? {
+                return Ok(false);
+            }
+            i += 1;
+        }
+        Ok(true)
+    }
+
+    /// [`Self::hash_value`] of a value that holds no other and is hashed
+    /// without a call: an immediate, a Bignum, a Float, a String.
+    #[inline]
+    fn leaf_hash_value(self) -> Option<i64> {
+        let Some(rv) = self.try_rvalue() else {
+            return Some(self.packed_hash_value(&rubymap::RubyRandomState::new()).0);
+        };
+        // SAFETY: `ty()` names the variant of the union each arm reads.
+        unsafe {
+            match rv.ty() {
+                ObjTy::BIGNUM => Some(Self::bignum_hash_value(rv.as_bignum())),
+                ObjTy::FLOAT => Some(Self::float_hash_value(rv.as_float())),
+                ObjTy::STRING => Some(rv.as_rstring().hash_value()),
+                _ => None,
+            }
+        }
     }
 }
 
 impl RubyHash<Executor, Globals, MonorubyErr> for Value {
+    /// What a Value adds to the hash of a structure it is part of: its
+    /// hash value, so that an element counts the same whether the number
+    /// came from a builtin or from its own `#hash` (the "calls to_int on
+    /// result of calling hash on each element" core/array spec).
     fn ruby_hash<H: std::hash::Hasher>(
         &self,
         state: &mut H,
         e: &mut Executor,
         g: &mut Globals,
     ) -> Result<()> {
-        match self.try_rvalue() {
-            None => self.ruby_hash_packed(state),
-            // SAFETY: The RValue pointer is valid and the type checking via ty()
-            // ensures we're accessing the correct variant of the union.
-            Some(lhs) => unsafe {
-                match lhs.ty() {
-                    //ObjTy::INVALID => panic!("Invalid rvalue. (maybe GC problem) {:?}", lhs),
-                    ObjTy::BIGNUM => lhs.as_bignum().hash(state),
-                    // A heap `-0.0` and the flonum `0.0` are `eql?` and
-                    // one Hash key: `ruby_hash_packed` gives the flonum
-                    // this same digest.
-                    ObjTy::FLOAT => lhs.as_float().to_bits().hash(state),
-                    ObjTy::STRING => lhs.as_rstring().hash(state),
-                    // The native structural hash applies only while the
-                    // object's `:hash` still resolves to the builtin
-                    // identity `Kernel#hash` (a class-version-cached
-                    // probe): a singleton/mock or monkey-patched `#hash`
-                    // on an Array or Hash key must be dispatched — the
-                    // mock-count specs pin exactly one `#hash` call per
-                    // probe. `Set` (`ObjTy::HASH` with a Ruby-level,
-                    // order-independent `Set#hash`) falls through the
-                    // same way, so e.g. `Set[1,3]` and `Set[3,1]` hash
-                    // equal and compare as set members.
-                    ty @ (ObjTy::ARRAY | ObjTy::HASH)
-                        if g.store.has_builtin_container_hash(*self, ty) =>
-                    {
-                        let id = self.id();
-                        let is_recursive =
-                            HASH_RECURSION_GUARD.with(|guard| !guard.borrow_mut().insert(id));
-                        if is_recursive {
-                            // Surface the cycle to any enclosing
-                            // `exec_recursive_outer` frame (CRuby's
-                            // rb_exec_recursive_outer semantics: the
-                            // outermost `#hash` collapses to the sentinel).
-                            OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = true);
-                            0u64.hash(state);
-                            return Ok(());
-                        }
-                        let result = match lhs.ty() {
-                            ObjTy::ARRAY => lhs.as_array().ruby_hash(state, e, g),
-                            _ => lhs.as_hashmap().ruby_hash(state, e, g),
-                        };
-                        HASH_RECURSION_GUARD.with(|guard| guard.borrow_mut().remove(&id));
-                        result?;
-                    }
-                    ObjTy::RANGE => lhs.as_range().ruby_hash(state, e, g)?,
-                    //ObjTy::METHOD => lhs.method().hash(state),
-                    // A plain object — one that inherits the builtin
-                    // identity `hash` — is the common case for a Hash or Set
-                    // keyed by object identity, and dispatching `#hash` for
-                    // every lookup was the one place monoruby lost to CRuby
-                    // (whose `rb_any_hash` special cases exactly this).
-                    // Reproduce `Kernel#hash` inline: same seeded digest of
-                    // `id()`, reduced the same way, so a key hashes
-                    // identically whether it came through here or through a
-                    // real `#hash` call.
-                    _ if g.store.has_builtin_identity_hash(*self) => {
-                        let mut s = crate::value::seeded_hasher();
-                        self.id().hash(&mut s);
-                        // `Value::from_hash_digest`'s reduction, then the
-                        // `RV::Fixnum` arm below — spelled out so the two
-                        // stay visibly identical.
-                        ((s.finish() as i64) >> 1).hash(state);
-                    }
-                    _ => {
-                        // CRuby semantics: Array#hash / Hash#hash send `#hash`
-                        // to each element, and when the result is not already
-                        // an Integer, coerce it via `#to_int` before mixing.
-                        // Integer results are hashed by value so two arrays
-                        // produced through different dispatch paths but
-                        // landing on the same integer hash to the same digest.
-                        let h = e.invoke_method_inner(g, IdentId::HASH, *self, &[], None, None)?;
-                        match h.unpack() {
-                            RV::Fixnum(i) => i.hash(state),
-                            RV::BigInt(b) => b.hash(state),
-                            _ => h.coerce_to_int_i64(e, g)?.hash(state),
-                        }
-                    }
-                }
-            },
-        }
+        state.write_i64(self.hash_value(e, g)?);
         Ok(())
+    }
+
+    /// See [`Value::hash_value`]. The map's own hasher is not consulted:
+    /// the digest is a function of the hash value alone, the same for
+    /// every map.
+    #[inline]
+    fn ruby_digest<S: std::hash::BuildHasher>(
+        &self,
+        _: &S,
+        e: &mut Executor,
+        g: &mut Globals,
+    ) -> Result<u64> {
+        Ok(rubymap::digest_of_hash_value(self.hash_value(e, g)?))
     }
 }
 
@@ -644,24 +721,14 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                             lhs.as_rstring() == rhs.as_rstring()
                         }
                         (ObjTy::ARRAY, ObjTy::ARRAY) => {
-                            let lhs_ary = lhs.as_array();
-                            let rhs_ary = rhs.as_array();
-                            if lhs_ary.len() != rhs_ary.len() {
+                            if lhs.as_array().len() != rhs.as_array().len() {
                                 return Ok(false);
                             }
-                            let l = self.id();
-                            let r = other.id();
+                            let (lhs, rhs) = (*self, *other);
                             return exec_recursive_paired(
-                                l,
-                                r,
-                                || {
-                                    for (a1, a2) in lhs_ary.iter().zip(rhs_ary.iter()) {
-                                        if !a1.eql(a2, vm, globals)? {
-                                            return Ok(Value::bool(false));
-                                        }
-                                    }
-                                    Ok(Value::bool(true))
-                                },
+                                lhs.id(),
+                                rhs.id(),
+                                || Ok(Value::bool(lhs.array_elements_eql(rhs, vm, globals)?)),
                                 Value::bool(true),
                             )
                             .map(|v| v == Value::bool(true));
@@ -700,40 +767,54 @@ impl RubyEql<Executor, Globals, MonorubyErr> for Value {
                     })
                 }
             }
-            // One immediate, one heap value: only a flonum `0.0` and a
-            // heap `-0.0` are `eql?`.
-            (Some(heap), None) | (None, Some(heap)) => Ok(heap.ty() == ObjTy::FLOAT
+            // An immediate asked about a heap value: its `eql?` is the
+            // builtin one, which knows one such pair — a flonum `0.0` and
+            // a heap `-0.0`. (`rb_eql` would send `eql?` here too; the
+            // answer of `Integer#eql?` or `Symbol#eql?` is known.)
+            (None, Some(heap)) => Ok(self.id() == FLOAT_ZERO
+                && heap.ty() == ObjTy::FLOAT
                 // SAFETY: `ty()` says the payload is a float.
-                && unsafe { heap.as_float() } == 0.0
-                && (self.id() == FLOAT_ZERO || other.id() == FLOAT_ZERO)),
+                && unsafe { heap.as_float() } == 0.0),
+            // A heap value asked about an immediate. A Float answers as
+            // above; anything else is sent `eql?`, as `rb_eql` sends it:
+            // an object whose `#hash` is an Integer's or a Symbol's hash
+            // value meets that key in its bucket, and its own `eql?`
+            // says whether it is the same key (#2204).
+            (Some(heap), None) => {
+                if heap.ty() == ObjTy::FLOAT {
+                    // SAFETY: `ty()` says the payload is a float.
+                    Ok(other.id() == FLOAT_ZERO && unsafe { heap.as_float() } == 0.0)
+                } else {
+                    Ok(vm
+                        .invoke_method_inner(globals, IdentId::EQL_, *self, &[*other], None, None)?
+                        .as_bool())
+                }
+            }
         }
     }
 }
 
 /// Per-process random hash state (CVE-2011-4815 hardening).
 ///
-/// Every Ruby-visible `#hash` digest is produced by a SipHash keyed with
-/// this state, so hash values are consistent within a process but differ
-/// between processes, preventing precomputed hash-flooding attacks.
-/// Internal hash *tables* (rubymap / HashMap) key their own hashers and are
-/// unaffected.
+/// The `#hash` of the builtin classes that mix their parts themselves
+/// (Struct, Set, Time, Regexp, Rational, Complex, MatchData, Method,
+/// Proc) is produced by a SipHash keyed with this state, so hash values
+/// are consistent within a process but differ between processes,
+/// preventing precomputed hash-flooding attacks. The values a Hash
+/// computes without a call — immediates, Integers, Floats, Strings,
+/// Arrays, Hashes, objects with `Kernel#hash` — come from the map's own
+/// seeded mixer instead ([`Value::hash_value`]).
 static HASH_STATE: std::sync::LazyLock<std::collections::hash_map::RandomState> =
     std::sync::LazyLock::new(std::collections::hash_map::RandomState::new);
 
-/// A hasher keyed with the per-process random [`HASH_STATE`]. Use this for
-/// any digest returned to Ruby via `#hash`.
+/// A hasher keyed with the per-process random [`HASH_STATE`], for a
+/// `#hash` method that mixes several parts.
 pub(crate) fn seeded_hasher() -> std::collections::hash_map::DefaultHasher {
     use std::hash::BuildHasher;
     HASH_STATE.build_hasher()
 }
 
 impl Value {
-    pub fn calculate_hash(self, e: &mut Executor, g: &mut Globals) -> Result<u64> {
-        let mut s = seeded_hasher();
-        RubyHash::ruby_hash(&self, &mut s, e, g)?;
-        Ok(s.finish())
-    }
-
     /// Convert a 64-bit `#hash` digest into a Ruby Integer, folding it
     /// into Fixnum (i63) range. Ruby-visible hash digests must stay
     /// Fixnums: CRuby hash values are always Fixnums (a C `long`), and
@@ -4154,6 +4235,14 @@ impl AsRef<Value> for RubySymbol {
 impl RubySymHash for RubySymbol {
     fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
+    }
+
+    /// Where every other probe files the Symbol: under the digest of its
+    /// hash value ([`Value::packed_hash_value`]).
+    #[inline]
+    fn ruby_digest<S: std::hash::BuildHasher>(&self, _: &S) -> u64 {
+        let (hash_value, _) = self.packed_hash_value(&rubymap::RubyRandomState::new());
+        rubymap::digest_of_hash_value(hash_value)
     }
 }
 

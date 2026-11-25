@@ -703,6 +703,41 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
         Ok(self.indices.find(hash.get(), eq, e, g)?.copied())
     }
 
+    /// Hand `f` the position, the key and the value of every entry filed
+    /// under `hash`: the candidates a probe for a key with that digest asks
+    /// `eql?` about, in the order it asks. `f` compares nothing and the
+    /// walk calls nothing else, so a caller whose `eql?` is Ruby code can
+    /// take the candidates first and ask afterwards, holding no reference
+    /// into the table while that code runs — which may change the table
+    /// or free it. As with the prehashed lookups, the `E`/`G` refs only
+    /// feed the index table's fallible probe signature.
+    pub(crate) fn each_filed_under(
+        &self,
+        hash: HashValue,
+        mut f: impl FnMut(usize, &K, &V),
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<(), R> {
+        if self.linear {
+            for (i, entry) in self.entries.iter().enumerate() {
+                if entry.hash == hash {
+                    f(i, &entry.key, &entry.value);
+                }
+            }
+            return Ok(());
+        }
+        let entries = &self.entries;
+        let visit = |&i: &usize, _: &mut E, _: &mut G| {
+            let entry = &entries[i];
+            if entry.hash == hash {
+                f(i, &entry.key, &entry.value);
+            }
+            Ok(false)
+        };
+        self.indices.find(hash.get(), visit, e, g)?;
+        Ok(())
+    }
+
     /// Same as `insert_full`, except it also replaces the key
     pub(crate) fn replace_full(
         &mut self,
@@ -858,6 +893,41 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
             });
         }
         let eq = equivalent(hash, key, &self.entries);
+        Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
+            Ok(entry) => {
+                let (index, _) = entry.remove();
+                let (key, value) = self.borrow_mut().shift_remove_finish(index, e, g)?;
+                Some((index, key, value))
+            }
+            Err(_) => None,
+        })
+    }
+
+    /// [`Self::shift_remove_full`] for a caller-computed digest and a
+    /// caller-supplied equality predicate (see
+    /// [`Self::insert_full_prehashed_with`] for the soundness
+    /// conditions): the removal of a key that is hashed and compared
+    /// without a call.
+    #[inline]
+    pub(crate) fn shift_remove_full_prehashed_with(
+        &mut self,
+        hash: HashValue,
+        mut eq: impl FnMut(&K) -> bool,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<Option<(usize, K, V)>, R> {
+        if self.linear {
+            for i in 0..self.entries.len() {
+                let entry = &self.entries[i];
+                if entry.hash == hash && eq(&entry.key) {
+                    let entry = self.entries.remove(i);
+                    return Ok(Some((i, entry.key, entry.value)));
+                }
+            }
+            return Ok(None);
+        }
+        let entries = &self.entries;
+        let eq = |&i: &usize, _: &mut E, _: &mut G| Ok(eq(&entries[i].key));
         Ok(match self.indices.find_entry(hash.get(), eq, e, g)? {
             Ok(entry) => {
                 let (index, _) = entry.remove();

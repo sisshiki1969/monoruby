@@ -336,9 +336,11 @@ JIT の `TraceIr::ConcatStr` → `AsmInst::ConcatStr` → `LInst::ConcatStr` →
   `==` の両方を持つ場合に素のバイト比較だと乖離する）。
 - `<=>` はバイト比較に**エンコーディング序数のタイブレーク**（CRuby の
   `rb_enc_index` 順）。非 ASCII 内容でだけ効く。
-- `hash` は `Value::calculate_hash` → プロセスごとの `RandomState` で
-  seed した SipHash（`HASH_STATE`、CVE-2011-4815 対策）を `from_hash_digest`
-  で Fixnum 範囲に畳む。**String ごとのハッシュキャッシュは無い**。
+- `hash` は `RStringInner::hash_value`: プロセスごとのシードを持つミキサー
+  （`RubyHasher`、CVE-2011-4815 対策）にバイト列を流して Fixnum 範囲に畳む。
+  Hash が String キーを置くダイジェストはこの値の fold なので、`#hash` が
+  String のハッシュ値を返すオブジェクトは同じバケットに入る（hash.md §1.5）。
+  **String ごとのハッシュキャッシュは無い**。
 
 ### 4.4 `[]`、`to_sym`、`%`、その他
 
@@ -532,7 +534,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | `rb_fstring` の重複排除 | pragma のリテラル**と**実行時の `-"str"` / `String#-@` / Hash キーに適用 | 同じ範囲。リテラルと `-str` は GC root のプール `Store::frozen_str_pool`（`(bytes, encoding)` キー）、Hash の String キーのコピーは弱いテーブル `rvalue::fstring`（§3.1）で、互いに同一オブジェクトになる |
 | chilled リテラル | CRuby 3.4 の `STR_CHILLED` | ヘッダフラグのビット 7 `CHILLED_LITERAL_BIT`、`Symbol#to_s` 用の別の `is_chilled` ビット、`--debug-frozen-string-literal` の出自テーブル |
 | coderange | `ENC_CODERANGE_*` を RBasic のフラグにキャッシュ | JIT 既知オフセットの `Cell<CodeRange>`（`repr(u8)`）。**遅延**計算で、追記・部分文字列・repeat では再計算でなく O(1) で畳む |
-| `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded SipHash（`DefaultHasher` + プロセスごとの `RandomState`）。**String ごとのキャッシュ無し**（2026-09 の yjit-bench 調査が未解決コストとして挙げる） |
+| `String#hash` | seeded SipHash。fstring 側でキャッシュ | seeded な multiply-fold ミキサー（`RubyHasher`、Hash のバケッティングと同じ関数）。**String ごとのキャッシュ無し**（2026-09 の yjit-bench 調査が未解決コストとして挙げる） |
 | Hash キーのバケッティング | `any_hash` はサブクラスでも内容をハッシュ、`rb_any_cmp` は `String` ちょうどのときだけバイト比較 | 同じ分割: `string_digest` は無条件に内容、`string_key_eq` / `is_plain_rstring_inner` がバイト比較をクラス一致でゲート |
 | `opt_str_freeze` | あり | あり — `StringFreeze` 命令（§3.5） |
 | `opt_str_uminus` | あり | **無し** |

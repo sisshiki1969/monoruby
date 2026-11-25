@@ -887,12 +887,12 @@ Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
 理由は BOP 表の性質そのものにある。表は「この仮定を置いてよい」という*許可*と
 *検知*であって、速度は「仮定を使う fast path」を書いて初めて出る。そして
 `hash` / `eql?` については **その fast path が既にあり、無条件に効いている** —
-`Value::ruby_hash` / `Value::eql`（`value.rs`）が `ObjTy` で分岐して Rust 側で
-直接計算する:
+`Value::hash_value`（当時は `Value::ruby_hash`）/ `Value::eql`（`value.rs`）が
+`ObjTy` で分岐して Rust 側で直接計算する:
 
 | | ネイティブ計算（ディスパッチ無し） |
 | --- | --- |
-| `ruby_hash` | Fixnum, Flonum, nil/true/false/Symbol, BigInt, Float, String, Array, Hash, Range |
+| `hash_value` | Fixnum, Flonum, nil/true/false/Symbol, BigInt, Float, String, Array, Hash（Range は #2204 の修正から `Range#hash` を dispatch） |
 | `eql` | 同一 id, 両方 immediate, BigInt, Float, Complex, String, Array, Range, Hash |
 
 基本クラスのキーには消せるディスパッチが最初から無い。登録しても得るものは無く、

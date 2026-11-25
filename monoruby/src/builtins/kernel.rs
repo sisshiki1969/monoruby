@@ -314,7 +314,8 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     );
     let kernel_hash = globals.define_builtin_func(kernel_class, "hash", hash, 0);
     globals.store.set_kernel_hash_fid(kernel_hash);
-    globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
+    let kernel_eql = globals.define_builtin_func(kernel_class, "eql?", eql_, 1);
+    globals.store.set_kernel_eql_fid(kernel_eql);
     globals.define_builtin_func(kernel_class, "dup", dup, 0);
     globals.define_builtin_func_with_kw(
         kernel_class,
@@ -6867,14 +6868,12 @@ fn kernel_class_gen(
 /// [https://docs.ruby-lang.org/ja/latest/method/Object/i/hash.html]
 #[monoruby_builtin]
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // Digest the identity (tagged bits for immediates, address for heap
-    // objects) through the per-process seeded hasher (CVE-2011-4815): a
+    // The identity (tagged bits for immediates, address for heap
+    // objects) folded into the per-process seed (CVE-2011-4815): a
     // Fixnum/Symbol's raw id is identical in every process, so returning it
-    // directly would make `14.hash` predictable across processes.
-    use std::hash::{Hash, Hasher};
-    let mut s = crate::value::seeded_hasher();
-    lfp.self_val().id().hash(&mut s);
-    Ok(Value::from_hash_digest(s.finish()))
+    // directly would make `14.hash` predictable across processes. The
+    // number a Hash files such a key under (`Value::hash_value`).
+    Ok(Value::integer(lfp.self_val().identity_hash_value()))
 }
 
 ///

@@ -737,18 +737,11 @@ fn to_h(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/hash.html]
 #[monoruby_builtin]
 fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    // Outer-recursion collapse (CRuby rb_exec_recursive_outer): every
-    // structure that is cyclic — at any depth — hashes to the same
-    // sentinel, so `rec.hash == [{x: rec}].hash` when rec.eql?([{x: rec}]).
-    // The *unregistered* variant is used because `ruby_hash`'s Array arm
-    // registers self in the recursion guard itself.
-    crate::value::exec_recursive_outer_unregistered(
-        || {
-            let h = lfp.self_val().calculate_hash(vm, globals)?;
-            Ok(Value::from_hash_digest(h))
-        },
-        Value::integer(0),
-    )
+    // The number a Hash files an Array key under
+    // (`Value::array_hash_value`).
+    Ok(Value::integer(
+        lfp.self_val().array_hash_value(vm, globals)?,
+    ))
 }
 
 ///
@@ -1345,12 +1338,11 @@ fn eql(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         self_val.id(),
         arg.id(),
         || {
-            for i in 0..lhs.len() {
-                if !lhs[i].eql(&rhs[i], vm, globals)? {
-                    return Ok(Value::bool(false));
-                }
-            }
-            Ok(Value::bool(true))
+            Ok(Value::bool(self_val.array_elements_eql(
+                rhs.into(),
+                vm,
+                globals,
+            )?))
         },
         Value::bool(true),
     )
@@ -1399,16 +1391,26 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
         self_val.id(),
         arg.id(),
         || {
-            for i in 0..lhs.len() {
+            // `recursive_equal`: an element's `==` is Ruby and may
+            // resize either Array, so the lengths are read again after
+            // each call; Arrays that no longer match in length differ.
+            let mut len = lhs.len();
+            let mut i = 0;
+            while i < len {
+                let (l, r) = (lhs[i], rhs[i]);
                 // CRuby first checks #equal? (identity), which makes
                 // [NaN] == [NaN] true since NaN.equal?(NaN) is true.
-                if lhs[i].id() == rhs[i].id() {
-                    continue;
+                if l.id() != r.id() {
+                    // `rb_equal`: the element's own `==`, never `!=`.
+                    if !vm.eq_values_bool(globals, l, r)? {
+                        return Ok(Value::bool(false));
+                    }
+                    len = lhs.len();
+                    if len != rhs.len() {
+                        return Ok(Value::bool(false));
+                    }
                 }
-                // `rb_equal`: the element's own `==`, never `!=`.
-                if !vm.eq_values_bool(globals, lhs[i], rhs[i])? {
-                    return Ok(Value::bool(false));
-                }
+                i += 1;
             }
             Ok(Value::bool(true))
         },
