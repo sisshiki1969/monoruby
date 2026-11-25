@@ -230,6 +230,9 @@ fn array_cmp_reads_each_element_afresh() {
         r << ([1] <=> Class.new { def to_ary = [2] }.new)
         r << ([1] <=> Class.new { def to_ary = nil }.new)
         r << (begin; [1] <=> Class.new { def to_ary = 1 }.new; rescue => e; e.class; end)
+        # What an element's `<=>` raises comes out.
+        bad = Class.new { def <=>(o) = raise("no order") }.new
+        r << (begin; [1, bad] <=> [1, 2]; rescue => e; e.message; end)
         r
       "##,
     );

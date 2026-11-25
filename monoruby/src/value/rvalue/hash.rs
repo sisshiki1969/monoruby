@@ -716,17 +716,6 @@ impl HashmapInner {
     pub fn contains_key(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         self.as_ref().contains_key(k, vm, globals)
     }
-
-    /// See [`HashRef::contains_key_hashing`].
-    #[inline]
-    pub fn contains_key_hashing(
-        &self,
-        k: Value,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<bool> {
-        self.as_ref().contains_key_hashing(k, vm, globals)
-    }
 }
 
 impl RubyEql<Executor, Globals, MonorubyErr> for HashmapInner {
@@ -2850,16 +2839,6 @@ impl Hashmap {
 
     pub fn contains_key(&self, k: Value, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
         self.inner().contains_key(k, vm, globals)
-    }
-
-    /// See [`HashRef::contains_key_hashing`].
-    pub fn contains_key_hashing(
-        &self,
-        k: Value,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<bool> {
-        self.inner().contains_key_hashing(k, vm, globals)
     }
 
     /// See [`HashRef::assoc_value`].
