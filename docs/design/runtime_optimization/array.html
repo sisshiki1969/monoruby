@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-5bfe8047.js";
+            window.path_to_searchindex_js = "../../searchindex-eab7b57e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -605,6 +605,9 @@ Array は再帰ガードも通らない。要素の <code>#hash</code> / <code>e
 歩いている Array 自身を縮めうるので、<code>hash</code>・<code>eql?</code>（<code>Value::array_elements_eql</code>、
 Hash の probe が Array キーを比べるのもこれ）・<code>==</code> は呼び出しのたびに長さと
 要素を読み直す（<code>rb_ary_hash</code> / <code>recursive_eql</code> / <code>recursive_equal</code> と同じ）。
+<code>&lt;=&gt;</code> も同じで、比べるのは<strong>入った時点の</strong>短い方の長さまでの対、要素は
+毎回読み直し、途中で消えた要素は <code>nil</code>（<code>rb_ary_elt</code>）。<code>0</code> でない対が
+1 つも無ければ、<strong>その時点の</strong>長さが決める（<code>recursive_cmp</code>）。
 1 本の <code>&amp;ArrayInner</code> を呼び出しをまたいで持つと、コンパイラが長さを 1 回しか
 読まず、pop 済みの要素を歩くことがある。呼び出しの要らない先頭部分
 （immediate、同一オブジェクト）だけはスライスのまま比べる。</li>
@@ -616,8 +619,18 @@ needle を 1 回準備してから走査する。Integer / Symbol / nil / true /
 <code>cached_eq</code> があり、独自 <code>==</code> を持たないクラスは <code>Identity</code> アームで
 呼び出し自体を省く。以前は<strong>引数</strong>に <code>==</code> を尋ねて hoist していて、
 レシーバが違うバグだった。</li>
-<li><strong><code>-</code> / <code>&amp;</code> / <code>intersection</code> / <code>uniq</code></strong>: <code>RubySet</code> を作る。<code>insert</code> が
-Ruby を走らせうるので、格納ポインタを temp スタックで root する。</li>
+<li><strong><code>-</code> / <code>&amp;</code> / <code>intersection</code> / <code>uniq</code> / <code>|</code></strong>: <code>RubySet</code> を作る。<code>insert</code> が
+Ruby を走らせうるので、格納ポインタを temp スタックで root する。
+<code>uniq</code> / <code>uniq!</code> / <code>|</code>（ハッシュ経路）は <code>ary_add_new</code>
+（CRuby の <code>ary_add_hash</code>）で、要素の <code>#hash</code> / <code>eql?</code> やブロックが
+レシーバを縮めうるので長さと要素を毎回読み直す（#2213。要素が
+<code>#hash</code> で pop したものはもう見ない）。要素数が 1 以下の <code>uniq</code> は
+<code>#hash</code> もブロックも呼ばない（<code>rb_ary_uniq</code>）。<code>uniq!</code> が返すのは
+「今の」レシーバと比べた結果で、freeze 検査も最後にもう一度行う。
+先頭の、キーが何も尋ねない要素（<code>is_observed_key</code> が偽：immediate、
+素の String、Bignum、非ゼロ Float、identity キーのオブジェクト）が
+続く間は Ruby が走らないので、残す要素を Rust の <code>Vec</code> に集めて
+1 回で追記する（root も読み直しも要らない）。</li>
 <li><strong><code>flatten</code></strong>: object id の <code>seen</code> で循環検出。要素の変換探索
 <code>try_convert_to_array</code> は <code>rb_check_funcall</code> の 4 段（ユーザーの
 <code>respond_to?</code> → <code>to_ary</code> → <code>respond_to_missing?</code> → <code>method_missing</code>）を
@@ -651,7 +664,7 @@ ruby/spec どおりに踏む。</li>
 <tr><td>範囲外の <code>[]</code></td><td>nil</td><td>JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の<strong>書き込み</strong>は必ず高速経路を抜ける（伸長・<code>IndexError</code> のため）</td></tr>
 <tr><td><code>ArithmeticSequence</code> 添字</td><td><code>rb_ary_aref1</code> 内で処理</td><td><code>aseq.[](self)</code> に委譲（3 箇所とも）。特異クラス付きの AS（<code>Range#%</code> 由来）も <code>ObjTy</code> で判定するので届く</td></tr>
 <tr><td><code>[]=</code> の Range 開始</td><td>折り返しても負なら <code>RangeError</code></td><td>同じ。素の負 Integer 添字は <code>IndexError</code></td></tr>
-<tr><td><code>Array#&lt;=&gt;</code></td><td>最初に <code>0</code> でなかった要素比較の結果をそのまま返す</td><td>同じ（nil / ±1 / String もそのまま）</td></tr>
+<tr><td><code>Array#&lt;=&gt;</code></td><td>最初に <code>0</code> でなかった要素比較の結果をそのまま返す</td><td>同じ（nil / ±1 / String もそのまま）。<code>#to_ary</code> が Array でも nil でもない値を返せば TypeError、自分自身との比較は <code>0</code> も同じ</td></tr>
 <tr><td>リテラル</td><td><code>duparray</code> / <code>newarray</code>、<code>opt_newarray_send</code></td><td><code>Literal</code>（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。レシーバとしてだけ使われるリテラルは確保を省略（エスケープ解析）</td></tr>
 <tr><td><code>Array.new</code> の <code>#to_ary</code> 探索</td><td><code>!FIXNUM_P</code> で判定。Bignum は探索する</td><td>Integer クラスが 1 つなので Bignum も探索を飛ばし、<code>__init_fill</code> のサイズ検査が CRuby の <code>NUM2LONG</code> + 「array size too big」の順で拒む。<code>MAX_ARRAY_SIZE = 1 &lt;&lt; 30</code></td></tr>
 <tr><td><code>zip</code> の引き出し</td><td><code>take_items</code>（<code>each</code> + <code>break</code>）</td><td>同じ。<code>Enumerator#next</code> の fiber は使わないので、引数の <code>each</code> からの <code>StopIteration</code> は呼び出し元に届く</td></tr>

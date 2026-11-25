@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-5bfe8047.js";
+            window.path_to_searchindex_js = "../../searchindex-eab7b57e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -724,6 +724,22 @@ true になる）。空でない Hash 同士では identity モードが違え�
 モードが違えば偽を返す。</li>
 <li><code>Hash#rehash</code> は Ruby で <code>to_a; clear; 再挿入</code> と書かれていて、C レベルの
 テーブル再構築ではない。</li>
+<li>値や鍵を<strong>探す</strong>メソッド（<code>assoc</code> / <code>rassoc</code> / <code>key</code> / <code>value?</code>、
+<code>Enumerable#include?</code> / <code>find_index</code>、Array の線形探索）は <code>eql?</code> でなく
+<code>rb_equal</code>、つまり「同一オブジェクトなら <code>==</code> を呼ばずに真」で比べる
+（#2206）。<code>Kernel#__rb_equal</code> が Ruby 実装用のその入口（1 要素ごとに
+ネイティブ呼び出しになるので、<code>Hash#value?</code> は Ruby をやめて <code>key</code> と
+同じ <code>walk</code> の Rust 実装にした）。レシーバは
+CRuby と同じ側で、<code>assoc</code> / <code>rassoc</code> は<strong>引数</strong>、<code>key</code> / <code>value?</code> と
+<code>Enumerable</code> の探索は<strong>格納されている側</strong>。</li>
+<li><code>Hash#assoc</code> は、ペアが ar テーブルに収まる数（8）を超えていて identity
+テーブルでもなければ、まず鍵をハッシュ値で引く（引数の <code>#hash</code> を 1 回、
+同じ値で綴じられたペアを <code>==</code> で比較）。見つかった場合に返すのは
+<code>[引数, 格納値]</code>（<code>rb_assoc_new(key, value)</code>）。外れたときだけ線形走査する。</li>
+<li><code>Set#include?</code> / <code>member?</code> / <code>===</code> / <code>disjoint?</code> / <code>intersect?</code> は、Set が
+空でも要素の <code>#hash</code> を呼ぶ（#2207、CRuby 4.0 の Set はハッシュテーブル
+そのものなので）。空の Hash のルックアップが何も呼ばないのとは逆
+（<code>ar_lookup</code>、#2127）。identity Set はどちらも呼ばない。</li>
 </ul>
 <hr>
 <h2 id="6-cruby-との実装差異"><a class="header" href="#6-cruby-との実装差異">6. CRuby との実装差異</a></h2>
