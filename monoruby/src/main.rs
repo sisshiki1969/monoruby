@@ -703,6 +703,7 @@ fn main() {
     // Resolve --enable/--disable features.
     let mut gems = true;
     let mut did_you_mean = false;
+    let mut error_highlight = true;
     let mut frozen_string_literal: Option<bool> = None;
     for (name, on) in &features {
         match name.as_str() {
@@ -712,10 +713,12 @@ fn main() {
             "frozen-string-literal" | "frozen_string_literal" => {
                 frozen_string_literal = Some(*on)
             }
-            "error_highlight" | "syntax_suggest" | "jit" | "yjit" | "zjit" | "rjit" => {}
+            "error_highlight" => error_highlight = *on,
+            "syntax_suggest" | "jit" | "yjit" | "zjit" | "rjit" => {}
             "all" => {
                 gems = *on;
                 did_you_mean = *on;
+                error_highlight = *on;
                 frozen_string_literal = Some(*on);
             }
             other => eprintln!(
@@ -740,6 +743,7 @@ fn main() {
     }
 
     let mut globals = Globals::new(warning_level, opts.no_jit, !gems);
+    globals.no_error_highlight = !error_highlight;
     Globals::gc_enable(!opts.no_gc);
     if let Some(limit) = opts.backtrace_limit.or(ropts.backtrace_limit) {
         Globals::set_backtrace_limit(limit);

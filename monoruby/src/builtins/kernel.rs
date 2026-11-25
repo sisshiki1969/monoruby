@@ -290,6 +290,7 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
     globals.define_builtin_func(kernel_class, "__caller_frames", caller_frames, 1);
     globals.define_builtin_func(kernel_class, "__location_label", location_label_of, 1);
+    globals.define_builtin_func(kernel_class, "__location_node_id", location_node_id, 2);
     globals.define_builtin_func(
         kernel_class,
         "__location_base_label",
@@ -1431,20 +1432,23 @@ fn caller_frames(
             // call site for native frames.
             let resolved = if let Some(iseq) = globals.store[func_id].is_iseq() {
                 let info = &globals.store[iseq];
-                let line = inner_cfp
-                    .and_then(|inner| {
-                        let slot = inner.caller_pc_slot();
-                        if slot == 0 || slot % 8 != 0 {
-                            return None;
-                        }
-                        // SAFETY: validated against the bytecode span.
-                        let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
-                        if !info.contains_pc(pc) {
-                            return None;
-                        }
-                        let idx = info.get_pc_index(Some(pc)).to_usize();
-                        Some(info.sourceinfo.get_line(&info.sourcemap[idx]))
-                    })
+                // The extent of the node the frame is suspended in,
+                // when its pc is known (`Location#__node_id`).
+                let site = inner_cfp.and_then(|inner| {
+                    let slot = inner.caller_pc_slot();
+                    if slot == 0 || slot % 8 != 0 {
+                        return None;
+                    }
+                    // SAFETY: validated against the bytecode span.
+                    let pc = unsafe { crate::bytecode::BytecodePtr::from_raw(slot as *mut _)? };
+                    if !info.contains_pc(pc) {
+                        return None;
+                    }
+                    let idx = info.get_pc_index(Some(pc)).to_usize();
+                    Some(info.sourcemap[idx])
+                });
+                let line = site
+                    .map(|loc| info.sourceinfo.get_line(&loc))
                     // The first frame whose pc cannot be recovered, while
                     // a `method_added`-style hook is running, *is* the
                     // invoker boundary the hook was dispatched across: the
@@ -1455,7 +1459,7 @@ fn caller_frames(
                             .and_then(|site| site.line_in(&info.sourceinfo))
                     })
                     .unwrap_or_else(|| info.sourceinfo.get_line(&info.loc));
-                Some((info.sourceinfo.clone(), line))
+                Some((info.sourceinfo.clone(), line, site))
             } else {
                 prev_cfp.and_then(|outer| {
                     let outer_fid = outer.lfp().func_id();
@@ -1471,14 +1475,16 @@ fn caller_frames(
                         return None;
                     }
                     let idx = info.get_pc_index(Some(pc)).to_usize();
+                    let loc = info.sourcemap[idx];
                     Some((
                         info.sourceinfo.clone(),
-                        info.sourceinfo.get_line(&info.sourcemap[idx]),
+                        info.sourceinfo.get_line(&loc),
+                        Some(loc),
                     ))
                 })
             };
             let frame = match resolved {
-                Some((source, line)) => {
+                Some((source, line, site)) => {
                     let path = crate::globals::display_path(&source).into_owned();
                     // The path and the real path are the iseq's own
                     // Strings in CRuby: frozen.
@@ -1512,6 +1518,7 @@ fn caller_frames(
                         absolute,
                         Value::integer(line as i64),
                         location_label(label),
+                        site.map_or(Value::nil(), |loc| node_extent_value(&loc)),
                     ]
                 }
                 None => vec![
@@ -1532,6 +1539,50 @@ fn caller_frames(
         }
     }
     Ok(Value::array_from_vec(v))
+}
+
+/// The extent of the node a frame is suspended in, as the one Integer a
+/// `Thread::Backtrace::Location` keeps of it (`Location#__node_id`
+/// hands it back to [`location_node_id`]): `start << 31 | last`. nil
+/// for a source too large to pack.
+pub(crate) fn node_extent_value(loc: &crate::ast::Loc) -> Value {
+    if loc.0 > loc.1 || loc.1 >= 1 << 31 {
+        return Value::nil();
+    }
+    Value::integer(((loc.0 as i64) << 31) | loc.1 as i64)
+}
+
+///
+/// ### Kernel.__location_node_id (monoruby intrinsic)
+///
+/// - __location_node_id(absolute_path, extent) -> Integer
+///
+/// The prism `node_id` of the node covering *extent* (see
+/// [`node_extent_value`]) in the file at *absolute_path*, parsed the
+/// way `Prism.parse_file` parses it; -1 when there is none, or the file
+/// cannot be read. What CRuby's
+/// `RubyVM::AbstractSyntaxTree.node_id_for_backtrace_location` answers
+/// from the node id its instructions carry: monoruby's carry the node's
+/// extent, and the id is recovered from a parse.
+///
+#[monoruby_builtin]
+fn location_node_id(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let (path, extent) = (lfp.arg(0), lfp.arg(1));
+    let id = (|| {
+        let extent = extent.try_fixnum().filter(|e| *e >= 0)?;
+        let loc = crate::ast::Loc((extent >> 31) as usize, (extent & 0x7fff_ffff) as usize);
+        let path = path.is_rstring_inner()?.as_bytes();
+        use std::os::unix::ffi::OsStrExt;
+        let source = std::fs::read(std::ffi::OsStr::from_bytes(path)).ok()?;
+        super::prism::node_id_at(&source, loc)
+    })();
+    let _ = globals;
+    Ok(Value::integer(id.map_or(-1, |id| id as i64)))
 }
 
 /// The String `Thread::Backtrace::Location#label` answers for a frame
@@ -7849,6 +7900,40 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// `Kernel.__location_node_id` answers -1 for anything it cannot
+    /// look up: no path, no extent, a file that cannot be read, an
+    /// extent no node has. (What it answers for a real location is in
+    /// tests/error_highlight.rs, which needs a script on disk.)
+    #[test]
+    fn location_node_id_without_a_node() {
+        let v = run_test_no_result_check(
+            r#"
+            [Kernel.__location_node_id("/nonexistent/x.rb", 5),
+             Kernel.__location_node_id(nil, 5),
+             Kernel.__location_node_id("/nonexistent/x.rb", nil),
+             Kernel.__location_node_id("/nonexistent/x.rb", -1),
+             Kernel.__location_node_id("/nonexistent/x.rb", 2**70),
+             Kernel.__location_node_id("/dev/null", 5)] == [-1] * 6
+            "#,
+        );
+        assert_eq!(v, crate::Value::bool(true));
+    }
+
+    /// The extent of a node is one Fixnum; a source too large for that
+    /// has none.
+    #[test]
+    fn node_extent_packing() {
+        use super::node_extent_value;
+        use crate::ast::Loc;
+        assert_eq!(node_extent_value(&Loc(0, 0)), crate::Value::integer(0));
+        assert_eq!(
+            node_extent_value(&Loc(3, 9)),
+            crate::Value::integer((3 << 31) | 9)
+        );
+        assert_eq!(node_extent_value(&Loc(0, 1 << 31)), crate::Value::nil());
+        assert_eq!(node_extent_value(&Loc(9, 3)), crate::Value::nil());
+    }
 
     /// macOS only: CRuby's `rb_str_encode_ospath` turns a feature
     /// String that is neither BINARY nor UTF-8 into a UTF-8 one before

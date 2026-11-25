@@ -59,6 +59,159 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
+/// The head of every `pm_*_node_t` (`pm_node_t`, include/prism/ast.h):
+/// all that [`node_id_at`] reads of a node.
+#[repr(C)]
+struct PmNode {
+    type_: u16,
+    flags: u16,
+    node_id: u32,
+    start: u32,
+    length: u32,
+}
+
+/// `pm_arena_t` / `pm_parser_t`: opaque, handled through pointers.
+#[repr(C)]
+struct PmOpaque {
+    _private: [u8; 0],
+}
+
+/// `pm_visit_result_t` (include/prism/node.h).
+const PM_VISIT_DESCEND: std::ffi::c_uint = 1;
+const PM_VISIT_STOP: std::ffi::c_uint = 2;
+
+unsafe extern "C" {
+    fn pm_arena_new() -> *mut PmOpaque;
+    fn pm_arena_free(arena: *mut PmOpaque);
+    fn pm_parser_new(
+        arena: *mut PmOpaque,
+        source: *const u8,
+        size: usize,
+        options: *const std::ffi::c_void,
+    ) -> *mut PmOpaque;
+    fn pm_parser_free(parser: *mut PmOpaque);
+    fn pm_parse(parser: *mut PmOpaque) -> *mut PmNode;
+    fn pm_visit_node(
+        node: *const PmNode,
+        visitor: extern "C" fn(*const PmNode, *mut std::ffi::c_void) -> std::ffi::c_uint,
+        data: *mut std::ffi::c_void,
+    ) -> bool;
+}
+
+/// `pm_node_type` of the nodes error_highlight knows how to spot
+/// (`ErrorHighlight::Spotter#spot`'s prism half).
+const SPOTTED_NODES: [u16; 10] = [
+    14, // PM_BLOCK_NODE
+    19, // PM_CALL_NODE
+    20, // PM_CALL_OPERATOR_WRITE_NODE
+    37, // PM_CONSTANT_PATH_NODE
+    38, // PM_CONSTANT_PATH_OPERATOR_WRITE_NODE
+    42, // PM_CONSTANT_READ_NODE
+    45, // PM_DEF_NODE
+    74, // PM_INDEX_OPERATOR_WRITE_NODE
+    93, // PM_LAMBDA_NODE
+    95, // PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE
+];
+
+/// Nodes that only group other nodes, and so share the extent of what
+/// they hold without being what an instruction was compiled from.
+const GROUPING_NODES: [u16; 4] = [
+    5,   // PM_ARGUMENTS_NODE
+    117, // PM_PARENTHESES_NODE
+    122, // PM_PROGRAM_NODE
+    141, // PM_STATEMENTS_NODE
+];
+
+const PM_CONSTANT_PATH_NODE: u16 = 37;
+const PM_CONSTANT_PATH_OPERATOR_WRITE_NODE: u16 = 38;
+const PM_CONSTANT_READ_NODE: u16 = 42;
+
+struct NodeSearch {
+    loc: crate::ast::Loc,
+    spotted: Option<u32>,
+    other: Option<u32>,
+    /// The innermost `Foo::Bar += 1` entered so far: where it starts,
+    /// and its id.
+    op_cdecl: Option<(u32, u32)>,
+}
+
+extern "C" fn node_search_visit(
+    node: *const PmNode,
+    data: *mut std::ffi::c_void,
+) -> std::ffi::c_uint {
+    // SAFETY: prism hands the callback a node of the tree being walked
+    // and the `NodeSearch` `node_id_at` passed to `pm_visit_node`.
+    let (node, search) = unsafe { (&*node, &mut *(data as *mut NodeSearch)) };
+    let start = node.start as usize;
+    // The same rule as `location_to_loc` in parser/prism_backend.rs.
+    let last = (start + node.length as usize).saturating_sub(1).max(start);
+    if node.type_ == PM_CONSTANT_PATH_OPERATOR_WRITE_NODE {
+        search.op_cdecl = Some((node.start, node.node_id));
+    }
+    if start == search.loc.0 && last == search.loc.1 {
+        if SPOTTED_NODES.contains(&node.type_) {
+            // The constant path `Foo::Bar += 1` reads, and each scope
+            // of it, is compiled by CRuby as part of the assignment:
+            // a NameError there carries the assignment's id. Those
+            // nodes all start where the assignment does, and nothing
+            // else under it or after it starts there.
+            let id = match search.op_cdecl {
+                Some((at, id))
+                    if at == node.start
+                        && matches!(node.type_, PM_CONSTANT_PATH_NODE | PM_CONSTANT_READ_NODE) =>
+                {
+                    id
+                }
+                _ => node.node_id,
+            };
+            search.spotted = Some(id);
+            return PM_VISIT_STOP;
+        }
+        if search.other.is_none() && !GROUPING_NODES.contains(&node.type_) {
+            search.other = Some(node.node_id);
+        }
+    }
+    PM_VISIT_DESCEND
+}
+
+/// The `node_id` of the node of `source` that covers exactly `loc`,
+/// with `source` parsed as `Prism.parse_file` parses it (no options), so
+/// that the id names the same node in the tree that call builds.
+///
+/// monoruby keeps, for each instruction, the extent of the node it was
+/// compiled from (a `Loc`), where CRuby keeps that node's id; this turns
+/// the one into the other for
+/// `RubyVM::AbstractSyntaxTree.node_id_for_backtrace_location`. Several
+/// nodes can cover one extent (`foo` is a `CallNode` inside a
+/// `StatementsNode`): a node error_highlight can spot wins, then any
+/// node that is not a mere grouping.
+pub(crate) fn node_id_at(source: &[u8], loc: crate::ast::Loc) -> Option<u32> {
+    let mut search = NodeSearch {
+        loc,
+        spotted: None,
+        other: None,
+        op_cdecl: None,
+    };
+    // SAFETY: the arena and the parser are created here and freed below;
+    // `source` outlives the parser, which only reads it. The tree lives
+    // in the arena, so it is walked before either is freed.
+    unsafe {
+        let arena = pm_arena_new();
+        let parser = pm_parser_new(arena, source.as_ptr(), source.len(), std::ptr::null());
+        let root = pm_parse(parser);
+        if !root.is_null() {
+            pm_visit_node(
+                root,
+                node_search_visit,
+                &mut search as *mut NodeSearch as *mut _,
+            );
+        }
+        pm_parser_free(parser);
+        pm_arena_free(arena);
+    }
+    search.spotted.or(search.other)
+}
+
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_toplevel_module("Prism").id();
     globals.define_builtin_module_func(klass, "__serialize", serialize, 3);
@@ -175,4 +328,49 @@ fn version(_vm: &mut Executor, _globals: &mut Globals, _lfp: Lfp, _: BytecodePtr
     // SAFETY: `pm_version` answers a static NUL-terminated string.
     let s = unsafe { std::ffi::CStr::from_ptr(pm_version()) };
     Ok(Value::string_from_str(&s.to_string_lossy()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::node_id_at;
+    use crate::ast::Loc;
+
+    /// `Loc` is a first and a last byte, both inclusive.
+    #[test]
+    fn node_id_at_finds_the_node_of_an_extent() {
+        //           0         1         2
+        //           0123456789012345678901234567890
+        let src = b"foo.bar\nFoo::Bar += 1\nFoo::Bar\n";
+        let call = node_id_at(src, Loc(0, 6)).unwrap();
+        let recv = node_id_at(src, Loc(0, 2)).unwrap();
+        assert_ne!(call, recv);
+        // No node is exactly `oo.b`, or reaches past the end.
+        assert_eq!(node_id_at(src, Loc(1, 4)), None);
+        assert_eq!(node_id_at(src, Loc(0, 99)), None);
+
+        // `Foo::Bar += 1`: the path it reads, and the scope of that
+        // path, answer the assignment's id.
+        let write = node_id_at(src, Loc(8, 20)).unwrap();
+        assert_eq!(node_id_at(src, Loc(8, 15)), Some(write));
+        assert_eq!(node_id_at(src, Loc(8, 10)), Some(write));
+        // The value is a node of its own, not one the gem spots.
+        let one = node_id_at(src, Loc(20, 20)).unwrap();
+        assert_ne!(one, write);
+
+        // A path that is only read keeps its own ids.
+        let path = node_id_at(src, Loc(22, 29)).unwrap();
+        let scope = node_id_at(src, Loc(22, 24)).unwrap();
+        assert_ne!(path, scope);
+        assert_ne!(path, write);
+        assert_ne!(scope, write);
+
+        // A statement that fills its line is found under the nodes that
+        // only group it; a source that is nothing but grouping has none.
+        assert_eq!(
+            node_id_at(b"foo\n", Loc(0, 2)),
+            node_id_at(b"foo", Loc(0, 2))
+        );
+        assert!(node_id_at(b"foo", Loc(0, 2)).is_some());
+        assert_eq!(node_id_at(b"", Loc(0, 0)), None);
+    }
 }

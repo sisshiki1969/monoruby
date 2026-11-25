@@ -1,0 +1,707 @@
+1: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nil.foo }
+       ^^^^
+--
+2: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo }
+        ^^^^
+--
+3: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo(1, 2) }
+        ^^^^
+--
+4: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv&.itself.foo }
+                ^^^^
+--
+5: NoMethodError
+undefined method 'foo=' for nil (NoMethodError)
+
+t { nilv.foo = 1 }
+        ^^^^^^
+--
+6: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo += 1 }
+        ^^^^
+--
+7: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+--
+8: NoMethodError
+undefined method '[]' for nil (NoMethodError)
+
+t { nilv[0] }
+        ^^^
+--
+9: NoMethodError
+undefined method '[]=' for nil (NoMethodError)
+
+t { nilv[0] = 1 }
+        ^^^^^
+--
+10: NoMethodError
+undefined method '[]' for nil (NoMethodError)
+
+t { nilv[0] += 1 }
+        ^^^
+--
+11: NoMethodError
+undefined method '+' for nil (NoMethodError)
+
+t { nilv + 1 }
+         ^
+--
+12: NoMethodError
+undefined method '+' for nil (NoMethodError)
+
+t { nilv.+(1) }
+        ^^
+--
+13: NoMethodError
+undefined method '-@' for nil (NoMethodError)
+
+t { -nilv }
+    ^
+--
+14: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { !nilv.foo }
+         ^^^^
+--
+15: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { (nilv).foo }
+          ^^^^
+--
+16: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv .foo }
+         ^^^^
+--
+17: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv::foo }
+        ^^^^^
+--
+18: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo() }
+        ^^^^
+--
+19: NoMethodError
+undefined method 'call' for nil (NoMethodError)
+--
+20: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo { 1 } }
+        ^^^^
+--
+21: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+t { nilv.foo do 1 end }
+        ^^^^
+--
+22: NoMethodError
+undefined method '+' for nil (NoMethodError)
+
+t { foo.bar += 1 }
+            ^
+--
+23: NoMethodError
+undefined method 'baz' for nil (NoMethodError)
+
+t { foo.bar.baz += 1 }
+           ^^^^
+--
+24: NoMethodError
+undefined method '+' for nil (NoMethodError)
+
+t { v[0] += 1 }
+         ^
+--
+25: NoMethodError
+undefined method '+' for nil (NoMethodError)
+
+t { x = nil; x += 1 }
+               ^
+--
+26: NoMethodError
+undefined method 'undefined_thing' for nil (NoMethodError)
+
+    x.undefined_thing
+     ^^^^^^^^^^^^^^^^
+--
+27: NoMethodError
+undefined method 'nope' for an instance of Integer (NoMethodError)
+
+t { [1].each { |x| x.nope } }
+                    ^^^^^
+--
+28: NoMethodError
+undefined method 'bar' for nil (NoMethodError)
+
+t { 3.times { |i| nilv.bar if i == 2 } }
+                      ^^^^
+--
+29: NoMethodError
+undefined method 'nope' for nil (NoMethodError)
+
+t { proc { |a| a.nope }.call(nil) }
+                ^^^^^
+--
+30: NoMethodError
+undefined method 'zip' for nil (NoMethodError)
+
+t { foo.blk { |a, b| nilv.zip } }
+                         ^^^^
+--
+31: NoMethodError
+undefined method 'nope_sent' for main (NoMethodError)
+
+t { send(:nope_sent) }
+    ^^^^
+--
+32: NameError
+undefined local variable or method 'super_duper' for main (NameError)
+
+t { super_duper rescue raise }
+    ^^^^^^^^^^^
+--
+33: NameError
+undefined local variable or method 'foo_undefined' for main (NameError)
+
+t { foo_undefined }
+    ^^^^^^^^^^^^^
+--
+34: NoMethodError
+undefined method 'foo_undefined' for main (NoMethodError)
+
+t { foo_undefined(1) }
+    ^^^^^^^^^^^^^
+--
+35: NoMethodError
+undefined method 'foo_undefined' for main (NoMethodError)
+
+t { foo_undefined 1, 2 }
+    ^^^^^^^^^^^^^
+--
+36: NoMethodError
+undefined method 'foo_undefined' for main (NoMethodError)
+
+t { self.foo_undefined }
+        ^^^^^^^^^^^^^^
+--
+37: NameError
+undefined local variable or method 'nopey' for main (NameError)
+
+t { instance_eval { nopey } }
+                    ^^^^^
+--
+38: NameError
+uninitialized constant NotDefinedConst (NameError)
+
+t { NotDefinedConst }
+    ^^^^^^^^^^^^^^^
+--
+39: NameError
+uninitialized constant Foo::NotDefined (NameError)
+
+t { Foo::NotDefined }
+       ^^^^^^^^^^^^
+--
+40: NameError
+uninitialized constant Foo::NotDefined (NameError)
+
+t { Foo::NotDefined::Deeper }
+       ^^^^^^^^^^^^
+--
+41: NameError
+uninitialized constant NotDefinedTop (NameError)
+
+t { ::NotDefinedTop }
+    ^^^^^^^^^^^^^^^
+--
+42: NameError
+uninitialized constant Foo::NotDefined (NameError)
+
+t { Foo::NotDefined += 1 }
+       ^^^^^^^^^^^^
+--
+43: NameError
+uninitialized constant NotDefinedConst2 (NameError)
+--
+44: NameError
+uninitialized constant Foo::NotDefined3 (NameError)
+--
+45: NameError
+ne (NameError)
+
+t { raise NameError.new("ne", :xyz) }
+    ^^^^^
+--
+46: TypeError
+nil can't be coerced into Integer (TypeError)
+
+t { 1 + nil }
+        ^^^
+--
+47: TypeError
+nil can't be coerced into Integer (TypeError)
+
+t { 1 + nilv }
+        ^^^^
+--
+48: TypeError
+nil can't be coerced into Integer (TypeError)
+
+t { 1.+(nil) }
+        ^^^
+--
+49: TypeError
+no implicit conversion from nil to integer (TypeError)
+
+t { [1, 2].first(nil) }
+                 ^^^
+--
+50: ArgumentError
+invalid value for Integer(): "z" (ArgumentError)
+
+t { Integer("z") }
+            ^^^
+--
+51: TypeError
+can't convert nil into Integer (TypeError)
+
+t { Integer(nil) }
+            ^^^
+--
+52: TypeError
+no implicit conversion of Integer into String (TypeError)
+
+t { "a" + 1 }
+          ^
+--
+53: TypeError
+no implicit conversion of nil into Array (TypeError)
+
+t { [1] + nil }
+          ^^^
+--
+54: TypeError
+idx (TypeError)
+
+  def [](i) = raise(TypeError, "idx")
+                    ^^^^^^^^^^^^^^^^
+--
+55: TypeError
+idx= (TypeError)
+
+    raise TypeError, "idx="
+          ^^^^^^^^^^^^^^^^^
+--
+56: ArgumentError
+plus (ArgumentError)
+
+  def +(o) = raise(ArgumentError, "plus")
+                   ^^^^^^^^^^^^^^^^^^^^^
+--
+57: TypeError
+nil can't be coerced into Integer (TypeError)
+
+t { x = 1; x += nil }
+                ^^^
+--
+58: TypeError
+no implicit conversion of Integer into String (TypeError)
+
+t { [1, 2].sum("a") }
+               ^^^
+--
+59: ArgumentError
+plain (ArgumentError)
+
+t { raise ArgumentError, "plain" }
+          ^^^^^^^^^^^^^^^^^^^^^^
+--
+60: TypeError
+TypeError (TypeError)
+
+t { raise TypeError }
+          ^^^^^^^^^
+--
+61: ArgumentError
+ArgumentError (ArgumentError)
+
+t { raise(ArgumentError) }
+          ^^^^^^^^^^^^^
+--
+62: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:108
+    | t { foo.one }
+             ^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+63: ArgumentError
+wrong number of arguments (given 2, expected 1) (ArgumentError)
+
+    caller: cases.rb:109
+    | t { foo.one(1, 2) }
+             ^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+64: ArgumentError
+missing keyword: :a (ArgumentError)
+
+    caller: cases.rb:110
+    | t { foo.kw }
+             ^^^
+    callee: cases.rb:20
+    |   def kw(a:, b: 1) = a
+            ^^
+--
+65: ArgumentError
+unknown keyword: :c (ArgumentError)
+
+    caller: cases.rb:111
+    | t { foo.kw(a: 1, c: 2) }
+             ^^^
+    callee: cases.rb:20
+    |   def kw(a:, b: 1) = a
+            ^^
+--
+66: ArgumentError
+missing keyword: :a (ArgumentError)
+
+    caller: cases.rb:112
+    | t { foo.kw(**{z: 1}) }
+             ^^^
+    callee: cases.rb:20
+    |   def kw(a:, b: 1) = a
+            ^^
+--
+67: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:113
+    | t { foo.one(*[]) }
+             ^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+68: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:114
+    | t { foo.one(**{}) }
+             ^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+69: ArgumentError
+wrong number of arguments (given 1, expected 2) (ArgumentError)
+
+    caller: cases.rb:115
+    | t { Foo.cm(1) }
+             ^^^
+    callee: cases.rb:21
+    |   def self.cm(a, b) = a
+                ^^^
+--
+70: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:116
+    | t { foo.send(:one) }
+             ^^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+71: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:117
+    | t { foo.method(:one).call }
+                          ^^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+72: ArgumentError
+wrong number of arguments (given 2, expected 1) (ArgumentError)
+
+    caller: cases.rb:118
+    | t { foo.public_send(:one, 1, 2) }
+             ^^^^^^^^^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+73: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:119
+    | t { ->(a) { a }.call }
+                     ^^^^^
+    callee: cases.rb:119
+    | t { ->(a) { a }.call }
+          ^^
+--
+74: ArgumentError
+wrong number of arguments (given 1, expected 2) (ArgumentError)
+
+    caller: cases.rb:120
+    | t { lambda { |a, b| a }.call(1) }
+                             ^^^^^
+    callee: cases.rb:120
+    | t { lambda { |a, b| a }.call(1) }
+                 ^
+--
+75: ArgumentError
+wrong number of arguments (given 0, expected 1+; required keyword: d) (ArgumentError)
+
+    caller: cases.rb:121
+    | t { def self.tmp(a, b = 1, *c, d:); end; tmp }
+                                               ^^^
+    callee: cases.rb:121
+    | t { def self.tmp(a, b = 1, *c, d:); end; tmp }
+                  ^^^^
+--
+76: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:122
+    | t { define_singleton_method(:dm) { |a| a }; dm }
+                                                  ^^
+    callee: cases.rb:122
+    | t { define_singleton_method(:dm) { |a| a }; dm }
+                                       ^
+--
+77: ArgumentError
+wrong number of arguments (given 1, expected 2) (ArgumentError)
+
+    caller: cases.rb:125
+    |     end; dm2(1) }
+               ^^^
+    callee: cases.rb:123
+    | t { define_singleton_method(:dm2) do |a, b|
+                                        ^^
+--
+78: ArgumentError
+wrong number of arguments (given 3, expected 1..2) (ArgumentError)
+
+    caller: cases.rb:126
+    | t { v.fetch(1, 2, 3) }
+           ^^^^^^
+--
+79: ArgumentError
+wrong number of arguments (given 2, expected 0..1) (ArgumentError)
+
+    caller: cases.rb:127
+    | t { v.first(1, 2) }
+           ^^^^^^
+--
+80: ArgumentError
+wrong number of arguments (given 0, expected 1..2) (ArgumentError)
+
+    caller: cases.rb:128
+    | t { {a: 1}.fetch }
+                ^^^^^^
+--
+81: ArgumentError
+wrong number of arguments (given 1, expected 2) (ArgumentError)
+
+    caller: cases.rb:129
+    | t { lib_arity(1) }
+          ^^^^^^^^^
+    callee: @DIR@/lib.rb:3
+    | def lib_arity(a, b) = a
+          ^^^^^^^^^
+--
+82: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+    .foo
+    ^^^^
+--
+83: NoMethodError
+undefined method 'foo' for nil (NoMethodError)
+
+    foo(1)
+    ^^^
+--
+84: ArgumentError
+wrong number of arguments (given 2, expected 1) (ArgumentError)
+
+    caller: cases.rb:141
+    |   foo.one(1,
+           ^^^^
+    callee: cases.rb:19
+    |   def one(a) = a
+            ^^^
+--
+85: NoMethodError
+undefined method 'lib_undefined' for nil (NoMethodError)
+
+def lib_call(x) = x.lib_undefined
+                   ^^^^^^^^^^^^^^
+--
+86: NoMethodError
+undefined method 'evaled' for nil (NoMethodError)
+--
+87: NoMethodError
+undefined method 'evaled2' for nil (NoMethodError)
+--
+88: NoMethodError
+undefined method 'nope' for nil (NoMethodError)
+--
+89: NoMethodError
+undefined method 'nope' for an instance of String (NoMethodError)
+--
+90: NoMethodError
+undefined method 'nopé' for nil (NoMethodError)
+--
+91: NoMethodError
+undefined method 'tabbed' for nil (NoMethodError)
+
+t { 	nilv.tabbed }
+    	    ^^^^^^^
+--
+92: NoMethodError
+undefined method 'chdired' for nil (NoMethodError)
+
+t { Dir.chdir("/") { nilv.chdired } }
+                         ^^^^^^^^
+--
+93: NoMethodError
+undefined method 'lib_undefined' for nil (NoMethodError)
+
+def lib_call(x) = x.lib_undefined
+                   ^^^^^^^^^^^^^^
+--
+94: NoMethodError
+undefined method 'jitted' for nil (NoMethodError)
+
+t { 30.times { |i| i == 29 ? nilv.jitted : i } }
+                                 ^^^^^^^
+--
+95: NoMethodError
+undefined method 'hotter' for an instance of Integer (NoMethodError)
+
+def hot(x) = x.hotter
+              ^^^^^^^
+--
+96: NoMethodError
+undefined method 'hotter' for nil (NoMethodError)
+
+def hot(x) = x.hotter
+              ^^^^^^^
+--
+97: ArgumentError
+wrong number of arguments (given 0, expected 1) (ArgumentError)
+
+    caller: cases.rb:163
+    | t { 40.times { |i| i == 39 ? arity_hot : arity_hot(1) } }
+                                   ^^^^^^^^^
+    callee: cases.rb:162
+    | def arity_hot(a) = a
+          ^^^^^^^^^
+--
+98: NoMethodError
+undefined method 'size' for nil (NoMethodError)
+
+        return "" if locs.size < 2
+                         ^^^^^
+--
+plain never raised (ArgumentError)
+99: no error
+never raised (NameError)
+100: no error
+101: MyErr
+[my] mine (MyErr)
+
+t { raise MyErr, "mine" }
+    ^^^^^
+--
+102: MyErr2
+own
+--
+undefined method 'foo' for nil (NoMethodError)
+103: no error
+cases.rb:178:in 'block in <main>': undefined method 'foo' for nil (NoMethodError)
+
+t { nil.foo rescue puts($!.full_message(highlight: false)) }
+       ^^^^
+	from cases.rb:11:in 'Object#t'
+	from cases.rb:178:in '<main>'
+104: no error
+"cases.rb:179:in 'block in <main>': \e[1mundefined method 'foo' for nil (\e[1;4mNoMethodError\e[m\e[1m)\e[m\n\n\e[1mt { nil.foo rescue puts($!.full_message(highlight: true).inspect) }\e[m\n\e[1m       ^^^^\e[m\n\tfrom cases.rb:11:in 'Object#t'\n\tfrom cases.rb:179:in '<main>'\n"
+105: no error
+#<Encoding:US-ASCII>
+"undefined method 'foo' for nil"
+106: no error
+true
+107: no error
+{first_lineno: 184, first_column: 7, last_lineno: 184, last_column: 11, snippet: "t { nil.foo rescue p(ErrorHighlight.spot($!).except(:script_lines)) }\n"}
+108: no error
+true
+109: no error
+nil
+110: no error
+{first_lineno: 187, first_column: 12, last_lineno: 187, last_column: 17, snippet: "t { nil.foo(1 + 2) rescue p(ErrorHighlight.spot($!, point_type: :args)&.except(:script_lines)) }\n"}
+111: no error
+{first_lineno: 189, first_column: 4, last_lineno: 189, last_column: 7, snippet: "t { two(nil) rescue p(ErrorHighlight.spot($!, backtrace_location: $!.backtrace_locations[1])&.except(:script_lines)) }\n"}
+112: no error
+{first_lineno: 4, first_column: 14, last_lineno: 4, last_column: 30, snippet: "def lib_loc = caller_locations(0).first\n"}
+113: no error
+nil
+114: no error
+nil
+115: no error
+ErrorHighlight::DefaultFormatter
+nil
+116: no error
+117: NoMethodError
+undefined method 'foooooooooooooo' for nil (NoMethodError)
+
+...aaaaaaaaaaaa.foooooooooo...
+               ^^^^^^^^^^^^^^^
+--
+118: NoMethodError
+undefined method 'custom_fmt' for nil (NoMethodError)
+<<7..18>>
+--
+"0.7.2"
+[:CoreExt, :DefaultFormatter, :VERSION]
+119: no error
+[ErrorHighlight::CoreExt, TypeError]
+[ErrorHighlight::CoreExt, ArgumentError]
+[ErrorHighlight::CoreExt, NameError]
+120: no error
+ErrorHighlight::CoreExt
+121: no error

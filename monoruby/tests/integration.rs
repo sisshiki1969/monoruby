@@ -91,6 +91,7 @@ mod eq_funcall;
 mod eq_search;
 mod equal_identity;
 mod errinfo_inline_load;
+mod error_highlight;
 mod escape_analysis;
 mod etc;
 mod exception_api;

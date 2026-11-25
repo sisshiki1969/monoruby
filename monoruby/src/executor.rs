@@ -764,10 +764,16 @@ impl Executor {
             // autoload of "rubygems" (and a `Kernel#gem` stub that boots
             // it), so the vendored rubygems is read only by the first
             // program that reaches for it — a plain script skips its
-            // ~8 MB / ~90 ms.
+            // ~8 MB / ~90 ms. `ErrorHighlight` is registered the same
+            // way, and loaded by the first error report that uses it.
             if !globals.no_gems {
                 let path = builtins_dir().join("gem_prelude.rb");
                 executor.require(globals, &path, false)?;
+                if globals.no_error_highlight {
+                    // The prelude registered the autoload; with the
+                    // feature off the constant is not defined at all.
+                    globals.remove_constant(OBJECT_CLASS, IdentId::get_id("ErrorHighlight"));
+                }
             }
             // `Class#new` exists only once class.rb has run; the JIT needs
             // its FuncId to recognise a `Foo.new` site.
@@ -1897,6 +1903,12 @@ impl Executor {
             ),
             // `Bundler.setup` ends `require`'s installed-gem fallback.
             ("/bundler/runtime.rb", "monoruby_hooks/bundler_runtime.rb"),
+            // error_highlight's `RubyVM::AbstractSyntaxTree`
+            // (`monoruby_hooks/error_highlight.rb`).
+            (
+                "/error_highlight/base.rb",
+                "monoruby_hooks/error_highlight.rb",
+            ),
         ];
         for (suffix, feature) in LOAD_HOOKS {
             if path.to_str().is_some_and(|p| p.ends_with(suffix)) {

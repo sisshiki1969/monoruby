@@ -1082,13 +1082,22 @@ class Thread
       # backtrace frame strings, e.g. `Thread#backtrace_locations` /
       # `Exception#backtrace_locations`): parsed lazily, with
       # `absolute_path` reconstructed best-effort via expand_path.
-      def initialize(frame)
+      #
+      # `site` comes with the string form of a frame an exception
+      # captured (`Exception#__raise_backtrace_sites`):
+      # `[absolute_path, node_extent]`, the two things the structured
+      # form carries that a backtrace line does not.
+      def initialize(frame, site = nil)
         if frame.is_a?(Array)
-          @__frame, @__path, @__absolute_path, @__lineno, @__label = frame
+          @__frame, @__path, @__absolute_path, @__lineno, @__label, @__node_extent = frame
           return
         end
-        # Not known: worked out from the path when asked for.
-        @__absolute_path = false
+        if site
+          @__absolute_path, @__node_extent = site
+        else
+          # Not known: worked out from the path when asked for.
+          @__absolute_path = false
+        end
         @__frame = frame.to_s
         if @__frame =~ /\A(.+):(\d+):in ['`](.+)'\z/
           @__path = $1
@@ -1144,6 +1153,19 @@ class Thread
       # A new String each time, as CRuby's `location_to_str` makes one.
       def to_s
         @__frame.dup
+      end
+
+      # The prism node id of the node this frame was executing, which is
+      # what `RubyVM::AbstractSyntaxTree.node_id_for_backtrace_location`
+      # answers in CRuby; -1 when it is not known. CRuby's instructions
+      # carry the id; monoruby's carry the node's extent in the source,
+      # so the id is looked up in a parse of the file
+      # (`Kernel.__location_node_id`).
+      def __node_id
+        path = @__absolute_path
+        extent = @__node_extent
+        return -1 unless extent && path
+        Kernel.__location_node_id(path, extent)
       end
 
       # CRuby's location_inspect: the string form, inspected.
