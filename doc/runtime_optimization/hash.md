@@ -553,6 +553,22 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
   モードが違えば偽を返す。
 - `Hash#rehash` は Ruby で `to_a; clear; 再挿入` と書かれていて、C レベルの
   テーブル再構築ではない。
+- 値や鍵を**探す**メソッド（`assoc` / `rassoc` / `key` / `value?`、
+  `Enumerable#include?` / `find_index`、Array の線形探索）は `eql?` でなく
+  `rb_equal`、つまり「同一オブジェクトなら `==` を呼ばずに真」で比べる
+  （#2206）。`Kernel#__rb_equal` が Ruby 実装用のその入口（1 要素ごとに
+  ネイティブ呼び出しになるので、`Hash#value?` は Ruby をやめて `key` と
+  同じ `walk` の Rust 実装にした）。レシーバは
+  CRuby と同じ側で、`assoc` / `rassoc` は**引数**、`key` / `value?` と
+  `Enumerable` の探索は**格納されている側**。
+- `Hash#assoc` は、ペアが ar テーブルに収まる数（8）を超えていて identity
+  テーブルでもなければ、まず鍵をハッシュ値で引く（引数の `#hash` を 1 回、
+  同じ値で綴じられたペアを `==` で比較）。見つかった場合に返すのは
+  `[引数, 格納値]`（`rb_assoc_new(key, value)`）。外れたときだけ線形走査する。
+- `Set#include?` / `member?` / `===` / `disjoint?` / `intersect?` は、Set が
+  空でも要素の `#hash` を呼ぶ（#2207、CRuby 4.0 の Set はハッシュテーブル
+  そのものなので）。空の Hash のルックアップが何も呼ばないのとは逆
+  （`ar_lookup`、#2127）。identity Set はどちらも呼ばない。
 
 ---
 

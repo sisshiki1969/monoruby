@@ -58,32 +58,6 @@ impl Array {
     pub fn new_from_vec(v: Vec<Value>) -> Self {
         Self(Value::array_from_vec(v))
     }
-
-    ///
-    /// Uniquify `self`.
-    ///
-    /// Always returns Ok(removed: bool).
-    ///
-    /// If some elements were removed, returns Ok(true).
-    ///
-    pub fn uniq(&mut self, vm: &mut Executor, globals: &mut Globals) -> Result<bool> {
-        let mut h = RubySet::default();
-        let mut recursive = false;
-        let self_id = self.id();
-        self.retain(|x| {
-            if self_id == x.id() {
-                if !recursive {
-                    recursive = true;
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            } else {
-                h.insert(*x, vm, globals)
-            }
-        })
-        .map(|removed| removed.is_some())
-    }
 }
 
 // Write-barrier-protected element stores.

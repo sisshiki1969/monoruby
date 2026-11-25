@@ -230,6 +230,10 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_private_builtin_func(kernel_class, "__num2dbl", kernel_num2dbl, 1);
     globals.define_private_builtin_func_rest(kernel_class, "__check_funcall", kernel_check_funcall);
     globals.define_private_builtin_func(kernel_class, "__undef", kernel_undef, 0);
+    // `rb_equal` for the Ruby-level searches (`Array#rindex` / `assoc` /
+    // `rassoc`, `Enumerable#include?` / `find_index`), which need the
+    // identity step a bare `==` does not have.
+    globals.define_private_builtin_func(kernel_class, "__rb_equal", kernel_rb_equal, 2);
     {
         // What `__check_funcall` answers for "does not respond" when the
         // caller has to tell that from every value a method can return.
@@ -6278,6 +6282,20 @@ fn kernel_num2dbl(
         globals,
         lfp.arg(0),
     )?))
+}
+
+/// `Kernel#__rb_equal(element, needle)`: CRuby's `rb_equal` —
+/// `element == needle`, except that an element which *is* the needle is
+/// equal however its `==` answers (and without calling it). Private; see
+/// the registration above.
+#[monoruby_builtin]
+fn kernel_rb_equal(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    Ok(Value::bool(vm.rb_equal(globals, lfp.arg(0), lfp.arg(1))?))
 }
 
 /// `Kernel#__check_funcall(recv, name, default, *args)`: CRuby's

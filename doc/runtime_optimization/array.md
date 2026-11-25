@@ -476,6 +476,9 @@ nil で埋めない）。
   歩いている Array 自身を縮めうるので、`hash`・`eql?`（`Value::array_elements_eql`、
   Hash の probe が Array キーを比べるのもこれ）・`==` は呼び出しのたびに長さと
   要素を読み直す（`rb_ary_hash` / `recursive_eql` / `recursive_equal` と同じ）。
+  `<=>` も同じで、比べるのは**入った時点の**短い方の長さまでの対、要素は
+  毎回読み直し、途中で消えた要素は `nil`（`rb_ary_elt`）。`0` でない対が
+  1 つも無ければ、**その時点の**長さが決める（`recursive_cmp`）。
   1 本の `&ArrayInner` を呼び出しをまたいで持つと、コンパイラが長さを 1 回しか
   読まず、pop 済みの要素を歩くことがある。呼び出しの要らない先頭部分
   （immediate、同一オブジェクト）だけはスライスのまま比べる。
@@ -487,8 +490,18 @@ nil で埋めない）。
   `cached_eq` があり、独自 `==` を持たないクラスは `Identity` アームで
   呼び出し自体を省く。以前は**引数**に `==` を尋ねて hoist していて、
   レシーバが違うバグだった。
-- **`-` / `&` / `intersection` / `uniq`**: `RubySet` を作る。`insert` が
+- **`-` / `&` / `intersection` / `uniq` / `|`**: `RubySet` を作る。`insert` が
   Ruby を走らせうるので、格納ポインタを temp スタックで root する。
+  `uniq` / `uniq!` / `|`（ハッシュ経路）は `ary_add_new`
+  （CRuby の `ary_add_hash`）で、要素の `#hash` / `eql?` やブロックが
+  レシーバを縮めうるので長さと要素を毎回読み直す（#2213。要素が
+  `#hash` で pop したものはもう見ない）。要素数が 1 以下の `uniq` は
+  `#hash` もブロックも呼ばない（`rb_ary_uniq`）。`uniq!` が返すのは
+  「今の」レシーバと比べた結果で、freeze 検査も最後にもう一度行う。
+  先頭の、キーが何も尋ねない要素（`is_observed_key` が偽：immediate、
+  素の String、Bignum、非ゼロ Float、identity キーのオブジェクト）が
+  続く間は Ruby が走らないので、残す要素を Rust の `Vec` に集めて
+  1 回で追記する（root も読み直しも要らない）。
 - **`flatten`**: object id の `seen` で循環検出。要素の変換探索
   `try_convert_to_array` は `rb_check_funcall` の 4 段（ユーザーの
   `respond_to?` → `to_ary` → `respond_to_missing?` → `method_missing`）を
@@ -520,7 +533,7 @@ nil で埋めない）。
 | 範囲外の `[]` | nil | JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の**書き込み**は必ず高速経路を抜ける（伸長・`IndexError` のため） |
 | `ArithmeticSequence` 添字 | `rb_ary_aref1` 内で処理 | `aseq.[](self)` に委譲（3 箇所とも）。特異クラス付きの AS（`Range#%` 由来）も `ObjTy` で判定するので届く |
 | `[]=` の Range 開始 | 折り返しても負なら `RangeError` | 同じ。素の負 Integer 添字は `IndexError` |
-| `Array#<=>` | 最初に `0` でなかった要素比較の結果をそのまま返す | 同じ（nil / ±1 / String もそのまま） |
+| `Array#<=>` | 最初に `0` でなかった要素比較の結果をそのまま返す | 同じ（nil / ±1 / String もそのまま）。`#to_ary` が Array でも nil でもない値を返せば TypeError、自分自身との比較は `0` も同じ |
 | リテラル | `duparray` / `newarray`、`opt_newarray_send` | `Literal`（テンプレート deep copy）。要素が全部 immediate で 5 以下なら複製を機械語に焼く。レシーバとしてだけ使われるリテラルは確保を省略（エスケープ解析） |
 | `Array.new` の `#to_ary` 探索 | `!FIXNUM_P` で判定。Bignum は探索する | Integer クラスが 1 つなので Bignum も探索を飛ばし、`__init_fill` のサイズ検査が CRuby の `NUM2LONG` + 「array size too big」の順で拒む。`MAX_ARRAY_SIZE = 1 << 30` |
 | `zip` の引き出し | `take_items`（`each` + `break`） | 同じ。`Enumerator#next` の fiber は使わないので、引数の `each` からの `StopIteration` は呼び出し元に届く |

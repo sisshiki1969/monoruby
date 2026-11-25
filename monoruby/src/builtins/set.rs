@@ -396,7 +396,11 @@ fn add_q(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn teq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let val = lfp.arg(0);
     let self_val = lfp.self_val();
-    let result = self_val.as_hashmap_inner().contains_key(val, vm, globals)?;
+    // `Set#include?` hashes the element even when the Set is empty
+    // (#2207).
+    let result = self_val
+        .as_hashmap_inner()
+        .contains_key_hashing(val, vm, globals)?;
     Ok(Value::bool(result))
 }
 
@@ -1074,7 +1078,8 @@ fn disjoint_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             };
             let self_inner = self_val.as_hashmap_inner();
             for elem in elems {
-                if self_inner.contains_key(elem, vm, globals)? {
+                // Hashed even when the Set is empty (#2207).
+                if self_inner.contains_key_hashing(elem, vm, globals)? {
                     return Ok(Value::bool(false));
                 }
             }
@@ -1104,7 +1109,8 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             };
             let self_inner = self_val.as_hashmap_inner();
             for elem in elems {
-                if self_inner.contains_key(elem, vm, globals)? {
+                // Hashed even when the Set is empty (#2207).
+                if self_inner.contains_key_hashing(elem, vm, globals)? {
                     return Ok(Value::bool(true));
                 }
             }
