@@ -32,14 +32,50 @@ enum RedirectTarget {
     Child(i32),
 }
 
+/// NUL-terminated strings in one buffer, for the two lists a spawn
+/// builds an entry at a time: the child's environment (`K=V`, from the
+/// whole of `environ`) and the program's path under each `PATH`
+/// directory. An entry is a few appends here rather than three
+/// allocations.
+#[derive(Default)]
+struct CStrBlock {
+    bytes: Vec<u8>,
+    /// Where each entry starts in `bytes`.
+    starts: Vec<usize>,
+}
+
+impl CStrBlock {
+    /// Add the concatenation of `parts` as one entry. None holds a NUL.
+    fn push(&mut self, parts: &[&[u8]]) {
+        self.starts.push(self.bytes.len());
+        for part in parts {
+            self.bytes.extend_from_slice(part);
+        }
+        self.bytes.push(0);
+    }
+
+    fn len(&self) -> usize {
+        self.starts.len()
+    }
+
+    fn ptrs(&self) -> impl Iterator<Item = *const libc::c_char> + '_ {
+        self.starts
+            .iter()
+            .map(|&start| self.bytes[start..].as_ptr() as *const libc::c_char)
+    }
+}
+
 pub(crate) struct ExecSpec {
-    /// Final child environment, "K=V" strings.
-    envp: Vec<CString>,
-    /// The command word as the user wrote it (for error messages).
+    /// The child's environment when it is not the parent's as it stands
+    /// (an env Hash, `unsetenv_others:`). CRuby builds its `envp_str`
+    /// for those alone as well, and hands `environ` on otherwise.
+    envp: Option<CStrBlock>,
+    /// What messages name the command by (CRuby's `fail_str`): the whole
+    /// command string when it goes to the shell, the program otherwise.
     program_display: String,
     /// Candidate program paths: the single path (contains '/'), or one
     /// candidate per PATH dir. Empty means "resolution already failed".
-    candidates: Vec<CString>,
+    candidates: CStrBlock,
     /// argv (argv[0] included).
     argv: Vec<CString>,
     chdir: Option<(CString, String)>,
@@ -58,8 +94,9 @@ pub(crate) struct ExecSpec {
 }
 
 impl ExecSpec {
-    /// The command word as the user wrote it, for messages (CRuby names
-    /// only the program in `Command failed with ...`).
+    /// What messages name the command by: the command string as the user
+    /// wrote it when the shell runs it (CRuby's `invoke.sh.shell_script`),
+    /// the program alone otherwise (`invoke.cmd.command_name`).
     pub(crate) fn program_display(&self) -> &str {
         &self.program_display
     }
@@ -117,6 +154,84 @@ pub(crate) fn pipe_cloexec() -> std::io::Result<(libc::c_int, libc::c_int)> {
     } else {
         Ok((fds[0], fds[1]))
     }
+}
+
+/// The words a lone command string names only as shell syntax, never as a
+/// program: CRuby's `posix_sh_cmds` (process.c), POSIX's reserved words
+/// and special built-ins. `IO.popen("exit 99")` is exit status 99, not
+/// `ENOENT`.
+const POSIX_SH_CMDS: &[&[u8]] = &[
+    b"!",
+    b".",
+    b":",
+    b"break",
+    b"case",
+    b"continue",
+    b"do",
+    b"done",
+    b"elif",
+    b"else",
+    b"esac",
+    b"eval",
+    b"exec",
+    b"exit",
+    b"export",
+    b"fi",
+    b"for",
+    b"if",
+    b"in",
+    b"readonly",
+    b"return",
+    b"set",
+    b"shift",
+    b"then",
+    b"times",
+    b"trap",
+    b"unset",
+    b"until",
+    b"while",
+];
+
+/// Whether a lone command string is the shell's to run, by CRuby's rule
+/// (`rb_exec_fillarg`): it holds a shell metacharacter, its first word
+/// holds an `=` before any `/` (an assignment in front of the command
+/// name), or its first word is one of [`POSIX_SH_CMDS`]. Words are told
+/// apart by spaces and tabs alone, as there.
+fn command_needs_shell(cmd: &[u8]) -> bool {
+    // Where the first word starts, and its length once that is known
+    // (a word holding a `/` is no shell word, whatever its length).
+    let mut first: Option<usize> = None;
+    let mut first_len = 0;
+    for (i, &c) in cmd.iter().enumerate() {
+        if c == b' ' || c == b'\t' {
+            if let Some(start) = first
+                && first_len == 0
+            {
+                first_len = i - start;
+            }
+        } else if first.is_none() {
+            first = Some(i);
+        }
+        if b"*?{}[]<>()~&|\\$;'`\"\n#".contains(&c) {
+            return true;
+        }
+        if first_len == 0 {
+            if c == b'=' {
+                return true;
+            } else if c == b'/' {
+                first_len = usize::MAX;
+            }
+        }
+    }
+    let Some(start) = first else {
+        return false;
+    };
+    let word = match first_len {
+        0 => &cmd[start..],
+        usize::MAX => return false,
+        len => &cmd[start..start + len],
+    };
+    POSIX_SH_CMDS.contains(&word)
 }
 
 /// Parse `Process.spawn`/`exec` arguments into an `ExecSpec`.
@@ -328,6 +443,7 @@ pub(crate) fn parse_exec_args(
     } else {
         None
     };
+    let mut shell_script = None;
     let (program, argv_strings, via_shell) = if let Some(ary) = first_ary {
         if ary.len() != 2 {
             return Err(MonorubyErr::argumenterr("wrong first argument"));
@@ -340,17 +456,26 @@ pub(crate) fn parse_exec_args(
         }
         (prog, argv, false)
     } else if items.len() == 1 && accept_shell {
-        let cmd = first.coerce_to_str(vm, globals)?;
-        if cmd.contains('\0') {
-            return Err(null_byte());
+        // A lone command string: the shell's when it looks like shell
+        // syntax, and otherwise split into words here and exec'd as a
+        // program, with no shell in between (CRuby's `rb_exec_fillarg`).
+        // It goes on as the bytes it is.
+        let cmd = to_str(vm, globals, first)?;
+        if command_needs_shell(&cmd) {
+            let argv = vec![b"sh".to_vec(), b"-c".to_vec(), cmd.clone()];
+            shell_script = Some(cmd);
+            (b"sh".to_vec(), argv, true)
+        } else {
+            let argv: Vec<Vec<u8>> = cmd
+                .split(|c| *c == b' ' || *c == b'\t')
+                .filter(|word| !word.is_empty())
+                .map(<[u8]>::to_vec)
+                .collect();
+            // No word at all (`""`, `" "`) is a program named "", which
+            // no directory holds.
+            let prog = argv.first().cloned().unwrap_or_default();
+            (prog, argv, false)
         }
-        let (prog, rest) = crate::builtins::kernel::prepare_command_arg(&cmd);
-        // `prepare_command_arg` selected the shell for metacharacter
-        // commands: `prog == "sh"` with a leading `-c`.
-        let via_shell = prog == "sh" && rest.first().is_some_and(|a| a == "-c");
-        let mut argv = vec![prog.clone().into_bytes()];
-        argv.extend(rest.into_iter().map(String::into_bytes));
-        (prog.into_bytes(), argv, via_shell)
     } else {
         let prog = to_str(vm, globals, first)?;
         let mut argv = vec![prog.clone()];
@@ -370,50 +495,45 @@ pub(crate) fn parse_exec_args(
         .and_then(|(_, v)| v.clone())
         .or_else(|| crate::environ::get(b"PATH", |v| v.to_vec()))
         .unwrap_or_default();
-    // --- final environment ---
-    let mut env: Vec<(Vec<u8>, Vec<u8>)> = if unsetenv_others {
-        vec![]
-    } else {
-        crate::environ::Snapshot::take()
-            .iter()
-            .map(|(name, value)| (name.to_vec(), value.to_vec()))
-            .collect()
-    };
-    for (k, v) in env_ops {
-        env.retain(|(ek, _)| ek != &k);
-        if let Some(v) = v {
-            env.push((k, v));
+    // --- final environment: the parent's variables the env Hash does not
+    //     name, then the Hash's own, each where it was last given ---
+    let envp = (unsetenv_others || !env_ops.is_empty()).then(|| {
+        // No NUL in any of these: `environ`'s cannot hold one, and the
+        // env Hash's were checked as they were read.
+        let mut envp = CStrBlock::default();
+        if !unsetenv_others {
+            crate::environ::walk(|name, value| {
+                if !env_ops.iter().any(|(k, _)| k == name) {
+                    envp.push(&[name, b"=", value]);
+                }
+                true
+            });
         }
-    }
-    let envp: Vec<CString> = env
-        .into_iter()
-        .filter_map(|(k, v)| CString::new([&k[..], b"=", &v[..]].concat()).ok())
-        .collect();
+        for (i, (k, v)) in env_ops.iter().enumerate() {
+            if let Some(v) = v
+                && !env_ops[i + 1..].iter().any(|(later, _)| later == k)
+            {
+                envp.push(&[k, b"=", v]);
+            }
+        }
+        envp
+    });
 
     // --- program path candidates (PATH resolution is finalized by the
     //     child's execve loop; candidates are prepared here so the child
     //     stays allocation-free) ---
-    let candidates: Vec<CString> = if via_shell {
+    let mut candidates = CStrBlock::default();
+    if via_shell {
         // The shell is exec'd by absolute path so a scrubbed
         // (`unsetenv_others: true`) child environment still works.
-        vec![c"/bin/sh".to_owned()]
-    } else if program.is_empty() {
-        vec![]
+        candidates.push(&[b"/bin/sh"]);
     } else if program.contains(&b'/') {
-        CString::new(program.clone())
-            .map(|c| vec![c])
-            .unwrap_or_default()
-    } else {
-        path_env
-            .split(|b| *b == b':')
-            .filter(|d| !d.is_empty())
-            .filter_map(|d| {
-                let mut path = [d, b"/"].concat();
-                path.extend_from_slice(&program);
-                CString::new(path).ok()
-            })
-            .collect()
-    };
+        candidates.push(&[&program]);
+    } else if !program.is_empty() {
+        for dir in path_env.split(|b| *b == b':').filter(|d| !d.is_empty()) {
+            candidates.push(&[dir, b"/", &program]);
+        }
+    }
 
     let argv: Vec<CString> = argv_strings
         .into_iter()
@@ -422,7 +542,8 @@ pub(crate) fn parse_exec_args(
 
     Ok(ExecSpec {
         envp,
-        program_display: String::from_utf8_lossy(&program).into_owned(),
+        program_display: String::from_utf8_lossy(shell_script.as_ref().unwrap_or(&program))
+            .into_owned(),
         candidates,
         argv,
         chdir,
@@ -925,8 +1046,11 @@ unsafe fn child_exec(spec: &ExecSpec, fds: &mut ChildFds, ptrs: &mut ExecPtrs) -
             }
         }
         // ... and the signal mask: a non-main kernel thread of the 1:1
-        // model blocks the asynchronous signals, and the child would
-        // inherit that (`scheduler::command_for_child`).
+        // model blocks the asynchronous signals
+        // (`native::block_async_signals`, so the kernel delivers them to
+        // main), and the child would inherit a mask in which `SIGTERM`
+        // stays pending forever (ruby/spec's `Process.kill` fixture
+        // traps it from a thread-spawned child).
         crate::scheduler::reset_child_sigmask();
         // A pty's child (CRuby's ext/pty `chfunc`): a new session, the
         // slave as the controlling terminal (an error is ignored there
@@ -986,17 +1110,13 @@ unsafe fn child_exec(spec: &ExecSpec, fds: &mut ChildFds, ptrs: &mut ExecPtrs) -
         }
         // execve through the candidates. ENOENT candidates continue the
         // PATH walk; an ENOEXEC script (no shebang) is retried via sh.
-        for cand in &spec.candidates {
-            libc::execve(cand.as_ptr(), ptrs.argv.as_ptr(), ptrs.envp.as_ptr());
+        for cand in spec.candidates.ptrs() {
+            libc::execve(cand, ptrs.argv.as_ptr(), ptrs.envp());
             let e = errno();
             if e == libc::ENOEXEC {
                 // Shell fallback: sh <path> <args...>
-                ptrs.sh_argv[1] = cand.as_ptr();
-                libc::execve(
-                    c"/bin/sh".as_ptr(),
-                    ptrs.sh_argv.as_ptr(),
-                    ptrs.envp.as_ptr(),
-                );
+                ptrs.sh_argv[1] = cand;
+                libc::execve(c"/bin/sh".as_ptr(), ptrs.sh_argv.as_ptr(), ptrs.envp());
                 return (STAGE_EXEC, errno());
             }
             // Directories report EACCES like CRuby (Linux execve gives
@@ -1063,7 +1183,12 @@ fn stage_error(
 /// heap).
 struct ExecPtrs {
     argv: Vec<*const libc::c_char>,
+    /// The spec's own environment, when it has one.
     envp: Vec<*const libc::c_char>,
+    /// The parent's otherwise: `environ` itself, held still until the
+    /// child has exec'd. Dropped as soon as it has — nothing that could
+    /// write the environment may run under it.
+    inherited: Option<crate::environ::Inherited>,
     /// `/bin/sh <candidate> <args...>` for a script without a shebang;
     /// the child writes the candidate into slot 1.
     sh_argv: Vec<*const libc::c_char>,
@@ -1078,12 +1203,10 @@ impl ExecPtrs {
             .map(|a| a.as_ptr())
             .chain(nul.clone())
             .collect();
-        let envp = spec
-            .envp
-            .iter()
-            .map(|e| e.as_ptr())
-            .chain(nul.clone())
-            .collect();
+        let (envp, inherited) = match &spec.envp {
+            Some(env) => (env.ptrs().chain(nul.clone()).collect(), None),
+            None => (vec![], Some(crate::environ::inherit())),
+        };
         let sh_argv = [c"/bin/sh".as_ptr(), std::ptr::null()]
             .into_iter()
             .chain(argv.iter().skip(1).copied())
@@ -1091,7 +1214,16 @@ impl ExecPtrs {
         ExecPtrs {
             argv,
             envp,
+            inherited,
             sh_argv,
+        }
+    }
+
+    /// `execve`'s `envp`.
+    fn envp(&self) -> *const *const libc::c_char {
+        match &self.inherited {
+            Some(env) => env.as_ptr(),
+            None => self.envp.as_ptr(),
         }
     }
 }
@@ -1257,7 +1389,11 @@ fn fork_exec(
         }
     }
     let mut ptrs = ExecPtrs::new(spec);
-    let pid = match start_child(spec, fds, &mut ptrs, rfd, wfd) {
+    let started = start_child(spec, fds, &mut ptrs, rfd, wfd);
+    // The child has what it execs with (or is a copy of this process):
+    // let go of the environment before anything else runs here.
+    drop(ptrs);
+    let pid = match started {
         Ok(pid) => pid,
         Err(err) => {
             // SAFETY: our own descriptors.
@@ -1384,6 +1520,7 @@ pub(crate) fn do_exec(vm: &mut Executor, globals: &mut Globals, spec: &ExecSpec)
     // SAFETY: exec replaces this process; on failure only fd/process
     // state that CRuby also clobbers has changed.
     let (stage, e) = unsafe { child_exec(spec, &mut fds, &mut ptrs) };
+    drop(ptrs);
     stage_error(globals, spec, stage, e, false)
 }
 
@@ -1539,6 +1676,39 @@ mod tests {
         run_test_error(r#"Process.spawn({"A=" => "v"}, "echo")"#);
         run_test_error(r#"Process.spawn({"\0" => "v"}, "echo")"#);
         run_test_error(r#"Process.spawn({"A" => "\0"}, "echo")"#);
+    }
+
+    /// CRuby's `rb_exec_fillarg`, case by case. The words here that are
+    /// programs on some systems (`read`, `wait` and `umask` are, on
+    /// macOS) are why this is checked on the function and not by running
+    /// them.
+    #[test]
+    #[rustfmt::skip]
+    fn command_string_shell_rule() {
+        let shell: &[&str] = &[
+            // metacharacters, `#` among them
+            "echo *", "a?", "{a}", "a[1]", "a<b", "a>b", "(a)", "~", "a&", "a|b", "a\\b", "$a",
+            "a;b", "'a'", "`a`", "\"a\"", "a\nb", "true # x", "a#b",
+            // an assignment in front of the command name
+            "FOO=1 true", "FOO=1", " \tFOO=1 true", "A=b/true",
+            // reserved words and special built-ins, as the first word
+            "exit", "exit 4", " exit\t4", ":", ".", "!", "exec true", "set -e", "for", "in",
+            "continue", "readonly",
+        ];
+        let direct: &[&str] = &[
+            "", " ", "true", "true a b", "\ttrue", "true A=1", "a/b=c", "/bin/true A=1",
+            // not on CRuby's list
+            "read", "wait", "umask", "cd", "exitx", "exi", "/bin/exit", "./exit",
+            // only the first word is looked at, and only spaces and tabs
+            // end it
+            "true exit", "true\u{3000}exit", "exit\u{3000}4", "exit\r", "echo %",
+        ];
+        for cmd in shell {
+            assert!(super::command_needs_shell(cmd.as_bytes()), "{cmd:?}");
+        }
+        for cmd in direct {
+            assert!(!super::command_needs_shell(cmd.as_bytes()), "{cmd:?}");
+        }
     }
 
     #[test]

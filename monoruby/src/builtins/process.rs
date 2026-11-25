@@ -988,14 +988,20 @@ pub(crate) fn hooked_status_fields(
             answer.builtin_class_name(&globals.store)
         )));
     }
-    let field = |globals: &Globals, name: &str| -> i32 {
-        globals
-            .store
-            .get_ivar(answer, IdentId::get_id(name))
-            .and_then(|v| v.try_fixnum())
-            .unwrap_or(0) as i32
-    };
-    Ok((field(globals, "/__status"), field(globals, "/__pid")))
+    Ok((
+        status_field(globals, answer, "/__status"),
+        status_field(globals, answer, "/__pid"),
+    ))
+}
+
+/// A field of a `Process::Status` (a hidden instance variable; 0 where
+/// it was never set).
+fn status_field(globals: &Globals, status: Value, name: &str) -> i32 {
+    globals
+        .store
+        .get_ivar(status, IdentId::get_id(name))
+        .and_then(|v| v.try_fixnum())
+        .unwrap_or(0) as i32
 }
 
 /// What the hook answered, read as `rb_waitpid` reads it (`Process.wait`
@@ -1003,38 +1009,19 @@ pub(crate) fn hooked_status_fields(
 enum Hooked {
     /// `nil`: no child was reaped, and `$?` is left alone.
     Nothing,
-    /// A Status whose pid is -1 carries an errno rather than a child.
-    /// CRuby's `Process::Status.wait` puts `ECHILD` there when there is
-    /// nothing to wait for, which is the only errno it can be here,
-    /// since a Status is only ever made by the interpreter.
-    NoChild,
+    /// A Status whose pid is -1 carries the errno of a `waitpid(2)` that
+    /// failed rather than a child, as `Process::Status.wait` makes one:
+    /// `ECHILD` when there is nothing to wait for, `EINVAL` for flags
+    /// the kernel refuses.
+    Failed(i32),
     /// The reaped pid, its raw wait status, and the Status itself, which
     /// is what `$?` becomes, as in `rb_waitpid`.
     Reaped(i32, i32, Value),
 }
 
-/// The `$?` the hook's answer leaves behind, read as `rb_waitpid` reads
-/// it: `None` where there is none to set, which is `nil` (nothing was
-/// reaped) and a Status carrying an errno rather than a child.
-pub(crate) fn hooked_last_status(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    answer: Value,
-) -> Result<Option<Value>> {
-    Ok(match hooked_waitpid(vm, globals, answer)? {
-        Hooked::Nothing | Hooked::NoChild => None,
-        Hooked::Reaped(_, _, status) => Some(status),
-    })
-}
-
 /// A `Process::Status` over a raw `wait(2)` status word and the pid it
 /// came from, as every wait here makes one.
-pub(crate) fn new_status(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    raw: i32,
-    pid: i32,
-) -> Result<Value> {
+fn new_status(vm: &mut Executor, globals: &mut Globals, raw: i32, pid: i32) -> Result<Value> {
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     vm.invoke_method_inner(
         globals,
@@ -1052,15 +1039,16 @@ fn hooked_waitpid(vm: &mut Executor, globals: &mut Globals, answer: Value) -> Re
     }
     let (raw, pid) = hooked_status_fields(vm, globals, answer)?;
     if pid == -1 {
-        return Ok(Hooked::NoChild);
+        return Ok(Hooked::Failed(status_field(globals, answer, "/__errno")));
     }
     Ok(Hooked::Reaped(pid, raw, answer))
 }
 
-/// `Errno::ECHILD`, as the native `waitpid(2)` path raises it.
-fn echild(globals: &Globals) -> MonorubyErr {
-    let err = std::io::Error::from_raw_os_error(libc::ECHILD);
-    let msg = crate::builtins::errno::strerror(libc::ECHILD);
+/// The `Errno` of a `waitpid(2)` that failed, as the native path raises
+/// it (CRuby's `rb_sys_fail(0)`: the message is the errno's alone).
+fn wait_error(globals: &Globals, errno: i32) -> MonorubyErr {
+    let err = std::io::Error::from_raw_os_error(errno);
+    let msg = crate::builtins::errno::strerror(errno);
     MonorubyErr::from_io_err(&globals.store, &err, msg)
 }
 
@@ -1080,9 +1068,11 @@ pub(super) fn system_wait(
     Ok(waitpid_status(vm, globals, pid, 0)?.map(|(_, raw, status)| (raw, status)))
 }
 
-/// `IO#close`'s wait for a popen child (CRuby's `rb_io_close`, through
-/// `rb_syswait`): the raw wait status and the `Process::Status` for `$?`,
-/// or `None` where there is none to set. The scheduler's `#process_wait`
+/// `IO#close`'s wait for a popen child, and so the backtick's (CRuby's
+/// `rb_io_close`, through `rb_waitpid`): the raw wait status and the
+/// `Process::Status` for `$?`, or `None` where there is none to set,
+/// which is a hook answering `nil` (nothing was reaped) or a Status that
+/// carries an errno rather than a child. The scheduler's `#process_wait`
 /// takes the wait when there is one; otherwise `waitpid(2)` runs with the
 /// GVL released, since it lasts as long as the child does.
 pub(crate) fn wait_popen_child(
@@ -1092,7 +1082,7 @@ pub(crate) fn wait_popen_child(
 ) -> Result<Option<(i32, Value)>> {
     if let Some(answer) = scheduler_process_wait(vm, globals, pid as i32, 0)? {
         return Ok(match hooked_waitpid(vm, globals, answer)? {
-            Hooked::Nothing | Hooked::NoChild => None,
+            Hooked::Nothing | Hooked::Failed(_) => None,
             Hooked::Reaped(_, raw, status) => Some((raw, status)),
         });
     }
@@ -1113,7 +1103,7 @@ pub(super) fn waitpid_status(
     if let Some(answer) = scheduler_process_wait(vm, globals, pid, flags)? {
         return match hooked_waitpid(vm, globals, answer)? {
             Hooked::Nothing => Ok(None),
-            Hooked::NoChild => Err(echild(globals)),
+            Hooked::Failed(errno) => Err(wait_error(globals, errno)),
             Hooked::Reaped(pid, raw, status) => Ok(Some((pid, raw, status))),
         };
     }
@@ -1174,9 +1164,10 @@ pub(super) fn waitpid_status(
 ///
 /// - Process::Status.wait(pid = -1, flags = 0) -> Process::Status | nil
 ///
-/// Like `Process.wait2`, but does NOT touch `$?`. With no children it
-/// returns a Status whose pid is -1 (instead of raising ECHILD); with
-/// WNOHANG and no ready child it returns nil.
+/// Like `Process.wait2`, but does NOT touch `$?`, and never raises for a
+/// `waitpid(2)` that failed: with no children, or with flags the kernel
+/// refuses, it returns a Status whose pid is -1 and which carries the
+/// errno. With WNOHANG and no ready child it returns nil.
 #[monoruby_builtin]
 fn process_status_wait(
     vm: &mut Executor,
@@ -1201,6 +1192,8 @@ fn process_status_wait(
         return Ok(answer);
     }
     let mut raw: i32 = 0;
+    // The reaped pid (0 under `WNOHANG` with no child ready), or the
+    // errno of a `waitpid(2)` that failed.
     let ret = loop {
         // SAFETY: waitpid is a POSIX system call; `raw` is a stack slot,
         // so the GVL-less region touches no interpreter state.
@@ -1215,31 +1208,37 @@ fn process_status_wait(
             crate::scheduler::without_gvl(vm, wait)
         };
         if ret != -1 {
-            break ret;
+            break Ok(ret);
         }
         match err.raw_os_error() {
-            Some(libc::ECHILD) => break -1,
             Some(libc::EINTR) => {
                 if crate::executor::execute_gc(vm, globals).is_none() {
                     return Err(vm.take_error());
                 }
             }
-            _ => {
-                return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "waitpid"));
-            }
+            // This method never raises for a `waitpid(2)` that failed
+            // (CRuby's `rb_process_status_wait`): the errno travels in a
+            // Status whose pid is -1 — `ECHILD` with no child to wait
+            // for, `EINVAL` for flags the kernel refuses — and
+            // `Process.wait` is who raises it.
+            errno => break Err(errno.unwrap_or(0)),
         }
     };
-    if ret == 0 {
-        return Ok(Value::nil());
-    }
-    // ECHILD surfaces as a Status with pid -1 (raw 0), per CRuby.
-    let (raw, pid) = if ret == -1 { (0, -1) } else { (raw, ret) };
+    let (raw, pid, errno) = match ret {
+        Ok(0) => return Ok(Value::nil()),
+        Ok(pid) => (raw, pid, 0),
+        Err(errno) => (0, -1, errno),
+    };
     let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
     vm.invoke_method_inner(
         globals,
         IdentId::get_id("__new"),
         status_class,
-        &[Value::integer(raw as i64), Value::integer(pid as i64)],
+        &[
+            Value::integer(raw as i64),
+            Value::integer(pid as i64),
+            Value::integer(errno as i64),
+        ],
         None,
         None,
     )
@@ -1862,7 +1861,10 @@ fn process_waitall(
             // as it does there.
             if let Some(answer) = scheduler_process_wait(vm, globals, -1, 0)? {
                 match hooked_waitpid(vm, globals, answer)? {
-                    Hooked::NoChild => break,
+                    // The walk ends where there is no child left;
+                    // any other failure is raised (`proc_waitall`).
+                    Hooked::Failed(libc::ECHILD) => break,
+                    Hooked::Failed(errno) => return Err(wait_error(globals, errno)),
                     Hooked::Nothing => {
                         let pair = Value::array_from_vec(vec![
                             Value::integer(0),
@@ -3292,6 +3294,77 @@ mod new_api_tests {
             reaped = Process.wait(pid)
             [nh, reaped == pid]
             "#,
+        );
+    }
+
+    /// #2222: `Process::Status.wait` never raises for a `waitpid(2)`
+    /// that failed. The errno travels in a Status whose pid is -1, and
+    /// `Process.wait` is who raises it, also when the Status came out of
+    /// a fiber scheduler's `#process_wait`. In a child of this process,
+    /// since these wait for any child; the child also checks that a
+    /// backtick's command writes to this process's own stderr.
+    #[test]
+    fn status_wait_carries_the_errno_of_a_failed_wait() {
+        run_test_once(
+            r##"
+            read, write = IO.pipe
+            if (pid = fork)
+              write.close
+              got = read.read
+              read.close
+              Process.wait(pid)
+              [got, $?.exitstatus]
+            else
+              read.close
+              t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+              out = []
+              # A `waitpid(2)` that fails is a Status with a pid of -1 from
+              # `Process::Status.wait`, and that errno from `Process.wait`.
+              st = Process::Status.wait(-1, 999999)
+              out << [st.inspect, st.pid, st.to_i, st.frozen?]
+              out << t.() { Process.wait(-1, 999999) }
+              out << t.() { Process.wait2(-1, 999999) }
+              st = Process::Status.wait
+              out << [st.inspect, st.pid, st.dup.inspect]
+              out << t.() { Process.wait }
+              out << t.() { Process.waitall }
+              out << $?
+              # Through a fiber scheduler's `#process_wait` too.
+              sched = Class.new do
+                def block(*) = nil
+                def unblock(*) = nil
+                def kernel_sleep(*) = nil
+                def io_wait(*) = nil
+                def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+                def process_wait(pid, flags) = Fiber.blocking { Process::Status.wait(pid, flags) }
+              end
+              Fiber.set_scheduler(sched.new)
+              Fiber.new(blocking: false) do
+                out << t.() { Process.wait(-1, 999998) }
+                out << t.() { Process.wait }
+                out << t.() { Process.waitall }
+                out << Process::Status.wait(-1, 999998).inspect
+              end.resume
+              # `Process.waitall` ends on `ECHILD` alone: another errno is raised.
+              sched.define_method(:process_wait) do |pid, _|
+                Fiber.blocking { Process::Status.wait(pid, 999998) }
+              end
+              Fiber.new(blocking: false) { out << t.() { Process.waitall } }.resume
+              Fiber.set_scheduler(nil)
+              # The backtick's child writes to this process's stderr, in its turn.
+              r, w = IO.pipe
+              $stderr.reopen(w)
+              $stderr.write("A")
+              out << `echo out; echo B >&2`
+              $stderr.write("C")
+              $stderr.reopen(File::NULL)
+              w.close
+              out << r.read
+              write.write(out.inspect)
+              write.close
+              exit!(0)
+            end
+            "##,
         );
     }
 

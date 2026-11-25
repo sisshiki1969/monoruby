@@ -86,6 +86,38 @@ pub(crate) fn walk(mut f: impl FnMut(&[u8], &[u8]) -> bool) {
     }
 }
 
+/// The environment itself, for an `execve` that hands it on unchanged:
+/// the lock is held for as long as this lives, so the array stays where
+/// it is until the child has it. Nothing that touches the environment
+/// may run meanwhile.
+pub(crate) struct Inherited {
+    _guard: RwLockReadGuard<'static, ()>,
+}
+
+pub(crate) fn inherit() -> Inherited {
+    let _guard = read_lock();
+    Inherited { _guard }
+}
+
+impl Inherited {
+    /// `environ`, as `execve`'s `envp`.
+    pub(crate) fn as_ptr(&self) -> *const *const libc::c_char {
+        // SAFETY: the lock is held.
+        or_empty(unsafe { environ_ptr() })
+    }
+}
+
+/// `envp`, or an empty array for the `NULL` that `clearenv(3)` leaves in
+/// `environ`: only Linux's `execve` takes that for "no variables".
+fn or_empty(envp: *const *const libc::c_char) -> *const *const libc::c_char {
+    static EMPTY: [usize; 1] = [0];
+    if envp.is_null() {
+        EMPTY.as_ptr().cast()
+    } else {
+        envp
+    }
+}
+
 /// The number of entries in the environment (`ENV.size`).
 ///
 /// Every entry counts, with or without a `=`, as in CRuby — which makes
@@ -265,6 +297,17 @@ mod tests {
         assert!(!is_set(b"PA\0TH"));
         assert!(get(b"MONORUBY_ENVIRON_TEST_UNSET", |_| ()).is_none());
         assert!(count() > 0);
+        // What an `execve` is handed is that same array.
+        let inherited = inherit();
+        // SAFETY: the array is NULL-terminated and the lock is held.
+        let entries = unsafe {
+            let first = inherited.as_ptr();
+            (0..).take_while(|&i| !(*first.add(i)).is_null()).count()
+        };
+        drop(inherited);
+        assert!(entries > 0);
+        // SAFETY: reading the one entry of the empty array.
+        assert!(unsafe { *or_empty(std::ptr::null()) }.is_null());
     }
 
     #[test]

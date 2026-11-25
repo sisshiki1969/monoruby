@@ -1323,31 +1323,6 @@ pub(crate) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// A child process inherits the signal mask of the kernel thread that
-/// forks it. In the 1:1 model every non-main kernel thread blocks the
-/// asynchronous signals (`native::block_async_signals`, so the kernel
-/// delivers them to main), and a `system` / backtick / `IO.popen` from
-/// such a Ruby thread would hand the child a mask in which `SIGTERM`
-/// stays pending forever (ruby/spec's `Process.kill` fixture traps it
-/// from a thread-spawned child). Have the child start with an empty
-/// mask, as CRuby's do. Only needed off main, whose mask is empty, so
-/// the `posix_spawn` fast path stays available there.
-pub(crate) fn command_for_child(cmd: &mut std::process::Command) {
-    if native::enabled() && !is_current_main() {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: `reset_child_sigmask` is async-signal-safe (no
-        // allocation, two libc calls) and touches no Rust state.
-        unsafe {
-            cmd.pre_exec(|| {
-                reset_child_sigmask();
-                // The child `execve`s next, taking these lines with it.
-                crate::fork::flush_coverage_profile();
-                Ok(())
-            });
-        }
-    }
-}
-
 /// Empty the calling thread's signal mask — in a forked child before
 /// `execve`, or in the process about to `exec`. Async-signal-safe.
 pub(crate) fn reset_child_sigmask() {
