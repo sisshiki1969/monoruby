@@ -281,6 +281,20 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   `ConditionVariable#signal` 側は変更なし)。`Thread#join` も同様に `block(thread, 残り秒)`
   で待ち、対象スレッドの終了フックが `unblock(join 側のスレッド, fiber)` で答える
   (`ThreadInner::fiber_joiners`)。
+- 子プロセスの待ちも同じプロトコルに乗る(#2211)。non-blocking fiber でスケジューラが
+  `#process_wait(pid, flags)` を持つなら、`Process.wait` / `wait2` / `waitpid` / `waitpid2` /
+  `waitall`、`Process::Status.wait`、`Kernel#system`(自前経路と spawn 経路の両方)、
+  バッククォート、popen した IO の `close` は、`waitpid(2)` を自分で呼ばずにこのフックに
+  渡す(CRuby の `rb_process_status_wait` → `rb_fiber_scheduler_process_wait`)。
+  フックは任意(`rb_check_funcall` 相当)で、`WNOHANG` 付き・blocking fiber・スケジューラ
+  なしのときは呼ばない。答えの読み方は呼び出し側ごとに CRuby と同じ:
+  `Process::Status.wait` は無検査でそのまま返し、`system` / `close` / バッククォートは
+  `Process::Status` 以外(`nil` も)なら TypeError、`Process.wait` 系は `nil` を
+  「何も回収しなかった」と読んで nil を返し `$?` を消す。pid が -1 の Status は子ではなく
+  errno(= `ECHILD`)を運ぶ。バッククォートはフックに渡す前に stdout / stderr を両方
+  `poll(2)` で読み切る(片方が詰まって子が止まらないように)。
+  待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
+  (M:1 グリーンモデルでは `without_gvl` が素通しなので、そこは従来どおり止まる)。
 - **Monitor**(`builtins/monitor.rb`)は CRuby の `ext/monitor/monitor.c` を Ruby で書いたもので、
   Mutex + 所有 **Fiber**(`@owner`)+ 進入回数(`@count`)。`@count` を読み書きするのは所有者
   だけ、`@owner` が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
