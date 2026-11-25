@@ -45,9 +45,21 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_func(file, "extname", file_extname, 1);
     globals.define_builtin_class_func(file, "path", file_path, 1);
     globals.define_builtin_class_func_with(file, "realpath", realpath, 1, 2, false);
-    globals.define_builtin_class_func_with_kw(file, "open", open, 1, 3, false, OPEN_KW, true);
-    globals.define_builtin_class_func_with_kw(file, "new", file_new, 1, 3, false, OPEN_KW, true);
-    globals.define_builtin_class_func_with_kw(IO_CLASS, "open", open, 1, 3, false, OPEN_KW, true);
+    // `File.new` / `File.open` are `IO.new` / `IO.open` (builtins/io.rb),
+    // as in CRuby: allocate + `initialize`. The options arrive as one
+    // `**opts` Hash rather than as named keyword slots: those two reach
+    // this through a `(...)` forward, which the JIT binds without a
+    // generic re-parse only for a callee that declares no keyword names.
+    globals.define_private_builtin_func_with_kw(
+        file,
+        "initialize",
+        file_initialize,
+        1,
+        3,
+        false,
+        &[],
+        true,
+    );
 
     globals.define_builtin_class_func(file, "directory?", directory_, 1);
     globals.define_builtin_module_func(file_test, "directory?", directory_, 1);
@@ -1158,39 +1170,10 @@ pub(super) fn mode_string_from_flags(flags: i64) -> String {
     }
 }
 
-/// Close `io` at `File.open` block exit through `#close` *dispatch* (a
-/// subclass/singleton override must run), swallowing the IOError that
-/// means "already closed" and propagating everything else. The close
-/// runs as CRuby's `rb_ensure` would: an error out of it replaces the
-/// block's own (a write buffered by the block that fails to flush is
-/// what the caller sees).
-pub(super) fn block_close(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    io: Value,
-    block_result: Result<Value>,
-) -> Result<Value> {
-    // The block's value, or the Values its error carries (the raised
-    // exception object, a `break` value), live only in `block_result`
-    // while `close` runs, which can be Ruby (an override, a prepended
-    // module): keep them on the temp stack, or a collection frees them.
-    let close_result = vm.with_temp_scope(|vm| {
-        match &block_result {
-            Ok(v) => vm.temp_push(*v),
-            Err(e) => e.for_each_value(|v| vm.temp_push(v)),
-        }
-        vm.invoke_method_inner(globals, IdentId::get_id("close"), io, &[], None, None)
-    });
-    match close_result {
-        Err(ce) if !ce.message().contains("closed stream") => Err(ce),
-        _ => block_result,
-    }
-}
-
-/// Keyword parameters accepted by `File.open` / `File.new` / `IO.open`.
-/// Their slots start right after the 3 positional parameters (path,
-/// mode, perm); the kw_rest Hash (transcode options and other extras
-/// monoruby accepts but does not implement) sits after them.
+/// Keyword parameters accepted by `IO.read`: what it hands on to the
+/// open. Their slots start right after the 3 positional parameters; the
+/// kw_rest Hash (transcode options and other extras monoruby accepts but
+/// does not implement) sits after them.
 pub(super) const OPEN_KW: &[&str] = &[
     "flags",
     "mode",
@@ -1209,12 +1192,6 @@ pub(super) const OPEN_KW: &[&str] = &[
     "fallback",
     "xml",
 ];
-
-/// A named `OPEN_KW` keyword's value (absent or nil → `None`).
-fn open_kw(lfp: Lfp, name: &str) -> Option<Value> {
-    let i = OPEN_KW.iter().position(|n| *n == name)?;
-    lfp.try_arg(3 + i).filter(|v| !v.is_nil())
-}
 
 /// Collect the named keyword slots (+ any kw_rest extras) back into an
 /// options Hash so the shared IO option readers (`io_open_opts`,
@@ -1279,215 +1256,127 @@ pub(super) fn oflags_from_mode_string(mode: &str) -> Result<(i64, bool)> {
     Ok((oflags, binmode))
 }
 
+///
+/// ### File#initialize
+///
+/// - initialize(path, mode = "r", perm = 0666, **opts) -> self
+/// - initialize(fd, mode = nil, **opts) -> self
+///
+/// CRuby's `rb_file_initialize`: opens `path` on the receiver, which the
+/// allocator left uninitialized. `File.new` and `File.open` are `IO.new`
+/// and `IO.open` (builtins/io.rb): they allocate an instance of the class
+/// they are called on and dispatch `initialize`, so a subclass's own
+/// `initialize` runs and reaches this one through `super` (#2130).
 #[monoruby_builtin]
-fn open(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    open_impl(vm, globals, lfp, false)
-}
-
-/// `File.new` — same as `File.open` except a given block is *not*
-/// called (CRuby warns and returns the File).
-#[monoruby_builtin]
-fn file_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    open_impl(vm, globals, lfp, true)
-}
-
-fn open_impl(
+fn file_initialize(
     vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
-    is_new: bool,
+    _: BytecodePtr,
 ) -> Result<Value> {
-    vm.with_temp_scope(|vm| open_impl_body(vm, globals, lfp, is_new))
+    let self_val = lfp.self_val();
+    // `RFILE(io)->fptr` is set by the first `initialize` and stays set
+    // after a close.
+    if !self_val.as_io_inner().is_uninit() {
+        return Err(MonorubyErr::runtimeerr("reinitializing File"));
+    }
+    file_init(vm, globals, lfp, self_val)?;
+    Ok(self_val)
 }
 
-/// [`open_impl`]'s work, inside its temp scope: what this pushes on the
-/// temp stack stays rooted until the open is over.
-fn open_impl_body(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    is_new: bool,
-) -> Result<Value> {
-    let kw_hash = open_kw_hash(vm, globals, lfp)?;
-    // The options Hash is made here and nothing else refers to it, while
-    // conversions (`to_path`, the mode's or `path:`'s `to_str`, `flags:`'s
-    // `to_int`) run Ruby and a FIFO's open parks the thread, all before
-    // `init_io_encodings` reads it: root it.
-    if let Some(h) = kw_hash {
-        vm.temp_push(h);
-    }
-    // `rb_io_extract_modeenc` reads the conversion options before
-    // anything is opened, so a bad `invalid:` / `undef:` / `replace:` is
-    // reported even for a path that does not exist.
-    super::encoding::io_read_ecopts(globals, 0, kw_hash.map(|h| h.as_hash()))?;
-    // If the first argument is an Integer, treat it as a file descriptor.
-    if let Some(fd) = lfp.arg(0).try_fixnum() {
-        let fd_i32 = fd as i32;
-        // Validate the file descriptor before using it.
-        // Use fcntl(fd, F_GETFD) to check if the fd is valid.
-        if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
-            let err = std::io::Error::from_raw_os_error(9); // EBADF
-            return Err(MonorubyErr::errno_with_path(
-                &globals.store,
-                &err,
-                "rb_sysopen",
-                &format!("fd {}", fd),
-            ));
-        }
-        // An integer mode cannot change an already-open fd's access mode;
-        // CRuby surfaces the mismatch as Errno::EINVAL
-        // (core/file/new_spec.rb "can't alter mode or permissions when
-        // opening a file").
-        if let Some(n) = lfp.try_arg(1).and_then(|v| v.try_fixnum()) {
-            let want = (n as i32) & libc::O_ACCMODE;
-            // SAFETY: fcntl(F_GETFL) on the fd validated above.
-            let cur = unsafe { libc::fcntl(fd_i32, libc::F_GETFL) };
-            if cur != -1 && (cur & libc::O_ACCMODE) != want {
-                let err = std::io::Error::from_raw_os_error(libc::EINVAL);
-                return Err(MonorubyErr::errno_plain(&globals.store, &err));
-            }
-        }
-        // Scan trailing args for an options Hash and pick up `:path`
-        // (display name) and `:autoclose` (fd ownership) — required by
-        // patterns like `File.new(io.fileno, autoclose: false, path: "")`
-        // (logger/log_device.rb feature-detection code) where the caller
-        // explicitly disclaims ownership of the borrowed fd.
-        let (name, has_path, autoclose) =
-            super::io::io_open_opts(vm, globals, lfp, 1..3, fd, kw_hash)?;
-        let (readable, writable) = super::io::fd_rw_mode(fd_i32);
-        // If another monoruby IO already owns this fd, borrow it (autoclose
-        // = false) instead of creating a second closing `OwnedFd`, which
-        // would double-close and trip Rust's IO-safety abort. See the
-        // matching guard in `io_new` and `OWNED_FDS` in value/rvalue/io.rs.
-        let effective_autoclose =
-            autoclose && !crate::value::rvalue::fd_is_owned(fd_i32);
-        // SAFETY: fd has been validated as a valid file descriptor above.
-        let io_inner = IoInner::from_raw_fd_autoclose(
-            fd_i32,
-            name,
-            has_path,
-            readable,
-            writable,
-            effective_autoclose,
-        );
-        let res = Value::new_io_with_class(io_inner, FILE_CLASS);
-        // The fresh File is referenced only by this Rust local while
-        // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
-        return vm.with_temp_scope(|vm| {
-            vm.temp_push(res);
-            let mode_for_enc = lfp
-                .try_arg(1)
-                .and_then(|a| a.is_str().map(|s| s.to_string()))
-                .unwrap_or_else(|| {
-                    match (readable, writable) {
-                        (true, true) => "r+",
-                        (false, true) => "w",
-                        _ => "r",
-                    }
-                    .to_string()
-                });
-            super::io::init_io_encodings(
-                vm,
-                globals,
-                lfp,
-                res,
-                &mode_for_enc,
-                readable,
-                1..3,
-                kw_hash,
-            )?;
-            if let Some(bh) = lfp.block() {
-                if is_new {
-                    vm.ruby_warn(
-                        globals,
-                        "warning: File::new() does not take block; use File::open() instead",
-                    )?;
-                    return Ok(res);
-                }
-                let r = vm.invoke_block_once(globals, bh, &[res]);
-                // Match CRuby File.open(...) {|io| ... }: close at block exit.
-                // Holding the underlying fd open across blocks defeats `flock`
-                // (rubygems' open_with_flock relies on this) and leaks fds.
-                return block_close(vm, globals, res, r);
-            }
-            Ok(res)
-        });
-    }
-
-    // Resolve the open mode into open(2) flags. Precedence (CRuby):
-    // `mode:` keyword > positional mode arg (String / Integer / Hash
-    // with `:mode`) > default "r". A `flags:` keyword ORs extra bits on
-    // top of either form.
-    let mut mode_val: Option<Value> = None;
-    if let Some(arg1) = lfp.try_arg(1)
-        && !arg1.is_nil()
+/// [`file_initialize`]'s work on `obj`, its receiver.
+fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value) -> Result<()> {
+    // The `**opts` Hash stays in its frame slot, so it is rooted across
+    // the conversions below (`to_int`, `to_path`, the mode's or `path:`'s
+    // `to_str`, `flags:`'s `to_int`) and a FIFO's parked open.
+    let kw_hash = lfp.try_arg(3).filter(|v| v.try_hash_ty().is_some());
+    let kw = kw_hash.map(|h| h.as_hash());
+    // A descriptor in place of the path is `IO#initialize`'s business —
+    // unless a third positional argument is there: `perm` is File's only,
+    // so that form always names a path (`rb_file_initialize`).
+    if lfp.try_arg(2).is_none()
+        && let Some(fd) = lfp.arg(0).check_to_int(vm, globals)?
     {
-        if let Some(h) = arg1.try_hash_ty() {
-            if let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
-                && !m.is_nil()
-            {
-                mode_val = Some(m);
-            }
-        } else {
-            mode_val = Some(arg1);
-        }
+        return super::io::io_init_from_fd(vm, globals, obj, fd, lfp.try_arg(1), kw);
     }
-    if let Some(m) = open_kw(lfp, "mode") {
-        mode_val = Some(m);
-    }
-    // `mode` (the string form) also drives the encoding suffix parsing
-    // in init_io_encodings, so keep a string spelling alongside the
-    // flag bits.
-    let (mut oflags, mut binmode, mode) = match mode_val {
-        None => (libc::O_RDONLY as i64, false, "r".to_string()),
-        Some(m) => {
-            if let Some(n) = m.try_fixnum() {
-                (n, false, mode_string_from_flags(n))
-            } else {
-                let s = m.coerce_to_string(vm, globals)?;
-                let (f, b) = oflags_from_mode_string(&s)?;
-                (f, b, s)
-            }
-        }
-    };
-    if let Some(f) = open_kw(lfp, "flags") {
-        oflags |= f.coerce_to_int_i64(vm, globals)?;
-    }
-    if open_kw(lfp, "binmode").is_some_and(|v| v.as_bool()) {
-        binmode = true;
-    }
-    // CRuby rejects newline decorators on a binary-mode stream.
-    if binmode
-        && (open_kw(lfp, "newline").is_some()
-            || super::io::newline_decorator_given(vm, globals, kw_hash.map(|h| h.as_hash()))?)
-    {
-        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
-    }
-    let access = (oflags as i32) & libc::O_ACCMODE;
-    let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
-    let writable = access == libc::O_WRONLY || access == libc::O_RDWR;
-    // Creation permissions: the positional Integer after the mode, or a
-    // `perm:` keyword (only applied when the open creates the file).
-    let mut perm: i64 = 0o666;
-    if let Some(arg2) = lfp.try_arg(2)
-        && let Some(n) = arg2.try_fixnum()
-    {
-        perm = n;
-    }
-    if let Some(p) = open_kw(lfp, "perm")
-        && let Some(n) = p.try_fixnum()
-    {
-        perm = n;
-    }
+    // `rb_scan_open_args`: the path is converted first, then the mode and
+    // the options are read (`rb_io_extract_modeenc`), then `perm`.
     let path_rs = to_path_rstring(vm, globals, lfp.arg(0))?;
     let path_bytes = path_rs.as_bytes().to_vec();
-    // Read now: `path_rs` may be a fresh String (`to_path`'s), and a FIFO's
-    // open below parks the thread, which lets a collection free it.
+    // Read now: `path_rs` may be a fresh String (`to_path`'s); the
+    // conversions below run Ruby and a FIFO's open parks the thread,
+    // either of which lets a collection free it.
     let path_enc = path_rs.encoding();
     let path = String::from_utf8_lossy(&path_bytes).to_string();
     // NUL bytes were rejected by to_path_rstring, so this cannot fail.
     let cpath = std::ffi::CString::new(path_bytes.clone())
         .map_err(|_| MonorubyErr::argumenterr("path name contains null byte"))?;
+    // `rb_io_extract_modeenc` reads the conversion options before
+    // anything is opened, so a bad `invalid:` / `undef:` / `replace:` is
+    // reported even for a path that does not exist.
+    super::encoding::io_read_ecopts(globals, 0, kw)?;
+
+    // Resolve the open mode into open(2) flags: the positional mode (an
+    // Integer of `File::Constants` flags, through `to_int`, or else a
+    // String) or the `mode:` keyword — both is an error — and "r" without
+    // either. A `flags:` keyword ORs extra bits on top of either form.
+    // `mode` (the string form) also drives the encoding suffix parsing in
+    // init_io_encodings, so keep a string spelling alongside the flag
+    // bits.
+    fn parse_mode(
+        vm: &mut Executor,
+        globals: &mut Globals,
+        m: Value,
+    ) -> Result<(i64, bool, String)> {
+        if m.is_str().is_none()
+            && let Some(n) = m.check_to_int(vm, globals)?
+        {
+            let n = n.coerce_to_int_i64(vm, globals)?;
+            Ok((n, false, mode_string_from_flags(n)))
+        } else {
+            let s = m.coerce_to_string(vm, globals)?;
+            let (f, b) = oflags_from_mode_string(&s)?;
+            Ok((f, b, s))
+        }
+    }
+    let pos_mode = lfp.try_arg(1).filter(|v| !v.is_nil());
+    let mut parsed = match pos_mode {
+        Some(m) => Some(parse_mode(vm, globals, m)?),
+        None => None,
+    };
+    if let Some(m) = super::io::kw_opt(vm, globals, &kw, "mode")? {
+        if pos_mode.is_some() {
+            return Err(MonorubyErr::argumenterr("mode specified twice"));
+        }
+        parsed = Some(parse_mode(vm, globals, m)?);
+    }
+    let (mut oflags, mut binmode, mode) =
+        parsed.unwrap_or_else(|| (libc::O_RDONLY as i64, false, "r".to_string()));
+    if let Some(f) = super::io::kw_opt(vm, globals, &kw, "flags")? {
+        oflags |= f.coerce_to_int_i64(vm, globals)?;
+    }
+    if super::io::kw_opt(vm, globals, &kw, "binmode")?.is_some_and(|v| v.as_bool()) {
+        binmode = true;
+    }
+    // CRuby rejects newline decorators on a binary-mode stream.
+    if binmode && super::io::newline_decorator_given(vm, globals, kw)? {
+        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
+    }
+    let access = (oflags as i32) & libc::O_ACCMODE;
+    let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
+    let writable = access == libc::O_WRONLY || access == libc::O_RDWR;
+    // Creation permissions: the positional argument after the mode or the
+    // `perm:` keyword (both is an error), only applied when the open
+    // creates the file.
+    let pos_perm = lfp.try_arg(2).filter(|v| !v.is_nil());
+    let kw_perm = super::io::kw_opt(vm, globals, &kw, "perm")?;
+    if pos_perm.is_some() && kw_perm.is_some() {
+        return Err(MonorubyErr::argumenterr("perm specified twice"));
+    }
+    let perm: i64 = match pos_perm.or(kw_perm) {
+        Some(p) => p.num2long(vm, globals)?,
+        None => 0o666,
+    };
     let open_flags = (oflags as i32) | libc::O_CLOEXEC;
     // A FIFO's open(2) blocks in the kernel until the peer end appears;
     // opening it inline would freeze every green thread (and the
@@ -1537,7 +1426,7 @@ fn open_impl_body(
         // transfers to the File here.
         unsafe { <File as std::os::fd::FromRawFd>::from_raw_fd(fd) }
     };
-    let mut res = Value::new_file(
+    *obj.as_io_inner_mut() = IoInner::file(
         file,
         path,
         Some((path_bytes.clone(), path_enc)),
@@ -1546,27 +1435,11 @@ fn open_impl_body(
     );
     // `rb_io_oflags_fmode`: the open flags a C extension reads back from
     // `fptr->mode` (#2132).
-    res.as_io_inner_mut()
+    obj.as_io_inner_mut()
         .set_capi_fmode(fmode_of_oflags(open_flags));
-    // The fresh File is referenced only by this Rust local while
-    // `init_io_encodings` / `ruby_warn` re-enter Ruby — root it.
-    vm.with_temp_scope(|vm| {
-        vm.temp_push(res);
-        super::io::init_io_encodings(vm, globals, lfp, res, &mode, readable, 1..3, kw_hash)?;
-        if let Some(bh) = lfp.block() {
-            if is_new {
-                vm.ruby_warn(
-                    globals,
-                    "warning: File::new() does not take block; use File::open() instead",
-                )?;
-                return Ok(res);
-            }
-            let r = vm.invoke_block_once(globals, bh, &[res]);
-            // CRuby File.open(...) {|io| ... } closes the file at block exit.
-            return block_close(vm, globals, res, r);
-        }
-        Ok(res)
-    })
+    // The options are the `**opts` Hash alone: a positional Hash was
+    // rejected above as a mode or a `perm`.
+    super::io::init_io_encodings(vm, globals, lfp, obj, &mode, readable, 0..0, kw_hash)
 }
 
 /// The `FMODE_*` bits `rb_io_oflags_fmode` derives from open(2) flags
@@ -5040,6 +4913,221 @@ mod tests {
               3.times.map { (File.size(NoPath.new) rescue [$!.class, $!.message]) }.uniq,
               3.times.map { (File.size?(NoPath.new) rescue [$!.class, $!.message]) }.uniq,
             ]
+            "##,
+        );
+    }
+
+    /// `File.new` / `File.open` allocate an instance of the class they
+    /// are called on and dispatch `initialize` (#2130): a subclass's own
+    /// `initialize` runs, reaches `File#initialize` through `super`, and
+    /// one that never does leaves the stream uninitialized.
+    #[test]
+    fn file_subclass_initialize_runs() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_file_sub_init_#{Process.pid}"
+            File.write(path, "first line\nsecond\n")
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            class FSub1 < File; end
+            class FSub2 < File; def initialize; end; end
+            class FSub3 < File; def initialize(a, b); super(a); @b = b; end; attr_reader :b; end
+            class FSub4 < File; def initialize(*) = (super; @x = 1); attr_reader :x; end
+            class FSub5 < File; def initialize(p, **kw); super(p, **kw); end; end
+            begin
+              [
+                t { f = FSub1.new(path); r = [f.class, f.gets]; f.close; r },
+                t { FSub1.open(path) { |f| [f.class, f.gets] } },
+                t { FSub2.new.read },
+                t { FSub2.new.closed? },
+                t { FSub2.open { |f| 1 } },
+                t { f = FSub3.new(path, 7); r = [f.class, f.b, f.gets]; f.close; r },
+                t { FSub4.open(path) { |f| [f.class, f.x, f.path == path] } },
+                t { FSub5.open(path, mode: "r") { |f| f.read(5) } },
+                t { FSub3.new(path) },
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// `File#initialize` opens a path on an allocated File, once.
+    #[test]
+    fn file_initialize_on_allocated_file() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_file_alloc_init_#{Process.pid}"
+            File.write(path, "first line\n")
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            begin
+              [
+                t { f = File.allocate; r = f.send(:initialize, path); g = f.gets; f.close; [r.equal?(f), g] },
+                t { f = File.new(path); begin; f.send(:initialize, path); ensure; f.close; end },
+                t { f = File.new(path); f.close; f.send(:initialize, path) },
+                t { File.allocate.read },
+                t { File.allocate.path },
+                t { File.new },
+                t { File.open },
+                t { File.new(path, "r", 0644, 1) },
+                File.instance_method(:initialize).owner,
+                File.instance_method(:initialize).arity,
+                File.private_instance_methods(false).include?(:initialize),
+                File.method(:new).owner == IO.singleton_class,
+                File.method(:open).owner == IO.singleton_class,
+                [File.method(:new).arity, File.method(:open).arity],
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// `File.open` is allocate + `initialize`, not `new` (a redefined
+    /// `new` or `allocate` is not called), the block goes on to
+    /// `initialize`, and the close at block exit is skipped for a stream
+    /// that says it is closed.
+    #[test]
+    fn file_open_allocates_and_initializes() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_file_open_alloc_#{Process.pid}"
+            File.write(path, "first line\n")
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            class FBlk < File; def initialize(*a); $bg = block_given?; super; end; end
+            class FNew < File; def self.new(*) = raise("new called"); end
+            class FAlloc < File; def self.allocate = raise("allocate called"); end
+            class FClose < File; def close; $closes = ($closes || 0) + 1; super; end; end
+            class IOSub < IO; def initialize(*); end; end
+            begin
+              [
+                t { FBlk.open(path) { |f| $bg } },
+                t { FNew.open(path) { |f| f.class } },
+                t { FAlloc.open(path) { |f| f.class } },
+                t { f = FAlloc.new(path); f.close; f.class },
+                t { FClose.open(path) { |f| f.close }; $closes },
+                t { FClose.open(path) { |f| 1 }; $closes },
+                t { f = File.open(path) { |f| f }; f.closed? },
+                t { File.open(path) { |f| f.close; 1 } },
+                t { File.open(path) { |f| raise "in block" } },
+                t { IOSub.open(1) { |io| io.class } },
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// The mode and `perm` are each given once, as a positional argument
+    /// or a keyword; a positional Hash is not an options Hash, and `perm`
+    /// is converted as an Integer.
+    #[test]
+    fn file_open_mode_and_perm_given_once() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_file_mode_once_#{Process.pid}"
+            File.write(path, "first line\n")
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            o = Object.new; def o.to_str = "r"; def o.to_int = 0
+            begin
+              [
+                t { File.open(path, "r", mode: "r") { 1 } },
+                t { File.open(path, "q", mode: "r") { 1 } },
+                t { File.open(path, File::RDONLY, mode: "r") { 1 } },
+                t { File.open(path, nil, mode: "r") { 1 } },
+                t { File.open(path, mode: nil) { 1 } },
+                t { File.open(path, "r", 0644, perm: 0600) { 1 } },
+                t { File.open(path, "r", nil, perm: 0600) { 1 } },
+                t { File.open(path, perm: 0600) { 1 } },
+                t { File.open(path, "r", "x") { 1 } },
+                t { File.open(path, "r", 420.0) { 1 } },
+                t { File.open(path, {mode: "r"}) { 1 } },
+                t { File.open(path, o) { 1 } },
+                t { File.open(nil, "q") { 1 } },
+                t { File.open(path, mode: "r", no_such_option: 1) { 1 } },
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// A descriptor in place of the path makes `File#initialize` act as
+    /// `IO#initialize` — with at most a mode after it: `perm` is File's
+    /// own, so three positional arguments always name a path.
+    #[test]
+    fn file_new_with_descriptor_is_io_initialize() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_file_fd_init_#{Process.pid}"
+            File.write(path, "\xEF\xBB\xBFfirst line\n")
+            def t; yield; rescue Exception => e; [e.class, e.message]; end
+            fd = proc { IO.sysopen(path) }
+            o = Object.new; def o.to_int = 99_999
+            begin
+              [
+                t { File.new(-1) },
+                t { File.new(99_999) },
+                t { File.new(o) },
+                t { File.new(99_999.5) },
+                t { File.new(nil) },
+                t { File.new(:sym) },
+                t { File.new(1, "w", 0644) },
+                t { File.open(fd.(), "r:BOM|UTF-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { File.open(fd.(), encoding: "BOM|UTF-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { File.open(fd.(), "r", encoding: "BOM|UTF-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { IO.open(fd.(), "r:BOM|UTF-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { File.open(path, encoding: "BOM|UTF-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { File.open(path, "r", encoding: "bom|utf-8") { |f| [f.external_encoding.to_s, f.read] } },
+                t { File.open(fd.(), "w") { 1 } },
+                t { File.open(fd.(), File::RDONLY) { |f| f.gets.size } },
+                t { File.open(fd.(), mode: "r", path: "foo") { |f| [f.path, f.to_path, f.class] } },
+                t { n = fd.(); begin; File.open(n, "r", mode: "r") { 1 }; ensure; IO.for_fd(n).close; end },
+                t { File.open(fd.(), "rb") { |f| [f.binmode?, f.external_encoding.to_s] } },
+                t { File.open(fd.(), binmode: true) { |f| [f.binmode?, f.external_encoding.to_s] } },
+                t { IO.open(fd.(), "r", binmode: true) { |f| [f.binmode?, f.external_encoding.to_s] } },
+                t { n = fd.(); begin; File.open(n, {mode: "r"}) { 1 }; ensure; IO.for_fd(n).close; end },
+                t { n = fd.(); begin; IO.new(n, {mode: "r"}); ensure; IO.for_fd(n).close; end },
+              ]
+            ensure
+              File.unlink(path)
+            end
+            "##,
+        );
+    }
+
+    /// `IO.new` is allocate + `initialize` for IO itself too, so a
+    /// redefined `IO#initialize` runs.
+    #[test]
+    fn io_new_dispatches_initialize() {
+        run_test_once(
+            r##"
+            path = "/tmp/mono_io_new_init_#{Process.pid}"
+            File.write(path, "first line\n")
+            class IO
+              alias __orig_initialize initialize
+              def initialize(*a, **k)
+                $io_init = ($io_init || 0) + 1
+                __orig_initialize(*a, **k)
+              end
+            end
+            begin
+              io = IO.new(IO.sysopen(path))
+              r = [io.class, io.gets, $io_init]
+              io.close
+              r << IO.open(IO.sysopen(path)) { |f| f.gets } << $io_init
+              r << IO.method(:new).arity
+              r << (IO.new rescue [$!.class, $!.message])
+              r << (IO.new(1, "w", 3) rescue [$!.class, $!.message])
+            ensure
+              class IO
+                alias initialize __orig_initialize
+              end
+              File.unlink(path)
+            end
             "##,
         );
     }
