@@ -428,10 +428,17 @@ pub struct Executor {
     /// keeps answering the path for them and a later reference loads
     /// the file again. See `Executor::require`.
     autoload_require: bool,
+    /// The constant site `find_constant` is resolving, innermost. A
+    /// warning raised while the reference is resolved (an autoload whose
+    /// file did not define the constant) reports the line of that
+    /// reference, and nothing else a callee can reach says which
+    /// instruction of the frame is running.
+    const_read_site: Option<ConstSiteId>,
     /// The encoding of the feature String the `require` / `load` about
-    /// to run was given, which the loaded file's path String takes in
-    /// CRuby and its backtrace lines with it (#2090). Set by the
-    /// builtins, consumed by the next `require` / `load`.
+    /// to run was given, which decides the encoding of the loaded file's
+    /// path String in CRuby, and of its backtrace lines with it (#2090;
+    /// see `Globals::expanded_path_encoding`). Set by the builtins,
+    /// consumed by the next `require` / `load`.
     pub(crate) feature_encoding: Option<crate::value::Encoding>,
     /// Stack of definition sites (source, `Loc`) for the
     /// `method_added` / `singleton_method_added` / `const_added` hooks
@@ -475,11 +482,6 @@ pub struct Executor {
     /// dispatches to the running body before using it.
     invoked_as: Option<IdentId>,
     require_level: usize,
-    /// Stack of canonical paths currently being executed via `require` /
-    /// autoload. Used so that `Module#autoload :Foo, path` can detect
-    /// "registering an autoload whose feature is the file currently
-    /// being loaded" and treat it as a no-op (matches CRuby).
-    loading_paths: Vec<std::path::PathBuf>,
     /// The wrap module of the `load(path, wrap)` whose top level is
     /// running (CRuby's `th->top_wrapper`); `None` outside one and in a
     /// plain `require` / `load` nested in it.
@@ -592,12 +594,12 @@ impl std::default::Default for Executor {
             pending_const_loc: None,
             autoload_require: false,
             feature_encoding: None,
+            const_read_site: None,
             hook_sites: Vec::new(),
             temp_stack: vec![],
             method_missing_style: MethodMissingStyle::Plain,
             invoked_as: None,
             require_level: 0,
-            loading_paths: vec![],
             top_wrapper: None,
             catch_tags: vec![],
             exception: None,
@@ -709,7 +711,13 @@ impl Executor {
     }
 
     pub fn init(globals: &mut Globals, program_name: &str) -> Result<Self> {
-        let program_name = Value::string_from_str(program_name);
+        // The script name CRuby takes from the command line: a frozen
+        // String in the locale encoding (#2096).
+        let mut program_name = Value::string_from_source_bytes(
+            program_name.as_bytes(),
+            crate::builtins::encoding::locale_encoding(),
+        );
+        program_name.set_frozen();
         globals.set_gvar(IdentId::get_id("$0"), program_name);
         // $PROGRAM_NAME is an alias of $0 in Ruby; make them share one entry.
         globals.alias_global_variable(IdentId::get_id("$PROGRAM_NAME"), IdentId::get_id("$0"));
@@ -1557,7 +1565,10 @@ impl Executor {
         // Consumed here, not at the dispatch site: the file's own
         // `require`s run after this point and are direct ones.
         let from_autoload = std::mem::take(&mut self.autoload_require);
-        let feature_encoding = self.feature_encoding.take();
+        let feature_encoding = self
+            .feature_encoding
+            .take()
+            .map(|enc| globals.expanded_path_encoding(enc));
         let (file_body, canonicalized_path) = loop {
             let found = match globals.require_lib(self, file_name, is_relative) {
                 // Not on `$LOAD_PATH` nor in a host gem: an installed gem
@@ -1664,17 +1675,26 @@ impl Executor {
             // entry is dropped so subsequent references raise
             // `NameError` rather than re-entering the (now already
             // loaded) file.
-            // Only a *direct* require consumes them. The require an
-            // autoload dispatches is about its own constant, which the
-            // trigger in `Executor::get_constant` brackets itself;
-            // CRuby leaves every other constant registered for the same
-            // file exactly as it was.
-            let matching = if from_autoload {
-                Vec::new()
-            } else {
-                let (mut matching, bare) = globals
-                    .store
-                    .find_autoload_entries_for_paths(&[canonicalized_path.clone()]);
+            // The require an autoload dispatches is about its own
+            // constant, which the trigger in `Executor::get_constant`
+            // brackets itself, and it leaves the other constants
+            // registered under the *same feature String* as they were:
+            // in CRuby they share that constant's `autoload_data`, whose
+            // mutex — made for this load and never dropped — keeps them
+            // reading as pending afterwards. A constant registered to
+            // this file under another spelling (`"v.rb"` beside `"v"`)
+            // has no part in that and is consumed like any other
+            // (#2128).
+            let matching = {
+                let (mut matching, bare) = if from_autoload {
+                    globals
+                        .store
+                        .find_respelled_autoload_entries(&canonicalized_path, file_name)
+                } else {
+                    globals
+                        .store
+                        .find_autoload_entries_for_paths(&[canonicalized_path.clone()])
+                };
                 // A bare feature names this file when requiring it
                 // would load this file — the stub tree included, which
                 // is searched ahead of `$LOAD_PATH` (#2113).
@@ -1702,7 +1722,7 @@ impl Executor {
                 file_body,
                 &canonicalized_path,
                 None,
-                feature_encoding,
+                feature_encoding.map(|enc| (enc, enc)),
             );
             // The lock only needs to cover the body: waiters woken from
             // here on see either the registered feature (success) or a
@@ -1837,7 +1857,7 @@ impl Executor {
                     // Done before the load (`activate_host_gem`).
                     None
                 } else if canonicalized_path.starts_with(stub_dir())
-                    && !self.is_loading_path(&lib_dir().join("rubygems.rb"))
+                    && !globals.is_loading_here(&lib_dir().join("rubygems.rb"))
                 {
                     globals.store.get_constant_noautoload(OBJECT_CLASS, gem_id)
                 } else {
@@ -2065,14 +2085,28 @@ impl Executor {
         wrap: Option<Module>,
     ) -> Result<()> {
         let feature_encoding = self.feature_encoding.take();
-        let (file_body, path) = globals.find_for_load(self, file_name)?;
-        self.load_impl(globals, file_body, &path, wrap, feature_encoding)?;
+        let (file_body, path, as_given) = globals.find_for_load(self, file_name)?;
+        // A name CRuby expanded takes the encoding `rb_file_expand_path`
+        // gives one, for the path and the real path alike. A name it left
+        // as it was written is the caller's String, in whatever encoding
+        // that has, and the real path `rb_realpath_internal` makes of a
+        // relative name is BINARY.
+        let encodings = feature_encoding.map(|enc| {
+            if as_given {
+                (enc, crate::value::Encoding::Ascii8)
+            } else {
+                let enc = globals.expanded_path_encoding(enc);
+                (enc, enc)
+            }
+        });
+        self.load_impl(globals, file_body, &path, wrap, encodings)?;
         Ok(())
     }
 
     ///
-    /// Run the file at *path*, whose path String is in *path_encoding*
-    /// (the feature's; UTF-8 when no feature String named it).
+    /// Run the file at *path*. *encodings* are those of its path String
+    /// and of its real path (`Location#absolute_path`, `__dir__`); both
+    /// UTF-8 when no feature String named the file.
     ///
     fn load_impl(
         &mut self,
@@ -2080,7 +2114,7 @@ impl Executor {
         file_body: Vec<u8>,
         path: &std::path::Path,
         wrap: Option<Module>,
-        path_encoding: Option<crate::value::Encoding>,
+        encodings: Option<(crate::value::Encoding, crate::value::Encoding)>,
     ) -> Result<()> {
         let _level = self.inc_require_level();
 
@@ -2096,16 +2130,17 @@ impl Executor {
             // module).
             self.push_wrap_class_context(wrap.id());
         }
-        self.loading_paths.push(path.to_path_buf());
         let saved_wrapper = std::mem::replace(&mut self.top_wrapper, wrap);
-        crate::parser::set_loading_file(Some((
-            path.to_path_buf(),
-            path_encoding.unwrap_or(crate::value::Encoding::UTF8),
-        )));
+        let (path_encoding, realpath_encoding) =
+            encodings.unwrap_or((crate::value::Encoding::UTF8, crate::value::Encoding::UTF8));
+        crate::parser::set_loading_file(Some(crate::parser::LoadingFile {
+            path: path.to_path_buf(),
+            path_encoding,
+            realpath_encoding,
+        }));
         let res = self.exec_script_with_wrap(globals, file_body, path, wrap);
         crate::parser::set_loading_file(None);
         self.top_wrapper = saved_wrapper;
-        self.loading_paths.pop();
         self.exit_class_context();
 
         #[cfg(feature = "dump-require")]
@@ -2115,23 +2150,6 @@ impl Executor {
 
         res?;
         Ok(())
-    }
-
-    /// Returns `true` if `path` (or its `.rb`/`.so` extended form) is
-    /// currently being executed by `Executor::require` / `Executor::load`.
-    /// Used by `Module#autoload` to detect the "register an autoload for
-    /// the file currently being loaded" case (treated as a no-op).
-    pub(crate) fn is_loading_path(&self, path: &std::path::Path) -> bool {
-        self.loading_paths.iter().any(|p| p == path)
-    }
-
-    /// Whether a file named `stem` (extension aside) is among the files
-    /// this thread is loading. A cheap pre-check for
-    /// `autoload_feature_in_flight`.
-    pub(crate) fn is_loading_stem(&self, stem: &std::ffi::OsStr) -> bool {
-        self.loading_paths
-            .iter()
-            .any(|p| p.file_stem() == Some(stem))
     }
 
     pub(crate) fn enter_class_context(&mut self) {
@@ -3196,6 +3214,18 @@ impl Executor {
     }
 
     fn find_constant_impl(
+        &mut self,
+        globals: &mut Globals,
+        site_id: ConstSiteId,
+        final_missing: bool,
+    ) -> Result<(Value, Option<Value>)> {
+        let outer_site = self.const_read_site.replace(site_id);
+        let res = self.find_constant_at_site(globals, site_id, final_missing);
+        self.const_read_site = outer_site;
+        res
+    }
+
+    fn find_constant_at_site(
         &mut self,
         globals: &mut Globals,
         site_id: ConstSiteId,

@@ -91,6 +91,8 @@ pub struct DeferCtx {
     pub tree: PrismTree,
     /// The path, for `__FILE__`.
     pub path: String,
+    /// The encoding of the String `__FILE__` is.
+    pub file_encoding: crate::value::Encoding,
     pub source_info: SourceInfoRef,
     pub line_offset: i64,
     pub eval_parse: bool,

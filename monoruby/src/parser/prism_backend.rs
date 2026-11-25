@@ -589,7 +589,7 @@ fn try_prism_inner(
         .with_frozen_string_literal(frozen_string_literal)
         .with_hidden_ivars(detect_hidden_ivars(code)),
     );
-    source_info.set_path_encoding(super::source_path_encoding(
+    source_info.set_path_encodings(super::source_path_encoding(
         &source_info.path,
         is_eval_source,
     ));
@@ -706,9 +706,19 @@ fn try_prism_inner(
         }
     });
 
+    // `__FILE__` is in the encoding of the path String CRuby compiled
+    // the source under (#2096). Two names are not that String's: CRuby
+    // hands prism `-e` as a BINARY String of its own, and standard
+    // input with none.
+    let file_encoding = match path_display.as_str() {
+        "-e" if !is_eval_source => crate::value::Encoding::Ascii8,
+        "-" if !is_eval_source => crate::value::Encoding::UTF8,
+        _ => source_info.path_encoding(),
+    };
     let ctx = Rc::new(DeferCtx {
         tree,
         path: path_display,
+        file_encoding,
         source_info: source_info.clone(),
         line_offset,
         // The main script parses with binding scopes (it executes inside
@@ -2295,11 +2305,11 @@ impl<'pr> Lowerer<'pr> {
                 }
             }
             prism::Node::SourceFileNode { .. } => {
-                // `__FILE__` — ruruby's parser inlines the source
-                // path as a `String` literal at parse time, so do the
-                // same here.
+                // `__FILE__` — the source path inlined as a String
+                // literal (its encoding: `DeferCtx::file_encoding`).
+                let enc = self.ctx.file_encoding;
                 Node {
-                    kind: NodeKind::String(self.path.clone()),
+                    kind: NodeKind::EncodedString(self.path.clone().into_bytes(), enc.name()),
                     loc,
                 }
             }

@@ -120,11 +120,35 @@ pub(crate) fn take_cli_shebang_cr(path: &std::path::Path) -> Option<usize> {
     }
 }
 
+/// The file a `require` / `load` is about to parse, with the encodings
+/// CRuby gives its two path Strings.
+pub(crate) struct LoadingFile {
+    pub path: PathBuf,
+    /// Of the path the file goes by: `__FILE__`, `Location#path`, the
+    /// backtrace lines.
+    pub path_encoding: crate::value::Encoding,
+    /// Of its real path: `Location#absolute_path`, `__dir__`. The path's
+    /// own, except for a file `load` found relative to the current
+    /// directory (see `Executor::load`).
+    pub realpath_encoding: crate::value::Encoding,
+}
+
 thread_local! {
-    /// The file a `require` / `load` is running and the encoding of its
-    /// path String (#2090); consumed by its parse.
-    static LOADING_FILE: std::cell::RefCell<Option<(PathBuf, crate::value::Encoding)>> =
+    /// The file a `require` / `load` is running (#2090); consumed by its
+    /// parse.
+    static LOADING_FILE: std::cell::RefCell<Option<LoadingFile>> =
         const { std::cell::RefCell::new(None) };
+    /// The encoding of the file name String an `eval` was given;
+    /// consumed by its parse.
+    static EVAL_NAME_ENCODING: std::cell::Cell<Option<crate::value::Encoding>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Leave the encoding of the file name String an `eval` was given for
+/// the parse of its source, which is about to run: the path of the
+/// eval'd code is that String, `__FILE__` included.
+pub(crate) fn set_eval_name_encoding(enc: Option<crate::value::Encoding>) {
+    EVAL_NAME_ENCODING.with(|c| c.set(enc));
 }
 
 thread_local! {
@@ -151,48 +175,54 @@ pub fn take_error_warnings() -> Vec<(String, bool)> {
 }
 
 /// Arm (or, with `None`, disarm) the marker for the file a `require` /
-/// `load` is about to parse, with the encoding of its path String.
-pub(crate) fn set_loading_file(file: Option<(PathBuf, crate::value::Encoding)>) {
+/// `load` is about to parse.
+pub(crate) fn set_loading_file(file: Option<LoadingFile>) {
     LOADING_FILE.with(|r| *r.borrow_mut() = file);
 }
 
-/// The encoding of the path String CRuby keeps for a source parsed from
-/// *path* (see `SourceInfo::path_encoding`). For an `eval`: BINARY for
-/// the `(eval at …)` name it makes up, UTF-8 for a name it was given.
-/// For a file `require` / `load` runs: the encoding of the feature
-/// String it was given (`require "x".b` makes it BINARY), which
-/// [`set_loading_file`] left for it. For the main script and `-e`: the
-/// locale encoding. A file of the `builtins/` tree takes the locale
-/// encoding too: its `<internal:…>` frames stand in for C frames, which
-/// CRuby shows at their caller's path, and that is the locale's unless a
-/// `require` or an `eval` made it.
+/// The encodings of the two path Strings CRuby keeps for a source parsed
+/// from *path* — the path it goes by and its real path (see
+/// `SourceInfo::path_encoding`, `SourceInfo::realpath_encoding`). They
+/// differ for one kind of source only, which [`LoadingFile`] describes.
+///
+/// For an `eval`: BINARY for the `(eval at …)` name it makes up, and the
+/// encoding of the name String for one it was given
+/// ([`set_eval_name_encoding`]; UTF-8 when the caller left none). For a
+/// file `require` / `load` runs: what [`set_loading_file`] left for it,
+/// which follows the feature String (`require "x".b` makes it the
+/// filesystem encoding).
+/// For the main script and `-e`: the locale encoding. A file of the
+/// `builtins/` tree takes the locale encoding too: its `<internal:…>`
+/// frames stand in for C frames, which CRuby shows at their caller's
+/// path, and that is the locale's unless a `require` or an `eval` made
+/// it.
 pub(crate) fn source_path_encoding(
     path: &std::path::Path,
     is_eval: bool,
-) -> crate::value::Encoding {
+) -> (crate::value::Encoding, crate::value::Encoding) {
+    let both = |enc| (enc, enc);
+    let eval_name = EVAL_NAME_ENCODING.with(|c| c.take());
     if crate::globals::is_builtins_path(path) {
-        return crate::builtins::encoding::locale_encoding();
+        return both(crate::builtins::encoding::locale_encoding());
     }
     if is_eval {
-        return if path
-            .as_os_str()
-            .as_encoded_bytes()
-            .starts_with(b"(eval at ")
-        {
-            crate::value::Encoding::Ascii8
-        } else {
-            crate::value::Encoding::UTF8
-        };
+        return both(
+            if path
+                .as_os_str()
+                .as_encoded_bytes()
+                .starts_with(b"(eval at ")
+            {
+                crate::value::Encoding::Ascii8
+            } else {
+                eval_name.unwrap_or(crate::value::Encoding::UTF8)
+            },
+        );
     }
     LOADING_FILE.with(|r| {
         let mut r = r.borrow_mut();
-        match &*r {
-            Some((p, enc)) if p == path => {
-                let enc = *enc;
-                *r = None;
-                enc
-            }
-            _ => crate::builtins::encoding::locale_encoding(),
+        match r.take_if(|f| f.path == path) {
+            Some(f) => (f.path_encoding, f.realpath_encoding),
+            None => both(crate::builtins::encoding::locale_encoding()),
         }
     })
 }

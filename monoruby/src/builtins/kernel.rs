@@ -289,6 +289,13 @@ pub(super) fn init(globals: &mut Globals) -> Module {
     globals.define_builtin_func(kernel_class, "__instance_ty", instance_ty, 0);
     globals.define_builtin_func(kernel_class, "__backtrace_limit", backtrace_limit, 0);
     globals.define_builtin_func(kernel_class, "__caller_frames", caller_frames, 1);
+    globals.define_builtin_func(kernel_class, "__location_label", location_label_of, 1);
+    globals.define_builtin_func(
+        kernel_class,
+        "__location_base_label",
+        location_base_label_of,
+        1,
+    );
     // `chomp` / `chop` are only defined under `-n` / `-p`
     // (`define_loop_mode_builtins`, called from the CLI driver).
     globals.define_builtin_func(
@@ -1473,11 +1480,20 @@ fn caller_frames(
             let frame = match resolved {
                 Some((source, line)) => {
                     let path = crate::globals::display_path(&source).into_owned();
+                    // The path and the real path are the iseq's own
+                    // Strings in CRuby: frozen.
                     let absolute = if path.starts_with('<') {
                         Value::nil()
                     } else {
                         match &source.absolute_path {
-                            Some(p) => Value::string(p.to_string_lossy().into_owned()),
+                            Some(p) => {
+                                let mut v = Value::string_from_source_bytes(
+                                    p.as_os_str().as_encoded_bytes(),
+                                    source.realpath_encoding(),
+                                );
+                                v.set_frozen();
+                                v
+                            }
                             None => Value::nil(),
                         }
                     };
@@ -1485,16 +1501,17 @@ fn caller_frames(
                     // The frame line is ASCII when its path and label are.
                     let path_ascii = enc != crate::value::Encoding::UTF8 && path.is_ascii();
                     let line_ascii = path_ascii && label.is_ascii();
+                    let frame_line = format!("{path}:{line}:in '{label}'");
                     vec![
-                        crate::globals::backtrace_string(
-                            format!("{path}:{line}:in '{label}'"),
-                            enc,
-                            line_ascii,
-                        ),
-                        crate::globals::backtrace_string(path, enc, path_ascii),
+                        crate::globals::backtrace_string(frame_line, enc, line_ascii),
+                        {
+                            let mut v = crate::globals::backtrace_string(path, enc, path_ascii);
+                            v.set_frozen();
+                            v
+                        },
                         absolute,
                         Value::integer(line as i64),
-                        Value::string(label),
+                        location_label(label),
                     ]
                 }
                 None => vec![
@@ -1502,7 +1519,7 @@ fn caller_frames(
                     Value::string_from_str("<internal>"),
                     Value::nil(),
                     Value::integer(0),
-                    Value::string(label),
+                    location_label(label),
                 ],
             };
             v.push(Value::array_from_vec(frame));
@@ -1515,6 +1532,135 @@ fn caller_frames(
         }
     }
     Ok(Value::array_from_vec(v))
+}
+
+/// The String `Thread::Backtrace::Location#label` answers for a frame
+/// labelled *label*, in the encoding CRuby gives it (#2096).
+///
+/// CRuby makes a label that has a qualifier or a prefix (`Foo#bar`,
+/// `block in foo`, `<class:Foo>`) with `rb_sprintf`: a new String each
+/// time, BINARY while it is all ASCII. Any other label is the iseq's own
+/// name (`<main>`, `foo`): one frozen US-ASCII String, which is the base
+/// label as well. A name with a non-ASCII character in it is UTF-8
+/// either way. The label comes back frozen when it is the iseq's name,
+/// which is how `Location#label` tells whether to hand out a copy.
+fn location_label(label: String) -> Value {
+    use crate::value::Encoding;
+    let made = label.starts_with("<class:")
+        || label.starts_with("<module:")
+        || label.starts_with("block ")
+        || label_name_start(&label).is_some();
+    if !label.is_ascii() {
+        let mut v = Value::string(label);
+        if !made {
+            v.set_frozen();
+        }
+        v
+    } else if made {
+        Value::string_from_source_bytes(label.as_bytes(), Encoding::Ascii8)
+    } else {
+        let mut v = Value::string_from_source_bytes(label.as_bytes(), Encoding::UsAscii);
+        v.set_frozen();
+        v
+    }
+}
+
+/// Where the name starts in a label with a qualifier (`Foo#bar`,
+/// `Foo.bar`, `M::C.bar`): after the last `#` / `.` that has something
+/// on both sides. A `<…>` label (`<main>`, `<class:Foo>`) has none.
+fn label_name_start(label: &str) -> Option<usize> {
+    if label.starts_with('<') {
+        return None;
+    }
+    let i = label.rfind(['#', '.'])?;
+    (i > 0 && i + 1 < label.len()).then_some(i + 1)
+}
+
+/// The base label of a frame labelled *label*: the label without its
+/// `block in` / `block (2 levels) in` prefixes and without the owner
+/// qualifier — the bare `foo` of `block in M::C.foo`.
+fn location_base_label(label: &str) -> &str {
+    fn block_body(label: &str) -> Option<&str> {
+        let rest = label.strip_prefix("block ")?;
+        let rest = match rest.strip_prefix('(') {
+            Some(levels) => {
+                let (n, rest) = levels.split_once(" levels) ")?;
+                if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                rest
+            }
+            None => rest,
+        };
+        rest.strip_prefix("in ").filter(|body| !body.is_empty())
+    }
+    let mut base = label;
+    while let Some(body) = block_body(base) {
+        base = body;
+    }
+    match label_name_start(base) {
+        Some(start) => &base[start..],
+        None => base,
+    }
+}
+
+/// ### Kernel.__location_label (monoruby intrinsic)
+///
+/// The label of a frame parsed back from a backtrace line, as
+/// `Location#label` keeps it: [`location_label`] of the String.
+#[monoruby_builtin]
+fn location_label_of(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let label = lfp.arg(0);
+    let text = label
+        .is_rstring_inner()
+        .and_then(|s| std::str::from_utf8(s.as_bytes()).ok());
+    Ok(match text {
+        Some(text) => location_label(text.to_string()),
+        // Not a label monoruby made: left as it is.
+        None => label,
+    })
+}
+
+/// ### Kernel.__location_base_label (monoruby intrinsic)
+///
+/// `Location#base_label` for the label `Location#label` keeps (see
+/// [`location_label`]): the label itself when it is the iseq's name,
+/// and otherwise the name in it — the method's own, a frozen US-ASCII
+/// String, or a class body's `<class:Foo>`, which is the `rb_sprintf`ed
+/// label again and so BINARY.
+#[monoruby_builtin]
+fn location_base_label_of(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    use crate::value::Encoding;
+    let label = lfp.arg(0);
+    if label.is_frozen() {
+        return Ok(label);
+    }
+    let Some(text) = label
+        .is_rstring_inner()
+        .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
+    else {
+        return Ok(label);
+    };
+    let base = location_base_label(text);
+    let mut v = if !base.is_ascii() {
+        Value::string_from_str(base)
+    } else if base.starts_with("<class:") || base.starts_with("<module:") {
+        Value::string_from_source_bytes(base.as_bytes(), Encoding::Ascii8)
+    } else {
+        Value::string_from_source_bytes(base.as_bytes(), Encoding::UsAscii)
+    };
+    v.set_frozen();
+    Ok(v)
 }
 
 /// Whether a native frame is a pure invocation trampoline that is left
@@ -3455,25 +3601,45 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // `#to_path`/`#to_str` chain.
     let feature = path_arg_to_string(vm, globals, lfp.arg(0))?;
     let file_name = std::path::PathBuf::from(feature);
-    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
+    vm.feature_encoding = feature_encoding(lfp.arg(0));
     let b = vm.require(globals, &file_name, false)?;
     Ok(Value::bool(b))
 }
 
-/// The encoding the loaded file's path String takes (#2090): the
-/// feature String's, except that a US-ASCII or BINARY one is the
-/// filesystem encoding (`rb_file_expand_path` associates that with such
-/// a path), which is `Encoding.default_external` on Linux and macOS.
-fn feature_encoding(globals: &mut Globals, arg: Value) -> Option<crate::value::Encoding> {
+/// The encoding of the feature String *arg*, which decides that of the
+/// loaded file's path String (#2090, `Globals::expanded_path_encoding`).
+fn feature_encoding(arg: Value) -> Option<crate::value::Encoding> {
+    let name = arg.is_rstring_inner()?;
+    Some(ospath_encoding(
+        name.encoding(),
+        name.as_bytes().is_ascii(),
+        cfg!(target_os = "macos"),
+    ))
+}
+
+/// CRuby's `rb_str_encode_ospath`, which `require`, `load` and an
+/// autoload's `require` run the feature String through before anything
+/// else. Where the OS takes its paths in UTF-8 (*utf8_ospath*: macOS;
+/// Linux has no such step) a name that is neither BINARY nor UTF-8 is
+/// converted to UTF-8, so that is the encoding the file's path String
+/// starts from: `load "x.rb".encode("EUC-JP")` has a UTF-8 `__FILE__`
+/// there and an EUC-JP one on Linux, and a US-ASCII name no longer
+/// stands for `Encoding.default_external` as a BINARY one still does.
+///
+/// Only an ASCII-only name is relabelled. Any other would have to be
+/// transcoded, and a name whose bytes are not UTF-8 is not loadable
+/// here yet in the first place.
+fn ospath_encoding(
+    enc: crate::value::Encoding,
+    ascii_only: bool,
+    utf8_ospath: bool,
+) -> crate::value::Encoding {
     use crate::value::Encoding;
-    let enc = arg.is_rstring_inner()?.encoding();
-    Some(match enc {
-        Encoding::UsAscii | Encoding::Ascii8 => globals
-            .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
-            .and_then(|v| globals.encoding_of_object(v))
-            .unwrap_or_else(super::encoding::locale_encoding),
-        enc => enc,
-    })
+    match enc {
+        Encoding::Ascii8 | Encoding::UTF8 => enc,
+        _ if utf8_ospath && ascii_only => Encoding::UTF8,
+        _ => enc,
+    }
 }
 
 /// CRuby's `rb_get_path`: convert a path argument to a String via
@@ -3520,7 +3686,7 @@ fn require_relative(
     // No extension munging here: the shared resolution appends `.rb`
     // itself, and `require_relative "x.ext"` must mean `x.ext.rb`
     // (set_extension would *replace* the foreign extension).
-    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
+    vm.feature_encoding = feature_encoding(lfp.arg(0));
     let b = vm.require(globals, &file_name, true)?;
     Ok(Value::bool(b))
 }
@@ -3546,7 +3712,7 @@ fn load_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     } else {
         None
     };
-    vm.feature_encoding = feature_encoding(globals, lfp.arg(0));
+    vm.feature_encoding = feature_encoding(lfp.arg(0));
     vm.load(globals, &file_name, wrap)?;
     Ok(Value::bool(true))
 }
@@ -3670,7 +3836,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     // comes from the immediate caller, whose pc we were handed.
     let outer_cfp = caller_cfp.nearest_ruby_frame();
     let fname = if let Some(f) = lfp.try_arg(2) {
-        f.coerce_to_str(vm, globals)?
+        crate::builtins::eval_file_name(vm, globals, f)?
     } else {
         let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
         format!("(eval at {})", caller_loc)
@@ -4696,7 +4862,14 @@ fn warn(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/__dir__.html]
 #[monoruby_builtin]
 fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let path = globals.current_source_path(vm);
+    let source_func_id = vm.cfp().get_source_pos();
+    let source = &globals.store.iseq(source_func_id).sourceinfo;
+    // Prefer the load-time canonical path, as `require_relative` does
+    // (`Globals::current_source_path`).
+    let (path, enc) = match &source.absolute_path {
+        Some(p) => (p, source.realpath_encoding()),
+        None => (&source.path, source.path_encoding()),
+    };
     let s = path.to_string_lossy();
     // `eval` with a binding (and no explicit filename) yields a
     // synthetic "(eval at ...)" source; there is no directory.
@@ -4708,7 +4881,9 @@ fn dir_(vm: &mut Executor, globals: &mut Globals, _lfp: Lfp, _: BytecodePtr) -> 
         Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().to_string(),
         _ => ".".to_string(),
     };
-    Ok(Value::string(dir))
+    // The directory of the path String CRuby keeps for the source, in
+    // that String's encoding (#2096).
+    Ok(Value::string_from_source_bytes(dir.as_bytes(), enc))
 }
 
 ///
@@ -7972,6 +8147,32 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// macOS only: CRuby's `rb_str_encode_ospath` turns a feature
+    /// String that is neither BINARY nor UTF-8 into a UTF-8 one before
+    /// `require` / `load` look at it. Checked here as a function of the
+    /// platform, since the differential tests can only show the
+    /// platform they run on.
+    #[test]
+    fn feature_string_encoding_goes_through_the_ospath_rule() {
+        use super::ospath_encoding;
+        use crate::value::Encoding;
+        for enc in [Encoding::UsAscii, Encoding::EUC_JP, Encoding::Iso8859(1)] {
+            // Linux: the name's own encoding.
+            assert_eq!(ospath_encoding(enc, true, false), enc);
+            assert_eq!(ospath_encoding(enc, false, false), enc);
+            // macOS: UTF-8, as long as there is nothing to transcode.
+            assert_eq!(ospath_encoding(enc, true, true), Encoding::UTF8);
+            assert_eq!(ospath_encoding(enc, false, true), enc);
+        }
+        for enc in [Encoding::Ascii8, Encoding::UTF8] {
+            for ascii_only in [true, false] {
+                for utf8_ospath in [true, false] {
+                    assert_eq!(ospath_encoding(enc, ascii_only, utf8_ospath), enc);
+                }
+            }
+        }
+    }
 
     #[test]
     fn sprintf_renderings_are_ascii_8bit() {

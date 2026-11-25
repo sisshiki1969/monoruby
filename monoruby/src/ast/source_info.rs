@@ -127,7 +127,13 @@ pub struct SourceInfo {
     /// through `$LOAD_PATH`; UTF-8 for one `require_relative` loaded and
     /// an `eval` given a file name; BINARY for the `(eval at …)` name of
     /// one given none. Settled once the parse has made the source.
+    /// `__FILE__` and `Location#path` are in it too (#2096).
     path_encoding: std::cell::Cell<crate::value::Encoding>,
+    /// The encoding of the String CRuby keeps for this source's real
+    /// path, which `Location#absolute_path` and `__dir__` answer in: the
+    /// path's own, except for a file `load` found relative to the current
+    /// directory, whose real path is BINARY.
+    realpath_encoding: std::cell::Cell<crate::value::Encoding>,
 }
 
 impl Default for SourceInfo {
@@ -155,6 +161,7 @@ impl SourceInfo {
             frozen_string_literal: None,
             hidden_ivars: false,
             path_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
+            realpath_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
         }
     }
 
@@ -183,6 +190,7 @@ impl SourceInfo {
             frozen_string_literal: None,
             hidden_ivars: false,
             path_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
+            realpath_encoding: std::cell::Cell::new(crate::value::Encoding::UTF8),
         }
     }
 
@@ -205,8 +213,19 @@ impl SourceInfo {
         self.path_encoding.get()
     }
 
-    pub fn set_path_encoding(&self, enc: crate::value::Encoding) {
-        self.path_encoding.set(enc);
+    /// The encoding of this source's real path String (see
+    /// `realpath_encoding`).
+    pub fn realpath_encoding(&self) -> crate::value::Encoding {
+        self.realpath_encoding.get()
+    }
+
+    /// Settle the encodings of the path and of the real path.
+    pub fn set_path_encodings(
+        &self,
+        (path, realpath): (crate::value::Encoding, crate::value::Encoding),
+    ) {
+        self.path_encoding.set(path);
+        self.realpath_encoding.set(realpath);
     }
 
     /// Builder: attach the `# monoruby-hidden-ivars:` magic-comment value.

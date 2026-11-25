@@ -353,6 +353,15 @@ impl BytecodePtr {
     }
 
     ///
+    /// The constant site this instruction reads through, when it is a
+    /// constant read (`LoadConst`, opcode 10, or `CheckConst`, 18; see
+    /// `TraceIr::from_pc`).
+    ///
+    pub(crate) fn const_read_site(&self) -> Option<ConstSiteId> {
+        matches!(self.opcode(), 10 | 18).then(|| ConstSiteId(self.op1 as u32))
+    }
+
+    ///
     /// Whether this instruction only ever runs inside an exception
     /// handler: the `rescue` clause matches (`RescueTEq`, opcode 157, and
     /// the splatted-clause `ArrayTEq`, opcode 44). The JIT's basic-block
