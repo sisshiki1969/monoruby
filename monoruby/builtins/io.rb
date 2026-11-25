@@ -31,22 +31,16 @@ class IO
     include IO::WaitWritable
   end
 
-  # CRuby's rb_io_s_new is Class#new plus a warning for a block. The
-  # stream itself is built by one native call (`__io_new`) when the class
-  # initializes as IO does; a subclass with an `initialize` of its own (the
-  # socket extension's classes) is allocated and initialized as Class#new
-  # does it.
+  # CRuby's rb_io_s_new: Class#new plus a warning for a block. File
+  # inherits it, so `File.new` allocates an instance of the class it is
+  # called on and dispatches `initialize` (File#initialize opens the path).
   def self.new(...)
     if block_given?
       warn("#{self}::new() does not take block; use #{self}::open() instead", uplevel: 1)
     end
-    if instance_method(:initialize).owner.equal?(IO)
-      __io_new(...)
-    else
-      o = __builtin_allocate__
-      o.__builtin_initialize__(...)
-      o
-    end
+    o = __builtin_allocate__
+    o.__builtin_initialize__(...)
+    o
   end
 
   # CRuby's IO#putc: a String argument writes its first character, any
@@ -158,20 +152,27 @@ class IO
     new(fd, mode, **opts)
   end
 
-  # CRuby's rb_io_s_open: `new(*args)` plus block handling — the IO is
-  # closed when the block exits (via #close dispatch, so overrides run);
-  # an IOError meaning "already closed" is swallowed, everything else
-  # (StandardError or not) propagates.
-  def self.open(*args, **opts)
-    io = new(*args, **opts)
+  # CRuby's rb_io_s_open (File.open is this method too): allocate +
+  # `initialize` as Class#new does it — not through `new`, which a
+  # subclass may have redefined, and with the block handed on to
+  # `initialize` — then the block handling. The IO is closed when the block
+  # exits, through #close dispatch so that overrides run, unless #closed?
+  # already says so; an IOError meaning "already closed" is swallowed,
+  # everything else (StandardError or not) propagates and replaces the
+  # block's own exception.
+  def self.open(...)
+    io = __builtin_allocate__
+    io.__builtin_initialize__(...)
     return io unless block_given?
     begin
       yield io
     ensure
-      begin
-        io.close
-      rescue IOError => e
-        raise unless e.message.include?("closed stream")
+      unless io.closed?
+        begin
+          io.close
+        rescue IOError => e
+          raise unless e.message.include?("closed stream")
+        end
       end
     end
   end

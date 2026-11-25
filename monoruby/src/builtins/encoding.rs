@@ -1098,16 +1098,20 @@ fn handle_xml_option(
 /// triggering `Hash#default` / `default_proc`. Iterates the
 /// hash keys and matches by symbol name.
 fn find_hash_value_for_symbol(hash: &crate::value::Hashmap, name: &str) -> Option<Value> {
+    // A Symbol key matches only a name that is interned already, and by
+    // its id: every `File.open` with options asks this half a dozen times,
+    // and spelling each key out as a String to compare cost an allocation
+    // per key per question.
+    let id = IdentId::try_get_id(name);
     for (k, v) in hash.iter() {
         if let Some(sym) = k.try_symbol() {
-            if sym.get_name() == name {
+            if Some(sym) == id {
                 return Some(v);
             }
-        }
-        if let Some(s) = k.is_str() {
-            if s == name {
-                return Some(v);
-            }
+        } else if let Some(s) = k.is_str()
+            && s == name
+        {
+            return Some(v);
         }
     }
     None

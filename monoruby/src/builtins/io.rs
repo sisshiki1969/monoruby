@@ -8,10 +8,8 @@ use std::fs::File;
 
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("IO", IO_CLASS, ObjTy::IO);
-    // `IO.new` itself is Ruby (builtins/io.rb): `__io_new` for IO's own
-    // `initialize`, Class#new's allocate + initialize for a subclass with
-    // one of its own (the socket classes).
-    globals.define_builtin_class_func_with_kw(IO_CLASS, "__io_new", io_new, 1, 2, false, &[], true);
+    // `IO.new` and `IO.open` are Ruby (builtins/io.rb): allocate, then
+    // dispatch `initialize`, as Class#new does it.
     globals.define_private_builtin_func_with_kw(
         IO_CLASS,
         "initialize",
@@ -190,20 +188,6 @@ pub(super) fn init(globals: &mut Globals) {
     globals.set_gvar(IdentId::get_id("$stderr"), stderr);
 }
 
-#[monoruby_builtin]
-fn io_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let class = lfp.self_val().as_class_id();
-    let obj = Value::new_io_with_class(IoInner::uninit(), class);
-    // Root the fresh IO across `io_init_from_fd` / `warn`, which re-enter
-    // Ruby while it lives only in this Rust local.
-    vm.with_temp_scope(|vm| {
-        vm.temp_push(obj);
-        // A block draws `IO.new`'s warning in builtins/io.rb.
-        io_init_from_fd(vm, globals, lfp, obj)?;
-        Ok(obj)
-    })
-}
-
 ///
 /// ### IO#initialize
 ///
@@ -217,13 +201,14 @@ fn io_initialize(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    io_init_from_fd(vm, globals, lfp, lfp.self_val())?;
+    let kw = lfp.try_arg(2).and_then(|v| v.try_hash_ty());
+    io_init_from_fd(vm, globals, lfp.self_val(), lfp.arg(0), lfp.try_arg(1), kw)?;
     Ok(lfp.self_val())
 }
 
 /// Fetch a keyword from the (optional) kwrest Hash of `IO.new`-family
 /// callsites, mapping an explicit `nil` to `None`.
-fn kw_opt(
+pub(super) fn kw_opt(
     vm: &mut Executor,
     globals: &mut Globals,
     kw: &Option<crate::value::Hashmap>,
@@ -264,19 +249,21 @@ fn parse_fmode(s: &str) -> Result<(String, bool, bool, Option<String>)> {
     Ok((base, bin, text, enc))
 }
 
-/// The shared body of `IO.new` / `IO.for_fd` / `IO#initialize` / `IO.open`
-/// (CRuby's `rb_io_initialize` + `rb_io_extract_modeenc`): validates the
-/// fd, resolves mode/binmode/encodings from the positional mode argument
-/// and keyword options (with all the "specified twice" conflict checks),
-/// and (re)associates `obj` with the descriptor.
+/// The body of `IO#initialize`, and of `File#initialize` given a
+/// descriptor (CRuby's `rb_io_initialize` + `rb_io_extract_modeenc`):
+/// validates the fd, resolves mode/binmode/encodings from the positional
+/// mode argument and the keyword options `kw` (with all the "specified
+/// twice" conflict checks), and (re)associates `obj` with the descriptor.
 pub(super) fn io_init_from_fd(
     vm: &mut Executor,
     globals: &mut Globals,
-    lfp: Lfp,
     mut obj: Value,
+    fd: Value,
+    pos_mode: Option<Value>,
+    kw: Option<crate::value::Hashmap>,
 ) -> Result<()> {
     // fd: implicit #to_int conversion (TypeError for nil/String/IO).
-    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let fd = fd.coerce_to_int_i64(vm, globals)?;
     let fd_i32 = fd as i32;
     if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
         let err = std::io::Error::from_raw_os_error(libc::EBADF);
@@ -284,27 +271,25 @@ pub(super) fn io_init_from_fd(
         return Err(MonorubyErr::errno_plain(&globals.store, &err));
     }
 
-    let kw: Option<crate::value::Hashmap> = lfp.try_arg(2).and_then(|v| v.try_hash_ty());
     // `invalid:` / `undef:` / `replace:` for what the stream reads.
     let ecopts = super::encoding::io_read_ecopts(globals, 0, kw)?;
 
     // Mode: positional arg vs `mode:` option — both given is an error.
-    let pos_mode = lfp.try_arg(1).filter(|v| !v.is_nil());
+    let pos_mode = pos_mode.filter(|v| !v.is_nil());
     let kw_mode = kw_opt(vm, globals, &kw, "mode")?;
     if pos_mode.is_some() && kw_mode.is_some() {
         return Err(MonorubyErr::argumenterr("mode specified twice"));
     }
-    // A mode value is a String (#to_str) or an Integer of File::Constants
-    // flags (#to_int); try string conversion first, like CRuby.
+    // A mode value is an Integer of File::Constants flags (#to_int) or
+    // else a String (#to_str, whose TypeError is the one for neither):
+    // `rb_io_extract_modeenc` asks `rb_check_to_integer` first.
     let mode_str: Option<String> = match pos_mode.or(kw_mode) {
         None => None,
         Some(v) => {
             if let Some(s) = v.is_str() {
                 Some(s.to_string())
-            } else if let Some(s) = v.check_string_type(vm, globals)? {
-                Some(s.expect_string(&globals.store)?)
-            } else {
-                let flags = v.coerce_to_int_i64(vm, globals)?;
+            } else if let Some(flags) = v.check_to_int(vm, globals)? {
+                let flags = flags.coerce_to_int_i64(vm, globals)?;
                 let m = super::file::mode_string_from_flags(flags);
                 // The internal no-truncate spellings ("w-"/"-w") only
                 // affect File-open truncation; wrapping an existing fd
@@ -313,6 +298,8 @@ pub(super) fn io_init_from_fd(
                     "w-" | "-w" => "w".to_string(),
                     _ => m,
                 })
+            } else {
+                Some(v.coerce_to_string(vm, globals)?)
             }
         }
     };
@@ -423,12 +410,16 @@ pub(super) fn io_init_from_fd(
     }
     let mut ext_obj: Option<Value> = None;
     let mut int_obj: Option<Value> = None;
+    // A "BOM|utf-..." external asks for byte-order-mark detection; the
+    // name after the prefix is the fallback when the stream has no BOM.
+    let mut bom = false;
     if let Some(enc_part) = &menc {
         let mut parts = enc_part.splitn(2, ':');
-        ext_obj = parts
-            .next()
-            .filter(|x| !x.is_empty())
-            .and_then(|x| enc_by_name(globals, x));
+        ext_obj = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
+            let (name, b) = split_bom_prefix(x);
+            bom = b;
+            enc_by_name(globals, name)
+        });
         int_obj = parts
             .next()
             .filter(|x| !x.is_empty() && *x != "-")
@@ -440,10 +431,11 @@ pub(super) fn io_init_from_fd(
         } else {
             let s = e.coerce_to_string(vm, globals)?;
             let mut parts = s.splitn(2, ':');
-            ext_obj = parts
-                .next()
-                .filter(|x| !x.is_empty())
-                .and_then(|x| enc_by_name(globals, x));
+            ext_obj = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
+                let (name, b) = split_bom_prefix(x);
+                bom = b;
+                enc_by_name(globals, name)
+            });
             int_obj = parts
                 .next()
                 .filter(|x| !x.is_empty() && *x != "-")
@@ -498,60 +490,28 @@ pub(super) fn io_init_from_fd(
         resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
     store_io_encodings(globals, obj, slot, i);
     set_io_ecopts(globals, obj, ecopts)?;
+    // Without a mode, `rb_io_initialize` takes the fmode from the
+    // descriptor's own flags (`rb_io_oflags_fmode`), which carry neither
+    // FMODE_BINMODE nor FMODE_TEXTMODE: `binmode: true` alone still picks
+    // the encodings above, but `binmode?` stays false, and no option turns
+    // the newline decorator on.
     if binmode {
-        obj.as_io_inner_mut().set_binmode();
+        if mode_str.is_some() {
+            obj.as_io_inner_mut().set_binmode();
+        }
     } else {
-        // Without a mode, `rb_io_initialize` takes the fmode from the
-        // descriptor's own flags (`rb_io_oflags_fmode`), which never
-        // carry FMODE_TEXTMODE, so no option turns the decorator on.
         let on = readable
             && mode_str.is_some()
             && reads_universal_newline(vm, globals, fmode_text, kw)?;
         obj.as_io_inner_mut().set_universal_newline(on);
     }
-    Ok(())
-}
-
-/// Parse the trailing options Hash for `IO.new(fd, ...)` / `File.new(fd, ...)`,
-/// returning `(display_name, autoclose)`.
-///
-/// CRuby accepts `:path` (display name surfaced via `IO#path`) and `:autoclose`
-/// (whether the wrapping IO closes the fd on close/GC). The latter is
-/// load-bearing: `File.new(other.fileno, autoclose: false, path: ...)` (used
-/// in `logger/log_device.rb`'s feature detection and `fixup_mode`) hands a
-/// borrowed fd to a new wrapper while keeping the original IO responsible
-/// for closing it. Without honoring `:autoclose` we end up with two owners
-/// for the same fd, triggering `IO Safety violation: owned file descriptor
-/// already closed` on drop.
-pub(super) fn io_open_opts(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    range: std::ops::Range<usize>,
-    fd: i64,
-    extra: Option<Value>,
-) -> Result<(String, bool, bool)> {
-    let mut autoclose = true;
-    let mut name = format!("fd {}", fd);
-    let mut has_path = false;
-    let candidates = range
-        .filter_map(|i| lfp.try_arg(i))
-        .chain(extra)
-        .collect::<Vec<_>>();
-    for arg in candidates {
-        if let Some(h) = arg.try_hash_ty() {
-            if let Some(v) = h.get(Value::symbol(IdentId::get_id("autoclose")), vm, globals)? {
-                autoclose = v.as_bool();
-            }
-            if let Some(v) = h.get(Value::symbol(IdentId::get_id("path")), vm, globals)?
-                && !v.is_nil()
-            {
-                name = v.coerce_to_string(vm, globals)?;
-                has_path = true;
-            }
-        }
+    // FMODE_SETENC_BY_BOM is one more bit of the fmode a missing mode
+    // replaces: `encoding: "BOM|UTF-8"` alone names the encoding and
+    // leaves the mark in the stream.
+    if bom && readable && mode_str.is_some() {
+        detect_and_consume_bom(vm, globals, obj)?;
     }
-    Ok((name, has_path, autoclose))
+    Ok(())
 }
 
 /// Query a raw fd's access mode via `fcntl(F_GETFL)` and map `O_ACCMODE`
@@ -821,7 +781,7 @@ fn parse_open_encodings(
     let mode_has_enc = mext.is_some();
     // A "BOM|utf-..." external requests byte-order-mark detection; the
     // name after the prefix is the fallback when no BOM is present.
-    let (mext, bom) = match mext {
+    let (mext, mut bom) = match mext {
         Some(e) => {
             let (n, b) = split_bom_prefix(e);
             (Some(n), b)
@@ -852,10 +812,13 @@ fn parse_open_encodings(
             }
             if let Some(s) = v.is_str() {
                 let mut parts = s.split(':');
-                ext = parts
-                    .next()
-                    .filter(|x| !x.is_empty())
-                    .and_then(|x| enc_by_name(globals, x));
+                // `encoding: "BOM|UTF-8"` asks for the mark's detection
+                // as the mode string's suffix does.
+                ext = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
+                    let (name, b) = split_bom_prefix(x);
+                    bom = b;
+                    enc_by_name(globals, name)
+                });
                 int = parts
                     .next()
                     .filter(|x| !x.is_empty())

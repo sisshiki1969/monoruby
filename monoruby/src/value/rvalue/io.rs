@@ -172,7 +172,7 @@ fn drain_err(
 /// file descriptor already closed") if the same fd is closed twice. So
 /// `IO.new(existing_io.fileno)` — which by default (`autoclose: true`)
 /// would wrap the *already-owned* fd in a second closing `OwnedFd` —
-/// must not create a second owner. `io_new` consults this set and, when
+/// must not create a second owner. `io_init_from_fd` consults this set and, when
 /// the fd is already owned, opens the new IO as a *borrow*
 /// (`autoclose: false`, released via `into_raw_fd` without closing) so
 /// only the original owner ever closes the fd.
@@ -1280,7 +1280,7 @@ impl IoInner {
         Self::with_kind(IoKind::Stderr)
     }
 
-    pub(super) fn file(
+    pub(crate) fn file(
         file: std::fs::File,
         name: String,
         path_raw: Option<(Vec<u8>, crate::value::Encoding)>,
