@@ -357,7 +357,21 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
 - **`IO.select`**: グリーンパスでは与えられた全 fd を `wait_fds` で待つ
   (timeout は deadline として sleepers に併載)。非 IO オブジェクトは `#to_io` で変換。
   全セット空 + timeout なしは CRuby 同様「status "sleep" で永眠(kill/wakeup 可能)」。
-  単独スレッド時は従来の `select(2)`(EINTR → ポーリング → 再試行)。
+  単独スレッド時は `select(2)`(EINTR → ポーリング → 再試行)。fd 集合は最大 fd に
+  合わせて伸びるビット列(`FdSet`、CRuby の `rb_fdset_t` 相当)で、`FD_SETSIZE` の
+  上限はない(macOS は `select$DARWIN_EXTSN`)。
+  - 3 つの Array は添字で辿り、長さを毎回読み直す(`#to_io` が Array を変え得る)。
+    待つ前に持ち出すのは fd の整数だけで、戻り値は待ったあとに Array をもう一度
+    辿って(各要素を再変換して)作る。CRuby の `select_internal` と同じ 2 回走査で、
+    待っている間に他スレッドやトラップが Array を変えても、消えた要素には触れない。
+  - 何が ready かは他スレッドがいるときも `select(2)` が決める(CRuby と同じ)。
+    グリーンパスはゼロタイムアウトの `select(2)` で判定し、何もなければ `wait_fds`
+    (`poll(2)`)で眠って、起きたら判定し直す。`poll(2)` の revents をそのまま答えに
+    しないのは、hangup / error を read・write・error のどれに数えるかが `select(2)` と
+    `poll(2)` で違い、OS でも違うため(macOS の `poll(2)` は `POLLHUP` と一緒に
+    `POLLPRI` を返し、macOS の `select(2)` は終了したパイプの読み側を書き込み可能と
+    する、など)。`poll(2)` が何か返すのに `select(2)` が ready としない fd は待ち対象
+    から外し(外さないと空回りする)、以後は 100 ms ごとに `select(2)` を聞き直す。
 - **ソケット**: TCP の `connect` は非ブロッキング発行(`EINPROGRESS`)→ `POLLOUT` を
   `wait_fd` で待って `SO_ERROR` 確認、`accept` はリスナ fd を恒久 non-blocking にして
   `POLLIN` の park-retry ループで受ける(いずれも native worker ではなくスケジューラの

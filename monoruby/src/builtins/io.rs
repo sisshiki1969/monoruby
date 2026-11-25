@@ -5604,37 +5604,357 @@ fn io_write_nonblock(
     }
 }
 
-/// Helper: extract raw fd from a Value that is an IO (or responds to to_io).
-fn value_to_fd(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<i32> {
-    if let Some(rv) = v.try_rvalue() {
-        if rv.ty() == ObjTy::IO {
-            return v.as_io_inner().fileno();
-        }
-    }
-    // Duck typing: CRuby converts non-IO entries through #to_io.
-    let to_io = IdentId::get_id("to_io");
-    if globals.check_method(v, to_io).is_some() {
-        let io = vm.invoke_method_inner(globals, to_io, v, &[], None, None)?;
-        if let Some(rv) = io.try_rvalue()
-            && rv.ty() == ObjTy::IO
-        {
-            return io.as_io_inner().fileno();
-        }
-    }
-    Err(MonorubyErr::typeerr(format!(
-        "no implicit conversion of {} into IO",
-        v.builtin_class_name(globals)
-    )))
+#[inline(always)]
+fn is_io(v: Value) -> bool {
+    v.try_rvalue().is_some_and(|rv| rv.ty() == ObjTy::IO)
 }
 
-/// Whether `v` is an IO whose userspace read buffer already holds data.
-/// CRuby's `IO.select` reports such IOs as ready immediately
-/// (`rb_io_read_pending`): the kernel fd may be drained while unread
-/// bytes sit in the buffer — waiting on the fd would sleep through data
-/// the caller could read right now (the `expect` library's
-/// select-then-getc loop hangs exactly there).
-fn io_read_pending(v: Value) -> bool {
-    v.ty() == Some(crate::value::rvalue::ObjTy::IO) && v.as_io_inner().has_buffered_data()
+/// CRuby's `rb_io_get_io`: `v` when it is an IO, otherwise what its
+/// `#to_io` answers, which has to be one.
+#[inline(always)]
+fn io_get_io(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    if is_io(v) {
+        return Ok(v);
+    }
+    io_convert(vm, globals, v)
+}
+
+fn io_convert(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Value> {
+    match crate::coerce::convert_type(vm, globals, v, IdentId::get_id("to_io"), "IO", is_io)? {
+        Some(io) => Ok(io),
+        None => Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into IO",
+            v.builtin_class_name(globals)
+        ))),
+    }
+}
+
+/// The word of an `fd_set`'s bit array (C's `fd_mask`).
+#[cfg(target_os = "macos")]
+type FdMask = i32;
+#[cfg(not(target_os = "macos"))]
+type FdMask = libc::c_ulong;
+
+/// The words of a `libc::fd_set`.
+const FD_SET_WORDS: usize = size_of::<libc::fd_set>() / size_of::<FdMask>();
+
+/// A descriptor set for select(2) that grows with the largest descriptor
+/// put in it, as CRuby's `rb_fdset_t` does. A `libc::fd_set` holds
+/// `FD_SETSIZE` (1024) descriptors and `libc::FD_SET` indexes past its
+/// end for a larger one (#2196), while the kernel takes a bit array of any
+/// length and reads `nfds` bits of it.
+///
+/// The bits are in `small`, which is an `fd_set` in all but name, until a
+/// descriptor does not fit there; from then on they are in `big`.
+struct FdSet {
+    small: [FdMask; FD_SET_WORDS],
+    big: Vec<FdMask>,
+}
+
+impl Default for FdSet {
+    fn default() -> Self {
+        Self {
+            small: [0; FD_SET_WORDS],
+            big: Vec::new(),
+        }
+    }
+}
+
+impl FdSet {
+    const BITS: usize = FdMask::BITS as usize;
+
+    #[inline]
+    fn set(&mut self, fd: i32) {
+        let Ok(fd) = usize::try_from(fd) else {
+            return;
+        };
+        let (word, bit) = (fd / Self::BITS, 1 << (fd % Self::BITS));
+        if self.big.is_empty() && word < FD_SET_WORDS {
+            self.small[word] |= bit;
+        } else {
+            self.set_big(word, bit);
+        }
+    }
+
+    #[cold]
+    fn set_big(&mut self, word: usize, bit: FdMask) {
+        if self.big.is_empty() {
+            self.big.extend_from_slice(&self.small);
+        }
+        if self.big.len() <= word {
+            self.big.resize(word + 1, 0);
+        }
+        self.big[word] |= bit;
+    }
+
+    #[inline]
+    fn is_set(&self, fd: i32) -> bool {
+        let Ok(fd) = usize::try_from(fd) else {
+            return false;
+        };
+        let words = if self.big.is_empty() {
+            &self.small[..]
+        } else {
+            &self.big[..]
+        };
+        words
+            .get(fd / Self::BITS)
+            .is_some_and(|w| w & (1 << (fd % Self::BITS)) != 0)
+    }
+
+    /// Empty the set, with room for the descriptors below `nfds`.
+    fn reset(&mut self, nfds: i32) {
+        let words = (nfds.max(0) as usize).div_ceil(Self::BITS);
+        self.big.clear();
+        if words <= FD_SET_WORDS {
+            self.small = [0; FD_SET_WORDS];
+        } else {
+            self.big.resize(words, 0);
+        }
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut libc::fd_set {
+        if self.big.is_empty() {
+            self.small.as_mut_ptr().cast()
+        } else {
+            self.big.as_mut_ptr().cast()
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    /// select(2) for descriptor sets of any length. Darwin's plain `select`
+    /// fails with `EINVAL` once `nfds` is above `FD_SETSIZE`; this is the
+    /// entry a C program compiled with `_DARWIN_UNLIMITED_SELECT` gets,
+    /// CRuby among them.
+    #[link_name = "select$DARWIN_EXTSN"]
+    fn select_unlimited(
+        nfds: libc::c_int,
+        readfds: *mut libc::fd_set,
+        writefds: *mut libc::fd_set,
+        errorfds: *mut libc::fd_set,
+        timeout: *mut libc::timeval,
+    ) -> libc::c_int;
+}
+#[cfg(not(target_os = "macos"))]
+use libc::select as select_unlimited;
+
+/// Which of `IO.select`'s three lists an entry is in.
+#[derive(Clone, Copy)]
+enum SelectList {
+    Read,
+    Write,
+    Error,
+}
+
+type SelectFdList = smallvec::SmallVec<[i32; 8]>;
+
+/// The descriptors one `IO.select` waits on, read off its three lists
+/// before the wait.
+#[derive(Default)]
+struct SelectFds {
+    read: SelectFdList,
+    write: SelectFdList,
+    error: SelectFdList,
+    /// The descriptors of the read list whose IO holds data it has read
+    /// from the kernel already (CRuby's `fds[3]`). Such an IO is ready
+    /// now, whatever the descriptor says (`rb_io_read_pending`): the
+    /// kernel side may be drained while unread bytes sit in the buffer,
+    /// and waiting on the descriptor would sleep through data the caller
+    /// could read at once (the `expect` library's select-then-getc loop
+    /// hangs exactly there).
+    pending: FdSet,
+    has_pending: bool,
+}
+
+impl SelectFds {
+    /// select(2)'s `nfds`: one above the largest descriptor.
+    fn nfds(&self) -> i32 {
+        [&self.read, &self.write, &self.error]
+            .into_iter()
+            .flatten()
+            .copied()
+            .max()
+            .map_or(0, |fd| fd + 1)
+    }
+}
+
+/// One select(2) call over the descriptors of `fds`, waiting as long as
+/// `timeout` says (null: until something is ready). Answers how many
+/// descriptors it found ready and leaves exactly those in `ready`, one
+/// set per list.
+fn select_once(
+    fds: &SelectFds,
+    nfds: i32,
+    ready: &mut [FdSet; 3],
+    timeout: *mut libc::timeval,
+) -> std::io::Result<i32> {
+    // select(2) overwrites the sets, so they are filled in for each call.
+    let lists = [&fds.read, &fds.write, &fds.error];
+    for (set, list) in ready.iter_mut().zip(lists) {
+        set.reset(nfds);
+        for &fd in list {
+            set.set(fd);
+        }
+    }
+    let set_ptr = |set: &mut FdSet, list: &SelectFdList| {
+        if list.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            set.as_mut_ptr()
+        }
+    };
+    let [readfds, writefds, errorfds] = ready;
+    // SAFETY: each set is null or a bit array `reset` sized for `nfds`
+    // descriptors, which is all select(2) reads and writes of it; the
+    // caller's timeout is null or a valid timeval.
+    let found = unsafe {
+        select_unlimited(
+            nfds,
+            set_ptr(readfds, &fds.read),
+            set_ptr(writefds, &fds.write),
+            set_ptr(errorfds, &fds.error),
+            timeout,
+        )
+    };
+    if found > 0 {
+        return Ok(found);
+    }
+    let res = if found < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(0)
+    };
+    // What a failed or timed-out select(2) leaves in the sets is not
+    // the same everywhere.
+    for set in ready {
+        set.reset(0);
+    }
+    res
+}
+
+/// The Array given as one of `IO.select`'s lists; `nil` is no list.
+fn select_list(globals: &Globals, arg: Value) -> Result<Option<Array>> {
+    if arg.is_nil() {
+        return Ok(None);
+    }
+    match arg.try_array_ty() {
+        Some(ary) => Ok(Some(ary)),
+        None => Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Array)",
+            arg.builtin_class_name(globals)
+        ))),
+    }
+}
+
+/// Put the descriptors of one of `IO.select`'s lists into `fds`.
+///
+/// The list is walked by index and its length read again at every step,
+/// as CRuby's loop over `RARRAY_LEN` / `RARRAY_AREF` does: an entry that
+/// is not an IO is converted through `#to_io`, and that code may change
+/// the Array. A copy of the entries taken up front kept on reading the
+/// ones it had removed, which nothing else may hold by then (#2154).
+fn select_collect(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg: Value,
+    which: SelectList,
+    fds: &mut SelectFds,
+) -> Result<()> {
+    let Some(ary) = select_list(globals, arg)? else {
+        return Ok(());
+    };
+    let mut i = 0;
+    while i < ary.len() {
+        let io = io_get_io(vm, globals, ary[i])?;
+        // No Ruby runs between the conversion and the last use of `io`.
+        let inner = io.as_io_inner();
+        match which {
+            SelectList::Read => {
+                let fd = inner.fileno()?;
+                if inner.has_buffered_data() {
+                    fds.pending.set(fd);
+                    fds.has_pending = true;
+                }
+                fds.read.push(fd);
+            }
+            // The side written to, when the IO has a descriptor for
+            // each (CRuby's `GetWriteIO`).
+            SelectList::Write => fds.write.push(match inner.tied_write_fd() {
+                Some(wfd) => wfd,
+                None => inner.fileno()?,
+            }),
+            SelectList::Error => {
+                fds.error.push(inner.fileno()?);
+                if let Some(wfd) = inner.tied_write_fd() {
+                    fds.error.push(wfd);
+                }
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+/// `IO.select`'s answer: for each list, its entries whose descriptor is
+/// in the matching set of `ready` (or, for the read list, in `pending`).
+///
+/// The lists are read again here, entry by entry, and each entry is
+/// converted again, as in CRuby: what a `#to_io` did to a list during
+/// the first walk shows in the answer, and an entry is answered as it
+/// was given, not as converted.
+fn select_result(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lists: [Value; 3],
+    ready: &[FdSet; 3],
+    pending: &FdSet,
+) -> Result<Value> {
+    vm.with_temp_scope(|vm| {
+        // The answer, and a slot for the entry being converted: its
+        // `#to_io` may take it out of the list, which may be all that
+        // holds it.
+        let res = Value::array_with_capacity(3);
+        let slot = vm.temp_len() + 1;
+        vm.temp_push(res);
+        vm.temp_push(Value::nil());
+        for (which, arg) in lists.into_iter().enumerate() {
+            let list = Value::array_empty();
+            res.as_array().push(list);
+            let Some(ary) = arg.try_array_ty() else {
+                continue;
+            };
+            let mut i = 0;
+            while i < ary.len() {
+                let obj = ary[i];
+                vm.temp_set(slot, obj);
+                let io = io_get_io(vm, globals, obj)?;
+                let inner = io.as_io_inner();
+                let hit = match which {
+                    0 => {
+                        let fd = inner.fileno()?;
+                        ready[0].is_set(fd) || pending.is_set(fd)
+                    }
+                    1 => ready[1].is_set(match inner.tied_write_fd() {
+                        Some(wfd) => wfd,
+                        None => inner.fileno()?,
+                    }),
+                    _ => {
+                        ready[2].is_set(inner.fileno()?)
+                            || inner
+                                .tied_write_fd()
+                                .is_some_and(|wfd| ready[2].is_set(wfd))
+                    }
+                };
+                if hit {
+                    list.as_array().push(obj);
+                }
+                i += 1;
+            }
+        }
+        Ok(res)
+    })
 }
 
 /// ### IO.select
@@ -5649,9 +5969,10 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     let error_arg = lfp.try_arg(2).unwrap_or(Value::nil());
     let timeout_arg = lfp.try_arg(3).unwrap_or(Value::nil());
 
-    // Parse timeout
-    let timeout = if timeout_arg.is_nil() {
-        None // block forever
+    // Parse timeout: nil and, since Ruby 4.0, Float::INFINITY block
+    // forever.
+    let mut timeout = if timeout_arg.is_nil() || timeout_arg.try_float() == Some(f64::INFINITY) {
+        None
     } else {
         let dur = super::kernel::time_interval(vm, globals, timeout_arg)?;
         Some(libc::timeval {
@@ -5660,52 +5981,24 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         })
     };
 
-    // Collect IO values and their fds
-    let read_ios: Vec<Value> = if read_arg.is_nil() {
-        vec![]
-    } else {
-        let ary = read_arg
-            .try_array_ty()
-            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
-        ary.to_vec()
-    };
-
-    let write_ios: Vec<Value> = if write_arg.is_nil() {
-        vec![]
-    } else {
-        let ary = write_arg
-            .try_array_ty()
-            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
-        ary.to_vec()
-    };
-
-    let error_ios: Vec<Value> = if error_arg.is_nil() {
-        vec![]
-    } else {
-        let ary = error_arg
-            .try_array_ty()
-            .ok_or_else(|| MonorubyErr::typeerr("no implicit conversion of Object into Array"))?;
-        ary.to_vec()
-    };
-
-    // Get fds (non-IO entries convert through #to_io).
-    let mut read_fds: Vec<i32> = Vec::with_capacity(read_ios.len());
-    for v in &read_ios {
-        read_fds.push(value_to_fd(vm, globals, *v)?);
-    }
-    let mut write_fds: Vec<i32> = Vec::with_capacity(write_ios.len());
-    for v in &write_ios {
-        write_fds.push(value_to_fd(vm, globals, *v)?);
-    }
-    let mut error_fds: Vec<i32> = Vec::with_capacity(error_ios.len());
-    for v in &error_ios {
-        error_fds.push(value_to_fd(vm, globals, *v)?);
+    // The descriptors to wait on. The lists themselves are read again
+    // for the answer (`select_result`); nothing of them is kept here.
+    let mut fds = SelectFds::default();
+    select_collect(vm, globals, read_arg, SelectList::Read, &mut fds)?;
+    select_collect(vm, globals, write_arg, SelectList::Write, &mut fds)?;
+    select_collect(vm, globals, error_arg, SelectList::Error, &mut fds)?;
+    if fds.has_pending {
+        // No blocking when there is buffered data.
+        timeout = Some(libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        });
     }
 
     // All sets empty, no timeout: with other live threads this parks
     // forever (until killed/woken) with status "sleep", like CRuby; on a
     // lone thread nothing could ever wake us, so return nil immediately.
-    if read_ios.is_empty() && write_ios.is_empty() && error_ios.is_empty() {
+    if fds.read.is_empty() && fds.write.is_empty() && fds.error.is_empty() {
         if crate::scheduler::has_other_live_threads() {
             let dur = timeout.map(|tv| {
                 std::time::Duration::new(
@@ -5721,136 +6014,106 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         }
     }
 
-    // Green threads: wait on the scheduler's fd poller instead of
-    // blocking the whole process in select(2), so other threads keep
-    // running while this one waits.
+    // The descriptors found ready, per list.
+    let mut ready: [FdSet; 3] = Default::default();
+    let nfds = fds.nfds();
+
     if crate::scheduler::has_other_live_threads() {
-        // An enormous timeout (e.g. select(..., 2**62)) must not
-        // overflow Instant arithmetic — treat it as "no deadline".
-        let deadline = timeout.and_then(|tv| {
-            std::time::Instant::now().checked_add(std::time::Duration::new(
-                tv.tv_sec.max(0) as u64,
-                (tv.tv_usec.clamp(0, 999_999) as u32) * 1000,
-            ))
-        });
-        // Probe raw fds (the io lists may hold non-IO objects converted
-        // through #to_io — the fd lists are the source of truth).
-        let probe = |fd: i32, events: i16| -> Result<bool> {
-            let mut pfd = libc::pollfd {
-                fd,
-                events,
-                revents: 0,
+        // The process must not block in select(2) while other threads
+        // want to run: ask select(2) with a zero timeout, and sleep on
+        // the scheduler's fd poller in between.
+        //
+        // select(2) stays the judge of what is ready, as in CRuby. The
+        // poller is poll(2), which reports a hangup or an error whatever
+        // was asked, and which of those make a descriptor readable,
+        // writable or exceptional differs between select(2) and poll(2)
+        // and from one system to the next (a closed pipe in the error
+        // list, the read end of a finished pipe in the write list,
+        // `POLLPRI` together with `POLLHUP` on macOS).
+        //
+        // Whether select(2) finds anything ready right now. An
+        // interrupted call found nothing; the interrupt is delivered
+        // when the thread parks.
+        let mut probe = |globals: &Globals| -> Result<bool> {
+            let mut zero = libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
             };
-            // SAFETY: one valid pollfd, length 1, zero timeout.
-            let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
-            if ret < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EINTR) {
-                    return Ok(false);
-                }
-                return Err(MonorubyErr::ioerr(format!("poll failed: {err}")));
+            match select_once(&fds, nfds, &mut ready, &mut zero) {
+                Ok(n) => Ok(n > 0),
+                Err(err) if err.raw_os_error() == Some(libc::EINTR) => Ok(false),
+                Err(err) => Err(MonorubyErr::errno_plain(&globals.store, &err)),
             }
-            Ok(pfd.revents != 0)
         };
-        loop {
-            let mut ready_read = vec![];
-            for (i, &fd) in read_fds.iter().enumerate() {
-                if io_read_pending(read_ios[i]) || probe(fd, libc::POLLIN | libc::POLLPRI)? {
-                    ready_read.push(read_ios[i]);
+        if !(probe(globals)? || fds.has_pending) {
+            // An enormous timeout (e.g. select(..., 2**62)) must not
+            // overflow Instant arithmetic: treat it as "no deadline".
+            let deadline = timeout.and_then(|tv| {
+                std::time::Instant::now().checked_add(std::time::Duration::new(
+                    tv.tv_sec.max(0) as u64,
+                    (tv.tv_usec.clamp(0, 999_999) as u32) * 1000,
+                ))
+            });
+            // What the poller waits on. An entry leaves once poll(2)
+            // reports something for it that select(2) does not count as
+            // ready: a wait on it would return at once, every time. From
+            // then on select(2) is asked again at intervals, since
+            // nothing reports a change of that descriptor any more.
+            const REPROBE: std::time::Duration = std::time::Duration::from_millis(100);
+            let mut dropped = false;
+            let mut waits: Vec<libc::pollfd> = [
+                (&fds.read, libc::POLLIN),
+                (&fds.write, libc::POLLOUT),
+                (&fds.error, libc::POLLPRI),
+            ]
+            .into_iter()
+            .flat_map(|(list, events)| {
+                list.iter().map(move |&fd| libc::pollfd {
+                    fd,
+                    events,
+                    revents: 0,
+                })
+            })
+            .collect();
+            loop {
+                let now = std::time::Instant::now();
+                if let Some(dl) = deadline
+                    && now >= dl
+                {
+                    return Ok(Value::nil());
+                }
+                // SAFETY: `waits` is a valid array of its length; zero
+                // timeout.
+                let reported =
+                    unsafe { libc::poll(waits.as_mut_ptr(), waits.len() as libc::nfds_t, 0) };
+                if reported > 0 {
+                    // Either something became ready since the probe, or
+                    // poll(2) reports what select(2) does not count. The
+                    // probe that follows tells which.
+                    if probe(globals)? {
+                        break;
+                    }
+                    waits.retain(|w| w.revents == 0);
+                    dropped = true;
+                }
+                let until = match (dropped, deadline) {
+                    (false, dl) => dl,
+                    (true, Some(dl)) => Some(dl.min(now + REPROBE)),
+                    (true, None) => Some(now + REPROBE),
+                };
+                if waits.is_empty() {
+                    let dur = until.map(|dl| dl.saturating_duration_since(now));
+                    crate::scheduler::sleep(vm, globals, dur)?;
+                } else {
+                    let pairs: Vec<(i32, i16)> = waits.iter().map(|w| (w.fd, w.events)).collect();
+                    crate::scheduler::wait_fds(vm, globals, &pairs, until)?;
+                }
+                if probe(globals)? {
+                    break;
                 }
             }
-            let mut ready_write = vec![];
-            for (i, &fd) in write_fds.iter().enumerate() {
-                if probe(fd, libc::POLLOUT)? {
-                    ready_write.push(write_ios[i]);
-                }
-            }
-            let mut ready_error = vec![];
-            for (i, &fd) in error_fds.iter().enumerate() {
-                if probe(fd, libc::POLLPRI)? {
-                    ready_error.push(error_ios[i]);
-                }
-            }
-            if !ready_read.is_empty() || !ready_write.is_empty() || !ready_error.is_empty() {
-                let r = Value::array_from_vec(ready_read);
-                let w = Value::array_from_vec(ready_write);
-                let e = Value::array_from_vec(ready_error);
-                return Ok(Value::array_from_vec(vec![r, w, e]));
-            }
-            if let Some(dl) = deadline
-                && std::time::Instant::now() >= dl
-            {
-                return Ok(Value::nil());
-            }
-            let mut fds: Vec<(i32, i16)> = vec![];
-            for &fd in &read_fds {
-                fds.push((fd, libc::POLLIN | libc::POLLPRI));
-            }
-            for &fd in &write_fds {
-                fds.push((fd, libc::POLLOUT));
-            }
-            for &fd in &error_fds {
-                fds.push((fd, libc::POLLPRI));
-            }
-            crate::scheduler::wait_fds(vm, globals, &fds, deadline)?;
         }
-    }
-
-    // Buffered read data makes an IO immediately ready (see
-    // `io_read_pending`): report those without entering select(2),
-    // adding any other fds that are kernel-ready right now.
-    if read_ios.iter().any(|v| io_read_pending(*v)) {
-        let poll0 = |fd: i32, events: i16| -> bool {
-            let mut pfd = libc::pollfd {
-                fd,
-                events,
-                revents: 0,
-            };
-            // SAFETY: one valid pollfd, length 1, zero timeout.
-            let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
-            ret > 0 && pfd.revents != 0
-        };
-        let mut ready_read = vec![];
-        for (i, &fd) in read_fds.iter().enumerate() {
-            if io_read_pending(read_ios[i]) || poll0(fd, libc::POLLIN | libc::POLLPRI) {
-                ready_read.push(read_ios[i]);
-            }
-        }
-        let mut ready_write = vec![];
-        for (i, &fd) in write_fds.iter().enumerate() {
-            if poll0(fd, libc::POLLOUT) {
-                ready_write.push(write_ios[i]);
-            }
-        }
-        let mut ready_error = vec![];
-        for (i, &fd) in error_fds.iter().enumerate() {
-            if poll0(fd, libc::POLLPRI) {
-                ready_error.push(error_ios[i]);
-            }
-        }
-        return Ok(Value::array_from_vec(vec![
-            Value::array_from_vec(ready_read),
-            Value::array_from_vec(ready_write),
-            Value::array_from_vec(ready_error),
-        ]));
-    }
-
-    // Find max fd
-    let nfds = read_fds
-        .iter()
-        .chain(write_fds.iter())
-        .chain(error_fds.iter())
-        .copied()
-        .max()
-        .map(|m| m + 1)
-        .unwrap_or(0);
-
-    // SAFETY: libc fd_set operations are standard POSIX.
-    unsafe {
-        let mut readfds: libc::fd_set = std::mem::zeroed();
-        let mut writefds: libc::fd_set = std::mem::zeroed();
-        let mut errorfds: libc::fd_set = std::mem::zeroed();
-
+    } else {
         // On Linux, select(2) updates the timeval to the time not slept,
         // so re-entering after an EINTR (below) continues with the
         // remaining timeout rather than starting over.
@@ -5858,52 +6121,15 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
             tv_sec: 0,
             tv_usec: 0,
         });
-
-        let ret = loop {
-            // select(2) mutates the fd sets, so rebuild them each attempt.
-            libc::FD_ZERO(&mut readfds);
-            libc::FD_ZERO(&mut writefds);
-            libc::FD_ZERO(&mut errorfds);
-
-            for &fd in &read_fds {
-                libc::FD_SET(fd, &mut readfds);
-            }
-            for &fd in &write_fds {
-                libc::FD_SET(fd, &mut writefds);
-            }
-            for &fd in &error_fds {
-                libc::FD_SET(fd, &mut errorfds);
-            }
-
+        let found = loop {
             let timeout_ptr = if timeout.is_some() {
                 &mut tv_storage as *mut libc::timeval
             } else {
                 std::ptr::null_mut()
             };
-
-            let ret = libc::select(
-                nfds,
-                if read_fds.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    &mut readfds
-                },
-                if write_fds.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    &mut writefds
-                },
-                if error_fds.is_empty() {
-                    std::ptr::null_mut()
-                } else {
-                    &mut errorfds
-                },
-                timeout_ptr,
-            );
-
-            if ret < 0 {
-                let err = std::io::Error::last_os_error();
-                if err.raw_os_error() == Some(libc::EINTR) {
+            match select_once(&fds, nfds, &mut ready, timeout_ptr) {
+                Ok(n) => break n,
+                Err(err) if err.raw_os_error() == Some(libc::EINTR) => {
                     // A signal interrupted the wait: run the VM poll
                     // point (raise the converted SignalException, or run
                     // the trap handler and retry the select), matching
@@ -5912,46 +6138,22 @@ fn io_select(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                     if crate::executor::execute_gc(vm, globals).is_none() {
                         return Err(vm.take_error());
                     }
-                    continue;
                 }
-                return Err(MonorubyErr::errno_with_msg(
-                    &globals.store,
-                    &err,
-                    "select(2)",
-                ));
+                Err(err) => return Err(MonorubyErr::errno_plain(&globals.store, &err)),
             }
-            break ret;
         };
-
-        if ret == 0 {
+        if found == 0 && !fds.has_pending {
             return Ok(Value::nil());
         }
-
-        // Build result arrays
-        let mut ready_read = vec![];
-        for (i, &fd) in read_fds.iter().enumerate() {
-            if libc::FD_ISSET(fd, &readfds) {
-                ready_read.push(read_ios[i]);
-            }
-        }
-        let mut ready_write = vec![];
-        for (i, &fd) in write_fds.iter().enumerate() {
-            if libc::FD_ISSET(fd, &writefds) {
-                ready_write.push(write_ios[i]);
-            }
-        }
-        let mut ready_error = vec![];
-        for (i, &fd) in error_fds.iter().enumerate() {
-            if libc::FD_ISSET(fd, &errorfds) {
-                ready_error.push(error_ios[i]);
-            }
-        }
-
-        let r = Value::array_from_vec(ready_read);
-        let w = Value::array_from_vec(ready_write);
-        let e = Value::array_from_vec(ready_error);
-        Ok(Value::array_from_vec(vec![r, w, e]))
     }
+
+    select_result(
+        vm,
+        globals,
+        [read_arg, write_arg, error_arg],
+        &ready,
+        &fds.pending,
+    )
 }
 
 ///
@@ -12555,6 +12757,230 @@ mod tests {
             ensure
               File.unlink(path)
             end
+            "##,
+        );
+    }
+
+    // #2196: `IO.select` kept its descriptors in a `libc::fd_set`, whose
+    // `FD_SET` indexes past the end for one above 1023 and aborted the
+    // process. Both ways of waiting are asked: select(2) on a lone thread,
+    // the scheduler's poll with another thread alive.
+    #[test]
+    fn io_select_descriptor_above_fd_setsize() {
+        run_test_once(
+            r##"
+            t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+            cur, max = Process.getrlimit(Process::RLIMIT_NOFILE)
+            Process.setrlimit(Process::RLIMIT_NOFILE, [4096, max].min, max) if cur < 4096
+            ios = []
+            ios << File.open("/dev/null", "r+") until ios.last && ios.last.fileno > 1100
+            big = ios.last
+            r, w = IO.pipe
+            res = []
+            both = ->(&b) { res << b.call; bg = Thread.new { sleep }; res << b.call; bg.kill; bg.join }
+            both.() { IO.select([big], nil, nil, 0).map(&:size) }
+            # (Not in the error list: what a device has to say there is the
+            # system's business — nothing on Linux, "ready" on macOS.)
+            both.() { IO.select([big, r], [w, big], [r], 0).map(&:size) }
+            both.() { IO.select([r], nil, [w], 0) }
+            w.write "x"
+            both.() { IO.select([r, ios[0], big], [w], nil, 1).map(&:size) }
+            # A descriptor that is not open is select(2)'s EBADF either way.
+            # The lower ones are closed first, so that whatever else this
+            # process opens meanwhile does not get its number.
+            gone = IO.for_fd(big.fileno, autoclose: false)
+            ios[0, 20].each(&:close)
+            big.close
+            both.() { t.() { IO.select([gone], nil, nil, 0) } }
+            both.() { t.() { IO.select(nil, [gone], nil, 0) } }
+            both.() { t.() { IO.select(nil, nil, [gone], 0) } }
+            ios.each { |io| io.close unless io.closed? }
+            r.close; w.close
+            res
+            "##,
+        );
+    }
+
+    // #2154: the three lists were copied into Rust `Vec`s before `#to_io`
+    // ran on their entries. An entry only its list holds is freed once an
+    // earlier entry's `#to_io` empties the list and a collection runs.
+    // CRuby reads a list again at every step, and again for the answer.
+    #[test]
+    fn io_select_reads_its_lists_as_it_goes() {
+        run_test_once(
+            r##"
+            class SelClears
+              def initialize(io, list) = (@io, @list = io, list)
+              def to_io
+                @list&.clear
+                GC.start
+                $junk = Array.new(3000) { |i| "junk#{i}" }
+                @io
+              end
+            end
+            r, w = IO.pipe
+            w.write "x"
+            res = []
+            both = ->(&b) { res << b.call; bg = Thread.new { sleep }; res << b.call; bg.kill; bg.join }
+            both.() do
+              5.times.map do
+                list = []
+                list << SelClears.new(r, list) << SelClears.new(r, nil) << SelClears.new(r, nil)
+                [IO.select(list, nil, nil, 1), list.size]
+              end.uniq
+            end
+            both.() do
+              5.times.map do
+                rl = [SelClears.new(r, nil)]
+                wl = []; wl << SelClears.new(w, wl) << SelClears.new(w, nil)
+                el = []; el << SelClears.new(r, el)
+                IO.select(rl, wl, el, 1).map(&:size)
+              end.uniq
+            end
+            # The answer is made in a second walk, which converts again: an
+            # entry leaving its list there has to live until it is pushed.
+            class SelLeavesLater
+              def initialize(io, list) = (@io, @list, @n = io, list, 0)
+              def to_io
+                if (@n += 1) == 2
+                  @list.clear
+                  GC.start
+                  $junk = Array.new(3000) { |i| "junk#{i}" }
+                end
+                @io
+              end
+            end
+            both.() do
+              5.times.map do
+                list = []
+                list << SelLeavesLater.new(r, list) << SelLeavesLater.new(r, list)
+                got = IO.select(list, nil, nil, 1)
+                [got.map(&:size), got[0][0].class, list.size]
+              end.uniq
+            end
+            # A list that grows while it is walked.
+            class SelGrows
+              def initialize(io, list) = (@io, @list = io, list)
+              def to_io = (@list << @io if @list.size < 4; @io)
+            end
+            both.() { l = []; l << SelGrows.new(r, l); [IO.select(l, nil, nil, 1)[0].size, l.size] }
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_select_converts_entries_like_cruby() {
+        run_test_once(
+            r##"
+            t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+            $sel_log = []
+            class SelBox
+              def initialize(io, tag) = (@io, @tag = io, tag)
+              def to_io = ($sel_log << @tag; @io)
+            end
+            r, w = IO.pipe
+            w.write "x"
+            b1 = SelBox.new(r, :r); b2 = SelBox.new(w, :w); b3 = SelBox.new(r, :e)
+            got = IO.select([b1], [b2], [b3], 0)
+            res = [got.map { |a| a.map(&:class) }, $sel_log, got[0][0].equal?(b1), got[1][0].equal?(b2)]
+            res << t.() { IO.select(1) }
+            res << t.() { IO.select(nil, :a) }
+            res << t.() { IO.select(nil, nil, "x") }
+            res << t.() { IO.select([1]) }
+            res << t.() { IO.select([nil]) }
+            o = Object.new; def o.to_io = 5
+            res << t.() { IO.select([o]) }
+            o2 = Object.new; def o2.to_io = nil
+            res << t.() { IO.select([o2]) }
+            r2, w2 = IO.pipe; r2.close
+            res << t.() { IO.select([r2], nil, nil, 0) }
+            res << t.() { IO.select(nil, [r2], nil, 0) }
+            res << t.() { IO.select(nil, nil, [r2], 0) }
+            res << t.() { IO.select([IO.allocate], nil, nil, 0) }
+            # Float::INFINITY is no timeout (Ruby 4.0); the Integer and
+            # Rational spellings of "forever" are not.
+            res << IO.select([r], nil, nil, Float::INFINITY).map(&:size)
+            res << t.() { IO.select([r], nil, nil, -Float::INFINITY) }
+            th = Thread.new { IO.select(nil, nil, nil, Float::INFINITY) }
+            Thread.pass until th.status == "sleep"
+            res << th.status
+            th.kill; th.join
+            # In the order of the arguments, after the timeout.
+            res << t.() { IO.select([nil], 1, 2, 0) }
+            res << t.() { IO.select([], 1, 2, 0) }
+            res << t.() { IO.select([], [], 2, "x") }
+            res
+            "##,
+        );
+    }
+
+    #[test]
+    fn io_select_buffered_data_and_two_sided_ios() {
+        run_test_once(
+            r##"
+            res = []
+            both = ->(&b) { res << b.call; bg = Thread.new { sleep }; res << b.call; bg.kill; bg.join }
+            # Data the IO has read ahead is ready, though the descriptor is not.
+            r, w = IO.pipe; w.write "ab\ncd\n"; r.gets
+            both.() { IO.select([r], nil, nil, 0)[0].size }
+            both.() { IO.select([r], [w], [r], 5).map(&:size) }
+            r.gets
+            both.() { IO.select([r], nil, nil, 0) }
+            # The write side of a two-way pipe is its own descriptor.
+            io = IO.popen("cat", "r+")
+            both.() { IO.select(nil, [io], nil, 5).map(&:size) }
+            both.() { IO.select([io], [io], [io], 0.05).map(&:size) }
+            io.write "hi"; io.flush
+            both.() { IO.select([io], nil, nil, 5).map(&:size) }
+            both.() { IO.select([io], [io], [io], 5).map(&:size) }
+            io.close_write
+            both.() { IO.select([io], nil, nil, 5).map(&:size) }
+            io.close
+            res
+            "##,
+        );
+    }
+
+    // With another thread alive the thread sleeps on poll(2), which
+    // reports a hangup whatever was asked; select(2) has its own idea of
+    // which lists a hangup makes ready, and that idea is the system's
+    // (the read end of a finished pipe is writable on macOS and not on
+    // Linux). Answering from poll(2) made a closed pipe "exceptional" at
+    // once. Compared with a live CRuby, since the answers are per system.
+    #[test]
+    fn io_select_answers_a_hangup_as_select_does() {
+        run_test_once_live(
+            r##"
+            res = []
+            both = ->(&b) { res << b.call; bg = Thread.new { sleep }; res << b.call; bg.kill; bg.join }
+            sizes = ->(a) { a && a.map(&:size) }
+            r, w = IO.pipe
+            hup, hw = IO.pipe; hw.close
+            both.() { sizes.(IO.select(nil, nil, [hup], 0.05)) }
+            both.() { sizes.(IO.select([r], nil, [hup], 0.05)) }
+            both.() { sizes.(IO.select([hup], nil, [hup], 5)) }
+            both.() { sizes.(IO.select([hup], [hup], [hup], 5)) }
+            # The read side of a two-way pipe whose child is gone.
+            io = IO.popen("cat", "r+")
+            io.close_write
+            io.read
+            both.() { sizes.(IO.select(nil, [io], nil, 0.05)) }
+            both.() { sizes.(IO.select([io], [io], [io], 5)) }
+            io.close
+            # A write end whose reader is gone.
+            pr, pw = IO.pipe; pr.close
+            both.() { sizes.(IO.select(nil, [pw], [pw], 5)) }
+            # Nothing that could become ready: it does not return.
+            th = Thread.new { IO.select(nil, nil, [hup]) }
+            res << (th.join(0.3) ? :returned : :waiting)
+            th.kill; th.join
+            # Woken by another list while a hung-up entry sits in one.
+            th = Thread.new { sizes.(IO.select([r], nil, [hup])) }
+            Thread.pass until th.stop?
+            w.write "y"
+            res << th.value
+            res
             "##,
         );
     }
