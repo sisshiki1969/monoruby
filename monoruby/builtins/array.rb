@@ -93,26 +93,40 @@ class Array
     self
   end
 
+  # The methods below read and write the receiver with `__size`,
+  # `__aref` and `__aset` (private, builtins/array.rs), never with
+  # `size`, `[]` and `[]=`: those are ordinary method calls, which an
+  # Array subclass may have overridden, and CRuby's C calls no method
+  # to walk an Array (`RARRAY_LEN` / `RARRAY_AREF`). `__aref(i)` takes an
+  # Integer (`rb_ary_entry`), and `__aref(start, len)` answers a plain
+  # Array whatever the receiver's class, which is also how a working
+  # copy is taken (`self.dup` would keep the subclass).
+  #
+  # The exception is the size of the Enumerator that `each_with_index`,
+  # `partition`, `flat_map` and `filter_map` answer without a block:
+  # those are Enumerable's methods in CRuby, whose `enum_size` does call
+  # `size`.
+
   def each
-    return self.to_enum(:each) { self.size } unless block_given?
+    return self.to_enum(:each) { __size } unless block_given?
     i = 0
-    while i < self.size
-      yield self[i]
+    while i < __size
+      yield __aref(i)
       i += 1
     end
     self
   end
 
   def reverse_each
-    return self.to_enum(:reverse_each) { self.size } unless block_given?
-    len = self.size
-    if len == 0
-      return self
-    end
-    i = len - 1
+    return self.to_enum(:reverse_each) { __size } unless block_given?
+    # `rb_ary_reverse_each`: the length is read again after every
+    # element, so a block that shrinks the receiver moves the walk down
+    # to what is left.
+    i = __size - 1
     while i >= 0
-      yield self[i]
+      yield __aref(i)
       i -= 1
+      i = __size - 1 if i >= __size
     end
     self
   end
@@ -120,19 +134,19 @@ class Array
   def each_with_index
     return self.to_enum(:each_with_index) { self.size } unless block_given?
     i = 0
-    while i < self.size
-      yield self[i], i
+    while i < __size
+      yield __aref(i), i
       i += 1
     end
     self
   end
 
   def map!
-    return self.to_enum(__callee__) { self.size } unless block_given?
+    return self.to_enum(__callee__) { __size } unless block_given?
     raise FrozenError, "can't modify frozen #{self.class}: #{self.inspect}" if frozen?
     i = 0
-    while i < self.size
-      self[i] = yield(self[i])
+    while i < __size
+      __aset(i, yield(__aref(i)))
       i += 1
     end
     self
@@ -143,13 +157,18 @@ class Array
     # `__callee__`, not `:map`: the Enumerator records the name the
     # call site used, so `[1, 2].collect` reads `…:collect` (CRuby
     # names it with `rb_frame_this_func()`).
-    return self.to_enum(__callee__) { self.size } unless block_given?
-    res = Array.new(self.size)
+    return self.to_enum(__callee__) { __size } unless block_given?
+    n = __size
+    res = Array.new(n)
     i = 0
-    while i < self.size
-      res[i] = yield(self[i])
+    while i < __size
+      res[i] = yield(__aref(i))
       i += 1
     end
+    # `rb_ary_collect` pushes one value per element it yielded: a block
+    # that shrank the receiver leaves a shorter result, not one padded
+    # with nil.
+    res = res[0, i] if i < n
     res
   end
   alias collect map
@@ -171,11 +190,11 @@ class Array
   def bsearch
     return to_enum(:bsearch) unless block_given?
     low = 0
-    high = size
+    high = __size
     mode = nil
     while low < high
       mid = (low + high) / 2
-      val = self[mid]
+      val = __aref(mid)
       res = yield(val)
 
       if mode.nil?
@@ -207,11 +226,11 @@ class Array
         end
       end
     end
-    mode == :find_min ? self[low] : nil
+    mode == :find_min ? __aref(low) : nil
   end
 
   def dig(idx, *rest)
-    val = self[idx]
+    val = __aref(idx)
     return val if rest.empty? || val.nil?
     # `rb_obj_dig`: the next level is asked by `rb_check_funcall`.
     return val.dig(*rest) if val.is_a?(::Array) || val.is_a?(::Hash)
@@ -239,14 +258,14 @@ class Array
   # costs a call out to the block and back, and the collected values
   # have to be rooted by hand across it. Here they sit in the frame.
   def select
-    return self.to_enum(__callee__) { self.size } unless block_given?
+    return self.to_enum(__callee__) { __size } unless block_given?
     res = []
     i = 0
-    while i < self.size
+    while i < __size
       # The element is read again after the block, as `rb_ary_select`
       # reads it: what the block stored there (or nil, once the block
       # shrank the receiver) is what is collected.
-      res << self[i] if yield(self[i])
+      res << __aref(i) if yield(__aref(i))
       i += 1
     end
     res
@@ -255,11 +274,11 @@ class Array
   alias find_all select
 
   def reject
-    return self.to_enum(:reject) { self.size } unless block_given?
+    return self.to_enum(:reject) { __size } unless block_given?
     res = []
     i = 0
-    while i < self.size
-      x = self[i]
+    while i < __size
+      x = __aref(i)
       res << x unless yield(x)
       i += 1
     end
@@ -271,8 +290,8 @@ class Array
     first = []
     second = []
     i = 0
-    while i < self.size
-      x = self[i]
+    while i < __size
+      x = __aref(i)
       if yield(x)
         first << x
       else
@@ -287,8 +306,8 @@ class Array
     return self.to_enum(__callee__) { self.size } unless block_given?
     res = []
     i = 0
-    while i < self.size
-      r = yield(self[i])
+    while i < __size
+      r = yield(__aref(i))
       if r.instance_of?(Array)
         # Up to three elements, what most blocks return, are pushed here:
         # reading and pushing one is some 40 to 50 instructions, the call
@@ -339,7 +358,7 @@ class Array
       # Enumerator is iterated: `cycle("x")` itself raises nothing.
       args = no_n ? [] : [n]
       return to_enum(:cycle, *args) {
-        len = self.length
+        len = __size
         if len == 0
           0
         elsif no_n || n.nil?
@@ -350,16 +369,25 @@ class Array
         end
       }
     end
+    # `rb_ary_cycle`: the length is read again for every round and for
+    # every element, so a block that empties the receiver ends the walk.
     if n.nil?
-      return nil if empty?
-      while true
-        each { |x| yield x }
+      while __size > 0
+        i = 0
+        while i < __size
+          yield __aref(i)
+          i += 1
+        end
       end
     else
       n = __num2long(n)
-      return nil if empty?
-      n.times do
-        each { |x| yield x }
+      while n > 0 && __size > 0
+        i = 0
+        while i < __size
+          yield __aref(i)
+          i += 1
+        end
+        n -= 1
       end
     end
     nil
@@ -373,7 +401,7 @@ class Array
       # build the full factorial.
       return to_enum(:combination, n) {
         k = __num2long(n)
-        len = self.size
+        len = __size
         if k < 0 || k > len
           0
         elsif k == 0
@@ -389,7 +417,7 @@ class Array
     n = __num2long(n)
     # Defensive copy: CRuby snapshots the receiver before iterating,
     # so mutations from the block don't change the generated combos.
-    pool = self.dup
+    pool = __aref(0, __size)
     len = pool.size
     if n == 0
       yield []
@@ -414,11 +442,11 @@ class Array
   def bsearch_index
     return to_enum(:bsearch_index) unless block_given?
     low = 0
-    high = size
+    high = __size
     mode = nil
     while low < high
       mid = (low + high) / 2
-      val = self[mid]
+      val = __aref(mid)
       res = yield(val)
 
       if mode.nil?
@@ -450,7 +478,7 @@ class Array
         end
       end
     end
-    mode == :find_min ? low < size ? low : nil : nil
+    mode == :find_min ? low < __size ? low : nil : nil
   end
 
   # A count that is given as nil is "the whole length" to iterate, but
@@ -466,8 +494,8 @@ class Array
       # Descending factorial size = n * (n-1) * ... * (n-k+1).
       enum_args = no_n ? [] : [n]
       return to_enum(:permutation, *enum_args) {
-        k = no_n ? self.size : __num2long(n)
-        len = self.size
+        k = no_n ? __size : __num2long(n)
+        len = __size
         if k < 0 || k > len
           0
         elsif k == 0
@@ -479,18 +507,18 @@ class Array
         end
       }
     end
-    n = n.nil? ? self.size : __num2long(n)
+    n = n.nil? ? __size : __num2long(n)
     if n == 0
       yield []
       return self
     end
-    return self if n < 0 || n > size
-    if n == size
+    return self if n < 0 || n > __size
+    if n == __size
       # Generate all permutations
-      pool = self.dup
+      pool = __aref(0, __size)
       indices = (0...n).to_a
       yield indices.map { |i| pool[i] }
-      cycles = (size.downto(size - n + 1)).to_a
+      cycles = (__size.downto(__size - n + 1)).to_a
       loop do
         found = false
         (n - 1).downto(0) do |i|
@@ -500,7 +528,7 @@ class Array
             tmp = indices[i]
             (i...n - 1).each { |j| indices[j] = indices[j + 1] }
             indices[n - 1] = tmp
-            cycles[i] = size - i
+            cycles[i] = __size - i
           else
             j = -cycles[i]
             indices[i], indices[j] = indices[j], indices[i]
@@ -512,9 +540,9 @@ class Array
         return self unless found
       end
     else
-      pool = self.dup
-      indices = (0...size).to_a
-      cycles = (size.downto(size - n + 1)).to_a
+      pool = __aref(0, __size)
+      indices = (0...__size).to_a
+      cycles = (__size.downto(__size - n + 1)).to_a
       yield indices[0, n].map { |i| pool[i] }
       loop do
         found = false
@@ -522,9 +550,9 @@ class Array
           cycles[i] -= 1
           if cycles[i] == 0
             tmp = indices[i]
-            (i...size - 1).each { |j| indices[j] = indices[j + 1] }
-            indices[size - 1] = tmp
-            cycles[i] = size - i
+            (i...__size - 1).each { |j| indices[j] = indices[j + 1] }
+            indices[__size - 1] = tmp
+            cycles[i] = __size - i
           else
             j = -cycles[i]
             indices[i], indices[j] = indices[j], indices[i]
@@ -540,7 +568,7 @@ class Array
   end
 
   def at(index)
-    self[index]
+    __aref(index)
   end
 
   def to_ary
@@ -554,11 +582,11 @@ class Array
   def drop_while
     return to_enum(:drop_while) unless block_given?
     i = 0
-    while i < size
-      break unless yield(self[i])
+    while i < __size
+      break unless yield(__aref(i))
       i += 1
     end
-    self[i, size - i]
+    __aref(i, __size - i)
   end
 
   def fetch_values(*indexes)
@@ -566,10 +594,10 @@ class Array
     if block_given?
       indexes.each do |i|
         idx = i.to_int
-        if idx < -size || idx >= size
+        if idx < -__size || idx >= __size
           result << yield(i)
         else
-          result << self[idx]
+          result << __aref(idx)
         end
       end
     else
@@ -583,27 +611,27 @@ class Array
   def rindex(val = (no_val = true; nil))
     unless no_val
       warn "warning: given block not used" if block_given?
-      i = self.size - 1
+      i = __size - 1
       while i >= 0
-        if i >= self.size
-          i = self.size - 1
+        if i >= __size
+          i = __size - 1
           next
         end
         # rb_equal, not a bare `==`: an element that *is* `val` is found
         # however its `==` answers (CRuby's identity step).
-        return i if __rb_equal(self[i], val)
+        return i if __rb_equal(__aref(i), val)
         i -= 1
       end
       return nil
     end
     if block_given?
-      i = self.size - 1
+      i = __size - 1
       while i >= 0
-        if i >= self.size
-          i = self.size - 1
+        if i >= __size
+          i = __size - 1
           next
         end
-        return i if yield(self[i])
+        return i if yield(__aref(i))
         i -= 1
       end
       return nil
@@ -612,31 +640,37 @@ class Array
   end
 
   def assoc(key)
-    each do |elem|
+    i = 0
+    while i < __size
+      elem = __aref(i)
       if elem.is_a?(Array)
         return elem if elem.size > 0 && __rb_equal(elem[0], key)
       elsif (ary = Array.try_convert(elem))
         return ary if ary.size > 0 && __rb_equal(ary[0], key)
       end
+      i += 1
     end
     nil
   end
 
   def rassoc(key)
-    each do |elem|
+    i = 0
+    while i < __size
+      elem = __aref(i)
       if elem.is_a?(Array)
         return elem if elem.size > 1 && __rb_equal(elem[1], key)
       elsif (ary = Array.try_convert(elem))
         return ary if ary.size > 1 && __rb_equal(ary[1], key)
       end
+      i += 1
     end
     nil
   end
 
   def each_index
-    return self.to_enum(:each_index) { self.size } unless block_given?
+    return self.to_enum(:each_index) { __size } unless block_given?
     i = 0
-    while i < self.size
+    while i < __size
       yield i
       i += 1
     end
@@ -654,12 +688,12 @@ class Array
         elsif k == 0
           1
         else
-          self.size ** k
+          __size ** k
         end
       }
     end
     n = __num2long(n)
-    copy = self.dup
+    copy = __aref(0, __size)
     len = copy.size
     if n == 0
       yield []
@@ -691,7 +725,7 @@ class Array
       # multiplicative form to avoid factorials of large arrays.
       return to_enum(:repeated_combination, n) {
         k = __num2long(n)
-        len = self.size
+        len = __size
         if k < 0
           0
         elsif k == 0
@@ -708,7 +742,7 @@ class Array
     end
     n = __num2long(n)
     # Defensive copy (see #combination): ignore block mutations.
-    pool = self.dup
+    pool = __aref(0, __size)
     len = pool.size
     if n == 0
       yield []
@@ -744,18 +778,18 @@ class Array
         e = s.end
         b = b.nil? ? 0 : b.to_int
         endless = e.nil?
-        e = endless ? size - 1 : e.to_int
-        b += size if b < 0
-        e += size if e < 0
+        e = endless ? __size - 1 : e.to_int
+        b += __size if b < 0
+        e += __size if e < 0
         e -= 1 if !endless && s.exclude_end?
         next if b < 0
         i = b
         while i <= e
-          result << self[i]
+          result << __aref(i)
           i += 1
         end
       else
-        result << self[s]
+        result << __aref(s)
       end
     end
     result

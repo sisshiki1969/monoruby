@@ -21,6 +21,7 @@ mod array_block_methods_ruby;
 mod array_frozen_index_assign;
 mod array_initialize;
 mod array_loop_seed;
+mod array_own_storage;
 mod array_shared_slice;
 mod attr_scope_visibility;
 mod autoload;

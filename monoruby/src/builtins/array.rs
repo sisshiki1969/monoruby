@@ -40,7 +40,7 @@ pub(super) fn init(globals: &mut Globals) {
     // `flat_map` in builtins/array.rb: the block's Array, appended in one
     // native call (`Array#concat` takes a rest argument and converts each).
     globals.define_private_builtin_func(ARRAY_CLASS, "__concat_to", concat_to, 2);
-    globals.define_builtin_inline_funcs(
+    let size_fid = globals.define_builtin_inline_funcs(
         ARRAY_CLASS,
         "size",
         &["length"],
@@ -99,7 +99,7 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         false,
     );
-    globals.define_builtin_inline_func_with(
+    let aset_fid = globals.define_builtin_inline_func_with(
         ARRAY_CLASS,
         "[]=",
         index_assign,
@@ -107,6 +107,32 @@ pub(super) fn init(globals: &mut Globals) {
         2,
         3,
         false,
+    );
+    // What the methods of builtins/array.rb read and write the receiver
+    // with, so that an Array subclass (or a program) redefining `size`,
+    // `[]` or `[]=` does not change what `each`, `map`, ... walk: CRuby
+    // reads `RARRAY_LEN` / `RARRAY_AREF` there and calls no method.
+    // `__size` and `__aset` are `size` and `[]=` themselves under a
+    // private name (the same function, so the same inline code);
+    // `__aref` is `rb_ary_entry`, which takes an Integer and nothing
+    // else.
+    for (name, fid) in [("__size", size_fid), ("__aset", aset_fid)] {
+        globals.add_method(ARRAY_CLASS, IdentId::get_id(name), fid, Visibility::Private);
+    }
+    let aref_fid = globals.define_builtin_inline_func_with(
+        ARRAY_CLASS,
+        "__aref",
+        aref,
+        inline_gen2!(array_aref),
+        1,
+        2,
+        false,
+    );
+    globals.add_method(
+        ARRAY_CLASS,
+        IdentId::get_id("__aref"),
+        aref_fid,
+        Visibility::Private,
     );
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "fill", fill, 0, 3, false);
@@ -1491,19 +1517,7 @@ fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
     if let Some(arg1) = lfp.try_arg(1) {
-        let arg0 = lfp.arg(0);
-        // Coerce indices via to_int if needed
-        let arg0 = if arg0.try_fixnum().is_none() {
-            Value::integer(arg0.coerce_to_int_i64(vm, globals)?)
-        } else {
-            arg0
-        };
-        let arg1 = if arg1.try_fixnum().is_none() {
-            Value::integer(arg1.coerce_to_int_i64(vm, globals)?)
-        } else {
-            arg1
-        };
-        ary.get_elem2(vm, globals, arg0, arg1)
+        subseq(vm, globals, ary, lfp.arg(0), arg1)
     } else {
         let idx = lfp.arg(0);
         // Non-fixnum, non-range index: delegate. The
@@ -1530,6 +1544,79 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         }
         ary.get_elem1(vm, globals, idx)
     }
+}
+
+/// `ary[start, len]`, both converted with `to_int` when they are not
+/// Fixnums.
+fn subseq(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Array,
+    start: Value,
+    len: Value,
+) -> Result<Value> {
+    let start = if start.try_fixnum().is_none() {
+        Value::integer(start.coerce_to_int_i64(vm, globals)?)
+    } else {
+        start
+    };
+    let len = if len.try_fixnum().is_none() {
+        Value::integer(len.coerce_to_int_i64(vm, globals)?)
+    } else {
+        len
+    };
+    ary.get_elem2(vm, globals, start, len)
+}
+
+///
+/// ### Array#__aref (internal)
+///
+/// - __aref(nth) -> object | nil
+/// - __aref(start, length) -> Array | nil
+///
+/// The element read of the methods in builtins/array.rb: `rb_ary_entry`
+/// for one argument, which is converted as `NUM2LONG` converts it (a
+/// Range is a TypeError here, as it is for `Array#at`), and `rb_ary_subseq`
+/// for two. Private, and not `[]`: a subclass's `[]` is not consulted.
+///
+#[monoruby_builtin]
+fn aref(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(len) = lfp.try_arg(1) {
+        return subseq(vm, globals, lfp.self_val().as_array(), lfp.arg(0), len);
+    }
+    let idx = Value::integer(lfp.arg(0).num2long(vm, globals)?);
+    lfp.self_val().as_array().get_elem1(vm, globals, idx)
+}
+
+///
+/// `__aref(i)` in line. A site in builtins/array.rb has no cache of the
+/// index's class as a `[]` site has, so an index the state has not proven
+/// is guarded here: anything but a Fixnum leaves for the interpreter,
+/// which converts it or raises.
+///
+fn array_aref(
+    state: &mut AbstractState,
+    ir: &mut AsmIr,
+    _: &JitContext,
+    store: &Store,
+    callid: CallSiteId,
+    _: Option<CachedClass>,
+    _: Option<CachedClass>,
+) -> bool {
+    let callsite = &store[callid];
+    if !callsite.is_simple() || callsite.pos_num != 1 {
+        return false;
+    }
+    let CallSiteInfo {
+        recv, args, dst, ..
+    } = *callsite;
+    let Some(dst) = dst else {
+        // Nothing to read, but an index that is not an Integer still has
+        // to be converted (and may raise).
+        return state.class(args) == Some(INTEGER_CLASS);
+    };
+    state.array_integer_index(ir, store, dst, recv, args);
+    true
 }
 
 fn array_index(
@@ -1656,13 +1743,20 @@ fn array_index_assign(
     }
     match callsite.pos_num {
         2 => {
-            if idx_class != Some(CachedClass::INTEGER) {
-                return false;
-            }
             let CallSiteInfo {
                 recv, args, dst, ..
             } = *callsite;
-            assert!(dst.is_none());
+            // An `IndexAssign` site hands over the index class its cache
+            // observed and has no result register. A method call
+            // (`__aset(i, v)` in builtins/array.rb) hands over neither:
+            // the index has to be one the state has proven, and a call
+            // whose value is used takes the ordinary path.
+            if dst.is_some()
+                || (idx_class != Some(CachedClass::INTEGER)
+                    && state.class(args) != Some(INTEGER_CLASS))
+            {
+                return false;
+            }
             state.array_integer_index_assign(ir, store, args + 1usize, recv, args);
             true
         }

@@ -703,7 +703,7 @@ impl SlotState {
         matches!(self.guarded(slot), Guarded::Float)
     }
 
-    pub(in crate::codegen::jitgen) fn class(&self, slot: SlotId) -> Option<ClassId> {
+    pub(crate) fn class(&self, slot: SlotId) -> Option<ClassId> {
         self.guarded(slot).class()
     }
 

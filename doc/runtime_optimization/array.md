@@ -189,6 +189,8 @@ frozen 検査（`FrozenError`）の後 `Array::set_index` を呼び、メソッ�
 | `[]` / `slice` | `array_index` | `AsmInst::ArrayIndex` |
 | `[]=` | `array_index_assign` / `array_slice_assign` | `AsmInst::ArrayIndexAssign` / `emit_array_slice_assign` |
 | `rotate!` | `array_rotate_` | `guard_frozen` + `ary_rotate_` への call |
+| `__size` / `__aset`（private） | `size` / `[]=` と同じ関数・同じ生成器 | 同上（§4） |
+| `__aref`（private） | `array_aref` | `AsmInst::ArrayIndex`。添字が証明されていなければ Fixnum ガード（外れたら deopt） |
 
 生成器は `compile_method_call` から、class-version ガードとレシーバクラス
 ガードを**出した後に**呼ばれる。`proven: Option<ClassId>`（クラス集合ガードや
@@ -403,8 +405,30 @@ rest 引数 `Array` の遅延実体化（D1）は
 特殊化された引数束縛を得られ、ブロック形では要素ごとの `yield` がインライン
 展開される（native 版は要素ごとに native→Ruby のブロック呼び出しを払って
 いた）。`each` / `map` の Rust 版は `builtins/array.rs` に残っているが**登録が
-コメントアウト**されていて、`while i < self.size` を `Array#size` / `Array#[]`
-のインラインで回す Ruby 版が勝つ。
+コメントアウト**されていて、`while i < __size` / `__aref(i)` をインラインで
+回す Ruby 版が勝つ。
+
+**レシーバの読み書きは private な primitive で行う**（issue #2178）:
+`__size`（`RARRAY_LEN`）、`__aref(i)`（`rb_ary_entry`。引数は `NUM2LONG` 相当の
+変換で、Range は `TypeError`）、`__aref(start, len)`（`rb_ary_subseq`。結果は
+常に素の `Array`）、`__aset(i, v)`。`self.size` / `self[i]` と書くと通常の
+メソッド呼び出しになり、`size` / `[]` を上書きした Array のサブクラス（や
+`Array` 自体の再定義）が `each` / `map` の歩く範囲を変えてしまう。CRuby の C は
+メソッドを呼ばない。`__size` と `__aset` は `size` / `[]=` と同じ `FuncId` の
+別名なので生成コードも同じ。`__aref` は専用の関数と生成器（`array_aref`）を
+持つ: `[]` のサイトと違って添字クラスのインラインキャッシュが無いので、
+状態が Integer と証明していない添字には Fixnum ガードを出し、外れたら
+インタプリタに降りて変換または例外を任せる。作業用の複製も `self.dup`
+（サブクラスのまま）ではなく `__aref(0, __size)`（素の `Array`）で取る。
+
+インタプリタではこの 2 つが汎用のメソッド呼び出しになる（`self[i]` は
+`Index` 命令の高速経路だった）ので、`--no-jit` の `each` は要素あたり約
+330 命令ぶん遅い。JIT では要素あたりの命令数は変わらない。
+
+長さは CRuby と同じ箇所で読み直す: `each` / `map` / `select` などは毎周、
+`reverse_each` は `yield` の後（縮んだら残りの末尾へ移る）、`cycle` は
+周回ごとと要素ごと。`map` は `yield` した数だけの結果を返す（途中で縮んでも
+nil で埋めない）。
 
 逆に **`Array#sum` は意図的に Ruby で開き直さない**（Rust の Fixnum 高速
 経路を迂回してしまうため）。`sample` / `shuffle` / `shuffle!` は `random:`
@@ -415,7 +439,9 @@ rest 引数 `Array` の遅延実体化（D1）は
 `while i < size`）が壊れるが、C 実装の CRuby は影響を受けない。
 `Array#size` を再定義すると `Kernel#p` の内部が `ArgumentError` になるのも
 同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
-である。
+である。上の primitive が塞ぐのは `builtins/array.rb` がレシーバ自身を読む
+箇所で、`enumerable.rb` などが作業用の素の `Array` に対して呼ぶ `size` /
+`[]` は `Array` 自体の再定義を受けたままである。
 
 ---
 
@@ -489,7 +515,7 @@ rest 引数 `Array` の遅延実体化（D1）は
 |---|---|---|
 | 埋め込み／共有 | `RARRAY_EMBED`（埋め込み）と `ary_make_shared` による共有配列 + copy-on-write の 2 段 | **共有配列は無い**。`SmallVec<[Value; 5]>` の 1 機構: 5 要素まで 48 バイトのペイロードに直置き、超えたらヒープ。`get_elem1` / `get_elem2` の Range 形は毎回新しい配列を確保する。String には隠れ frozen root による共有部分文字列があるので（[string.md](string.md)）、Array に無いのは意図的な選択 |
 | 基本演算の追跡 | `BOP_SIZE` / `BOP_LENGTH` / `BOP_AREF` / `BOP_ASET` … | `Array#[]` / `Array#[]=` / `Hash#[]` のみ。`size` は class-version ガードで守る。`Hash#[]=` は意図的に外す |
-| 組み込みの実装言語 | C（`Integer#<` を再定義しても `Array#map` は無傷） | `each` / `map` / `initialize` などが Ruby。`Integer#<` や `Array#size` の再定義が組み込みの内部に及ぶ（意図したトレードオフ、§4） |
+| 組み込みの実装言語 | C（`Integer#<` を再定義しても `Array#map` は無傷） | `each` / `map` / `initialize` などが Ruby。`Integer#<` の再定義は組み込みの内部に及ぶ（意図したトレードオフ、§4）。レシーバの長さと要素は private な `__size` / `__aref` / `__aset` で読むので、サブクラスの `size` / `[]` / `[]=` は及ばない |
 | `Array.new` と `allocate` | ユーザー定義の `self.allocate` を迂回 | 同じ。private な `__builtin_allocate__` 経由で実現 |
 | 範囲外の `[]` | nil | JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の**書き込み**は必ず高速経路を抜ける（伸長・`IndexError` のため） |
 | `ArithmeticSequence` 添字 | `rb_ary_aref1` 内で処理 | `aseq.[](self)` に委譲（3 箇所とも）。特異クラス付きの AS（`Range#%` 由来）も `ObjTy` で判定するので届く |
