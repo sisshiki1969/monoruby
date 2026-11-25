@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d2665449.js";
+            window.path_to_searchindex_js = "searchindex-6214da3e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -11423,6 +11423,23 @@ Thread の代わりに <code>Thread::SchedulerWaiter</code>(fiber + blocker)が�
 <code>ConditionVariable#signal</code> 側は変更なし)。<code>Thread#join</code> も同様に <code>block(thread, 残り秒)</code>
 で待ち、対象スレッドの終了フックが <code>unblock(join 側のスレッド, fiber)</code> で答える
 (<code>ThreadInner::fiber_joiners</code>)。</li>
+<li>子プロセスの待ちも同じプロトコルに乗る(#2211)。non-blocking fiber でスケジューラが
+<code>#process_wait(pid, flags)</code> を持つなら、<code>Process.wait</code> / <code>wait2</code> / <code>waitpid</code> / <code>waitpid2</code> /
+<code>waitall</code>、<code>Process::Status.wait</code>、<code>Kernel#system</code>(自前経路と spawn 経路の両方)、
+バッククォート、popen した IO の <code>close</code> は、<code>waitpid(2)</code> を自分で呼ばずにこのフックに
+渡す(CRuby の <code>rb_process_status_wait</code> → <code>rb_fiber_scheduler_process_wait</code>)。
+フックは任意(<code>rb_check_funcall</code> 相当)で、<code>WNOHANG</code> 付き・blocking fiber・スケジューラ
+なしのときは呼ばない。答えの読み方は呼び出し側ごとに CRuby と同じ:
+<code>Process::Status.wait</code> は無検査でそのまま返し、<code>system</code> は <code>Process::Status</code> 以外
+(<code>nil</code> も)なら TypeError(<code>rb_check_typeddata</code>)。<code>Process.wait</code> 系・<code>close</code>・
+バッククォートは <code>rb_waitpid</code> の読み方で、<code>nil</code> は「何も回収しなかった」(<code>$?</code> は消えた
+まま、<code>Process.wait</code> は nil を返す)、それ以外の非 Status だけが TypeError。pid が -1 の
+Status は子ではなく errno(= <code>ECHILD</code>)を運ぶ。<code>IO.popen { }</code> の close でフックが
+raise すると、ブロックが raise していてもフックの例外が残る(CRuby は <code>rb_ensure</code> から
+閉じる)。バッククォートはフックに渡す前に stdout / stderr を両方
+<code>poll(2)</code> で読み切る(片方が詰まって子が止まらないように)。
+待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
+(M:1 グリーンモデルでは <code>without_gvl</code> が素通しなので、そこは従来どおり止まる)。</li>
 <li><strong>Monitor</strong>(<code>builtins/monitor.rb</code>)は CRuby の <code>ext/monitor/monitor.c</code> を Ruby で書いたもので、
 Mutex + 所有 <strong>Fiber</strong>(<code>@owner</code>)+ 進入回数(<code>@count</code>)。<code>@count</code> を読み書きするのは所有者
 だけ、<code>@owner</code> が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
