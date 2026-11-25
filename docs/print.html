@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eab7b57e.js";
+            window.path_to_searchindex_js = "searchindex-e3025e2d.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -11425,7 +11425,7 @@ Thread の代わりに <code>Thread::SchedulerWaiter</code>(fiber + blocker)が�
 (<code>ThreadInner::fiber_joiners</code>)。</li>
 <li>子プロセスの待ちも同じプロトコルに乗る(#2211)。non-blocking fiber でスケジューラが
 <code>#process_wait(pid, flags)</code> を持つなら、<code>Process.wait</code> / <code>wait2</code> / <code>waitpid</code> / <code>waitpid2</code> /
-<code>waitall</code>、<code>Process::Status.wait</code>、<code>Kernel#system</code>(自前経路と spawn 経路の両方)、
+<code>waitall</code>、<code>Process::Status.wait</code>、<code>Kernel#system</code>、
 バッククォート、popen した IO の <code>close</code> は、<code>waitpid(2)</code> を自分で呼ばずにこのフックに
 渡す(CRuby の <code>rb_process_status_wait</code> → <code>rb_fiber_scheduler_process_wait</code>)。
 フックは任意(<code>rb_check_funcall</code> 相当)で、<code>WNOHANG</code> 付き・blocking fiber・スケジューラ
@@ -11434,10 +11434,13 @@ Thread の代わりに <code>Thread::SchedulerWaiter</code>(fiber + blocker)が�
 (<code>nil</code> も)なら TypeError(<code>rb_check_typeddata</code>)。<code>Process.wait</code> 系・<code>close</code>・
 バッククォートは <code>rb_waitpid</code> の読み方で、<code>nil</code> は「何も回収しなかった」(<code>$?</code> は消えた
 まま、<code>Process.wait</code> は nil を返す)、それ以外の非 Status だけが TypeError。pid が -1 の
-Status は子ではなく errno(= <code>ECHILD</code>)を運ぶ。<code>IO.popen { }</code> の close でフックが
+Status は子ではなく、失敗した <code>waitpid(2)</code> の errno を運ぶ(子がいなければ <code>ECHILD</code>、
+フラグが不正なら <code>EINVAL</code>。<code>Process::Status.wait</code> 自身は raise せずこれを返し、
+<code>Process.wait</code> 系がその errno を raise する — #2222)。<code>IO.popen { }</code> の close でフックが
 raise すると、ブロックが raise していてもフックの例外が残る(CRuby は <code>rb_ensure</code> から
-閉じる)。バッククォートはフックに渡す前に stdout / stderr を両方
-<code>poll(2)</code> で読み切る(片方が詰まって子が止まらないように)。
+閉じる)。<code>system</code> は <code>Process.wait(spawn(...))</code>、バッククォートは
+<code>IO.popen(cmd) { |io| io.read }</code> と同じ経路(<code>builtins::spawn</code>)で子を作る(#2221)ので、
+バッククォートは stdout のパイプを読み切ってからフックに渡す(stderr は子がそのまま継承)。
 待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
 (M:1 グリーンモデルでは <code>without_gvl</code> が素通しなので、そこは従来どおり止まる)。</li>
 <li><strong>Monitor</strong>(<code>builtins/monitor.rb</code>)は CRuby の <code>ext/monitor/monitor.c</code> を Ruby で書いたもので、
@@ -11953,9 +11956,8 @@ spec は <code>Thread.pass while t.status != "sleep"</code> で待つ)が、park
 <code>block_async_signals</code> でほぼ全シグナルをブロックしており、そのスレッドから
 fork した子はそのマスクを継承する(<code>SIGTERM</code> が永遠に保留 — ruby/spec の
 <code>Process.kill</code> fixture がまさにこれ)。<code>system</code> / バッククォート /
-<code>IO.popen</code>(<code>std::process::Command</code>)は <code>scheduler::command_for_child</code> の
-<code>pre_exec</code> で、<code>Process.spawn</code> / <code>exec</code>(<code>spawn::child_exec</code>)は
-<code>reset_child_sigmask</code> で、子のマスクを空にしてから <code>execve</code> する。
+<code>IO.popen</code> / <code>Process.spawn</code> / <code>exec</code> はどれも <code>spawn::child_exec</code> を通り、
+そこで <code>reset_child_sigmask</code> が子のマスクを空にしてから <code>execve</code> する。
 <code>Process.fork</code> の子は fork 直後に forker が main になる際に全解除する(§12.5)。</li>
 <li><strong>割り込み(ubf)</strong>: <code>Thread#kill</code> / <code>#raise</code> の相手が park 中でなく
 <code>blocking_tid</code> を持っていれば、<code>native::interrupt_blocking</code> が
