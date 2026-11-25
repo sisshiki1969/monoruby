@@ -3755,9 +3755,11 @@ fn load_arg(
     let enc = name.encoding();
     if !enc.is_ascii_compatible() {
         // `rb_enc_check` of the buffer the expansion builds (BINARY;
-        // the home directory's for a `~` name) against the name.
+        // the home directory, in the filesystem encoding, for a `~`
+        // name) against the name.
         let (lhs, rhs) = if name.as_bytes().first() == Some(&b'~') {
-            (enc.inspect_label(), "US-ASCII".to_string())
+            let fs = super::file::filesystem_encoding(globals);
+            (enc.inspect_label(), fs.inspect_label())
         } else {
             ("BINARY (ASCII-8BIT)".to_string(), enc.inspect_label())
         };
