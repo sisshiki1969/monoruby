@@ -3684,17 +3684,17 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         } else {
             return Err(MonorubyErr::typeerr("Binding expected"));
         };
-        globals
-            .compile_script_binding(expr, fname, binding, lineno, src_encoding)
-            .map_err(downgrade_eval_fatal)?;
+        let compiled = globals.compile_script_binding(expr, fname, binding, lineno, src_encoding);
+        // The source's warnings, whether it compiled or not: CRuby
+        // prints them before it raises the SyntaxError of a source.
         vm.flush_compile_warnings(globals);
+        compiled.map_err(downgrade_eval_fatal)?;
         vm.invoke_binding(globals, binding.binding().unwrap())
     } else {
         crate::codegen::runtime::convert_frame_for_capture(vm, cfp, outer_cfp)?;
-        let fid = globals
-            .compile_script_eval(expr, fname, outer_cfp, None, lineno, src_encoding)
-            .map_err(downgrade_eval_fatal)?;
+        let fid = globals.compile_script_eval(expr, fname, outer_cfp, None, lineno, src_encoding);
         vm.flush_compile_warnings(globals);
+        let fid = fid.map_err(downgrade_eval_fatal)?;
         let proc = ProcData::new(outer_cfp.lfp(), fid);
         // Isolate the eval's cref so toggles like `module_function`,
         // `private`, … set inside the eval'd source don't leak to
@@ -3851,11 +3851,6 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // `system` differs from the conversion methods: a `nil` here is the
     // default (no exception), not an error. It is `system`'s own option,
     // so it is taken out before the rest reaches the spawn parser.
-    // CRuby's `rb_f_system` forgets `$?` before it spawns anything, so
-    // one that never reaches a wait (a command that cannot be run, a
-    // fiber scheduler's `#process_wait` raising) leaves no status from
-    // whatever ran before it.
-    crate::scheduler::clear_last_status(vm);
     let mut exception = false;
     let spec = vm.with_temp_scope(|vm| {
         if argv.len() > 1
@@ -3897,7 +3892,13 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
         crate::builtins::spawn::parse_spawn_args(vm, globals, &argv).map(Some)
     })?;
+    // CRuby's `rb_f_system` forgets `$?` before it spawns anything, so
+    // one that never reaches a wait (a command that cannot be run, a
+    // fiber scheduler's `#process_wait` raising) leaves no status from
+    // whatever ran before it. It does so once the arguments are read
+    // (`rb_execarg_new`): one they raise from leaves `$?` as it was.
     if let Some(spec) = spec {
+        crate::scheduler::clear_last_status(vm);
         let pid = match crate::builtins::spawn::spawn_reporting_child(vm, globals, &spec)? {
             Ok(pid) => pid,
             // The child could not exec (an `Errno`): `nil`, as for the
@@ -3938,10 +3939,22 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     }
     let arg0 = argv[0];
     let cmd_str = arg0.coerce_to_str(vm, globals)?;
+    // The command and its arguments are C strings to exec(2): CRuby reads
+    // them with `StringValueCStr`, so a NUL is an error of the call, not
+    // a command that could not be run (which is `nil`).
+    let null_byte = || MonorubyErr::argumenterr("string contains null byte");
+    if cmd_str.contains('\0') {
+        return Err(null_byte());
+    }
     let (program, mut args) = prepare_command_arg(&cmd_str);
     for v in &argv[1..] {
-        args.push(v.coerce_to_string(vm, globals)?);
+        let arg = v.coerce_to_string(vm, globals)?;
+        if arg.contains('\0') {
+            return Err(null_byte());
+        }
+        args.push(arg);
     }
+    crate::scheduler::clear_last_status(vm);
     // The child inherits our std fds; flush so our own pending output
     // precedes whatever it writes (CRuby orders them this way).
     crate::rvalue::io::flush_std_streams();
@@ -4123,6 +4136,13 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let arg0 = lfp.arg(0);
     let rs = arg0.coerce_to_rstring(vm, globals)?;
     let bytes = rs.as_bytes().to_vec();
+    // CRuby's `rb_f_backquote` forgets `$?` and then opens the pipe, which
+    // reads the command with `StringValueCStr`: a NUL raises with no
+    // status left, rather than reaching exec(2) as a truncated command.
+    crate::scheduler::clear_last_status(vm);
+    if bytes.contains(&0) {
+        return Err(MonorubyErr::argumenterr("string contains null byte"));
+    }
     // A command with invalid UTF-8 bytes still runs: hand the raw bytes to
     // the shell (CRuby passes the byte string through unmodified).
     let mut builder = match std::str::from_utf8(&bytes) {
@@ -10741,6 +10761,52 @@ mod tests {
         };
         assert_eq!(super::retriable(got).unwrap(), None);
         assert_eq!(super::retriable(3).unwrap(), Some(3));
+    }
+
+    #[test]
+    fn a_null_byte_in_a_command() {
+        // The command and its arguments are C strings to exec(2): a NUL
+        // in one is an ArgumentError of the call itself, in backticks
+        // (which had it as RuntimeError "Unknown error") and in `system`
+        // (which answered nil) as in `spawn`, `exec` and `IO.popen`
+        // (#2193). `system` reads its arguments before it forgets `$?`,
+        // backticks forget it first.
+        run_test_once(
+            r##"
+            calls = {
+              backtick: -> { `echo a\0b` },
+              percent_x: -> { %x(echo a\0b) },
+              binary: -> { `echo \xff\0` },
+              to_str: -> { o = Object.new; def o.to_str = "echo a\0b"; Kernel.send(:`, o) },
+              system: -> { system("echo a\0b") },
+              system_arg: -> { system("echo", "a\0b") },
+              system_program: -> { system("ec\0ho", "a") },
+              system_exception: -> { system("echo a\0b", exception: true) },
+              system_false: -> { system("echo a\0b", exception: false) },
+              system_env: -> { system({ "A" => "1" }, "echo a\0b") },
+              system_argv0: -> { system(["echo", "ec\0ho"], "a") },
+              system_redirect: -> { system("echo a\0b", out: File::NULL) },
+              system_only_nul: -> { system("\0") },
+            }
+            calls.map do |name, call|
+              system("true")
+              res = begin
+                call.()
+              rescue => e
+                [e.class, e.message]
+              end
+              [name, res, $?.nil? ? nil : $?.exitstatus]
+            end
+            "##,
+        );
+        // A command without one still runs, and still leaves its status.
+        run_test_once(
+            r##"
+            [`echo a b`, $?.exitstatus, system("exit 3"), $?.exitstatus,
+             (`nonexistent_command_2193` rescue $!.class), $?.exitstatus,
+             system("nonexistent_command_2193"), $?.exitstatus]
+            "##,
+        );
     }
 
     #[test]

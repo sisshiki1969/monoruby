@@ -1148,10 +1148,12 @@ fn class_eval(
             Some(module.id()),
             lineno,
             src_encoding,
-        )?;
+        );
         // The parse's warnings, before the body runs — as `eval` and
-        // `instance_eval` print theirs.
+        // `instance_eval` print theirs — and before the SyntaxError of
+        // a source that does not compile.
         vm.flush_compile_warnings(globals);
+        let fid = fid?;
         let proc = ProcData::new(outer_cfp.lfp(), fid);
         // class_eval "..." string form: runtime-only push, just like
         // the block form. The compiled eval body itself receives the

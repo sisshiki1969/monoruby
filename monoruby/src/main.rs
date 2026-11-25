@@ -954,20 +954,26 @@ fn main() {
         // Eager: an ordinary parse hands each `def` body on unlowered, and
         // `-c` never compiles, so a construct the lowerer doesn't accept
         // inside a method body would otherwise go unreported.
+        // The parse's warnings, by the level `-w` / `-W` asked for:
+        // nothing runs under `-c`, so `$VERBOSE` is never set and
+        // nothing else would print them.
+        let warn = |warnings: &[(String, bool)]| {
+            for (msg, verbose_only) in warnings {
+                if warning_level >= 2 || (warning_level == 1 && !verbose_only) {
+                    eprintln!("{msg}");
+                }
+            }
+        };
         match parser::parse_program_eager(code, path.as_path()) {
             Ok(res) => {
-                // The parse's warnings, by the level `-w` / `-W` asked
-                // for: nothing runs under `-c`, so `$VERBOSE` is never
-                // set and nothing else would print them.
-                for (msg, verbose_only) in &res.warnings {
-                    if warning_level >= 2 || (warning_level == 1 && !verbose_only) {
-                        eprintln!("{msg}");
-                    }
-                }
+                warn(&res.warnings);
                 println!("Syntax OK");
                 return;
             }
             Err(err) => {
+                // A source that does not parse has its warnings all the
+                // same, and they come before the error (CRuby).
+                warn(&parser::take_error_warnings());
                 err.show_error_message_and_all_loc(&globals.store);
                 std::process::exit(1);
             }
