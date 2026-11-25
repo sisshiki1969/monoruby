@@ -270,6 +270,18 @@ fn float_rationalize(
     _: BytecodePtr,
 ) -> Result<Value> {
     let f = lfp.self_val().try_float().unwrap();
+    // An epsilon that is given is asked for its `abs` before anything
+    // else (`rb_flt_rationalize_with_prec`'s `f_abs`), so one that has
+    // none — nil, a String — is a NoMethodError, whatever the receiver.
+    let eps_arg = match lfp.try_arg(0) {
+        Some(v)
+            if v.try_rational().is_none()
+                && !matches!(v.unpack(), RV::Float(_) | RV::Fixnum(_)) =>
+        {
+            Some(vm.invoke_method_inner(globals, IdentId::get_id("abs"), v, &[], None, None)?)
+        }
+        other => other,
+    };
     if f.is_nan() {
         return Err(float_domain_error(globals, "NaN"));
     }
@@ -282,7 +294,7 @@ fn float_rationalize(
     if f == 0.0 {
         return Ok(Value::rational_from_inner(RationalInner::new(0, 1)));
     }
-    if let Some(eps_val) = lfp.try_arg(0) {
+    if let Some(eps_val) = eps_arg {
         // Explicit eps given
         let eps = if let Some(r) = eps_val.try_rational() {
             r.abs()

@@ -109,6 +109,12 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_class_func(NAME_ERROR_CLASS, "__showing", nameerr_showing, 4);
+    globals.define_builtin_func(
+        NAME_ERROR_CLASS,
+        "local_variables",
+        nameerr_local_variables,
+        0,
+    );
     globals.define_builtin_exception_class("NoMethodError", NO_METHOD_ERROR_CLASS, nameerr);
     globals.define_builtin_func_with_kw(
         NO_METHOD_ERROR_CLASS,
@@ -316,7 +322,7 @@ fn nameerr_name(
 ///
 #[monoruby_builtin]
 fn nameerr_initialize(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     lfp: Lfp,
     _: BytecodePtr,
@@ -340,7 +346,96 @@ fn nameerr_initialize(
     {
         globals.store.set_ivar(self_, IdentId::_RECEIVER, v)?;
     }
+    // The scope `NameError#local_variables` answers for: that of the
+    // Ruby code creating the error (`name_err_init_attr`'s iseq).
+    let mut cfp = vm.cfp().prev();
+    while let Some(frame) = cfp {
+        let lfp = frame.lfp();
+        let meta = lfp.meta();
+        if !meta.is_native() && !meta.is_internal_builtin() {
+            if let Some(iseq) = globals.store[lfp.func_id()].is_iseq() {
+                globals.store.set_ivar(
+                    self_,
+                    IdentId::get_id("/iseq"),
+                    Value::integer(iseq.get() as i64),
+                )?;
+            }
+            break;
+        }
+        cfp = frame.prev();
+    }
     Ok(Value::nil())
+}
+
+///
+/// ### NameError#local_variables
+///
+/// - local_variables -> [Symbol]
+///
+/// The local variables in scope where the error came about, for
+/// did_you_mean's `VariableNameChecker`: those of the Ruby code that
+/// created the error (`NameError.new`), or, for one the interpreter
+/// raised, of the code it was raised in. The scope is the static one,
+/// as in CRuby (`rb_iseq_local_variables`): every variable of the body
+/// and of the bodies around it, assigned yet or not. Worked out on the
+/// first call and kept.
+#[monoruby_builtin]
+fn nameerr_local_variables(
+    _vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    // CRuby keeps the answer in an instance variable named without an
+    // `@`, which `Marshal` dumps with the others of that kind — after
+    // whatever the exception already had when this was first asked.
+    let vars_id = IdentId::get_id(&format!(
+        "{}local_variables",
+        super::marshal::EXTRA_FIELD_PREFIX
+    ));
+    if let Some(vars) = globals.store.get_ivar(self_, vars_id)
+        && !vars.is_nil()
+    {
+        return Ok(vars);
+    }
+    let created_in = globals
+        .store
+        .get_ivar(self_, IdentId::get_id("/iseq"))
+        .and_then(|v| v.try_fixnum())
+        .map(|id| ISeqId::new(id as usize));
+    let iseq = created_in.or_else(|| {
+        // Raised by the interpreter. CRuby takes the Ruby frame below
+        // the one that is current when the error object is made
+        // (`name_err_init_attr`). For a missing method or variable
+        // that one is the `initialize` call `rb_method_missing` makes,
+        // so the answer is the scope of the failing call itself; any
+        // other NameError (an uninitialized constant or class
+        // variable, a name a builtin rejected) is built in place, so
+        // the answer is the scope *calling* the frame it was raised
+        // in.
+        let exc = self_.is_exception()?;
+        let missing_method = self_.is_kind_of(&globals.store, NO_METHOD_ERROR_CLASS)
+            || exc
+                .message
+                .starts_with("undefined local variable or method ");
+        let below = if missing_method { 0 } else { 1 };
+        exc.trace().iter().skip(below).find_map(|entry| {
+            let func_id = entry.1?;
+            let func = &globals.store[func_id];
+            if func.meta().is_internal_builtin() {
+                return None;
+            }
+            func.is_iseq()
+        })
+    });
+    let vars = match iseq {
+        Some(iseq) => globals.store.local_variables(iseq),
+        None => vec![],
+    };
+    let vars = Value::array_from_vec(vars);
+    globals.store.set_ivar(self_, vars_id, vars)?;
+    Ok(vars)
 }
 
 /// `NameError.__showing(before, name, after, receiver)` — for the

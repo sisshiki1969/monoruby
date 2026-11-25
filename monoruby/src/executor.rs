@@ -774,6 +774,12 @@ impl Executor {
                     // feature off the constant is not defined at all.
                     globals.remove_constant(OBJECT_CLASS, IdentId::get_id("ErrorHighlight"));
                 }
+                // `DidYouMean`, an autoload too, with stand-ins for
+                // the methods it gives four exception classes.
+                if !globals.no_did_you_mean {
+                    let path = builtins_dir().join("did_you_mean_prelude.rb");
+                    executor.require(globals, &path, false)?;
+                }
             }
             // `Class#new` exists only once class.rb has run; the JIT needs
             // its FuncId to recognise a `Foo.new` site.
@@ -1575,6 +1581,7 @@ impl Executor {
             .feature_encoding
             .take()
             .map(|enc| globals.expanded_path_encoding(enc));
+        globals.feature_path_encoding = feature_encoding;
         let (file_body, canonicalized_path) = loop {
             let found = match globals.require_lib(self, file_name, is_relative) {
                 // Not on `$LOAD_PATH` nor in a host gem: an installed gem
@@ -1908,6 +1915,13 @@ impl Executor {
             (
                 "/error_highlight/base.rb",
                 "monoruby_hooks/error_highlight.rb",
+            ),
+            // The stand-ins for `DidYouMean::Correctable`'s methods go
+            // when the module is defined, before did_you_mean.rb
+            // prepends it (`monoruby_hooks/did_you_mean.rb`).
+            (
+                "/did_you_mean/core_ext/name_error.rb",
+                "monoruby_hooks/did_you_mean.rb",
             ),
         ];
         for (suffix, feature) in LOAD_HOOKS {
@@ -2706,7 +2720,17 @@ impl Executor {
                 let path = if path.as_os_str().is_empty() {
                     None
                 } else {
-                    Some(Value::string_from_str(&path.as_os_str().to_string_lossy()))
+                    // The name as the bytes it is, in the encoding the
+                    // message names it in (`kernel::name_load_error`).
+                    use std::os::unix::ffi::OsStrExt;
+                    let enc = match &err.raw_message {
+                        Some((_, enc)) => *enc,
+                        None => crate::value::Encoding::UTF8,
+                    };
+                    Some(Value::string_from_source_bytes(
+                        path.as_os_str().as_bytes(),
+                        enc,
+                    ))
                 };
                 let v = Value::new_exception(err);
                 if let Some(path) = path {
@@ -2800,11 +2824,15 @@ impl Executor {
                 // `SyntaxError#path`: the file the error was raised in,
                 // taken from the first trace frame (nil for a directly
                 // constructed SyntaxError, which has no trace).
-                let path = err
-                    .trace
-                    .first()
-                    .and_then(|(source_loc, _, _)| source_loc.as_ref())
-                    .map(|(_, source)| Value::string(source.file_name().to_string()));
+                let path = match err.payload {
+                    // A source that did not parse.
+                    Some((path, crate::globals::SYNTAX_PATH_PAYLOAD)) => Some(path),
+                    _ => err
+                        .trace
+                        .first()
+                        .and_then(|(source_loc, _, _)| source_loc.as_ref())
+                        .map(|(_, source)| crate::globals::source_path_value(source)),
+                };
                 let v = Value::new_exception(err);
                 if let Some(path) = path {
                     globals

@@ -53,6 +53,44 @@ on NameError, TypeError or ArgumentError runs the pending autoload before
 it prepends anything (`Exception.__load_error_highlight`, the same entry
 the first message uses).
 
+## did_you_mean
+
+did_you_mean is the other library CRuby's `gem_prelude` requires at
+boot, and it is handled the same way: the vendored copy is CRuby's,
+`builtins/did_you_mean_prelude.rb` registers `DidYouMean` as an
+autoload, and `Exception#detailed_message` runs it for the first
+NameError, KeyError, LoadError or NoMatchingPatternKeyError it is asked
+about (`Exception.__load_did_you_mean`). `--disable-did_you_mean` and
+`--disable-gems` leave the constant undefined
+(`Globals::no_did_you_mean`).
+
+Two things are particular to it:
+
+- The gem adds public methods (`corrections`, `spell_checker`,
+  `original_message`) that a program may call before any message was
+  asked for. The prelude defines stand-ins for them on the four classes,
+  which load the library and call again;
+  `stdlib/monoruby_hooks/did_you_mean.rb`, run by the load hook right
+  after the gem's `core_ext/name_error.rb`, removes them, so that once
+  the library is in, the methods are `DidYouMean::Correctable`'s alone.
+  Until then `NameError.instance_methods(false)` lists the stand-ins.
+- CRuby requires error_highlight first and did_you_mean second, so on a
+  NameError `DidYouMean::Correctable` sits on top of
+  `ErrorHighlight::CoreExt`. `Module#prepend` keeps that order whichever
+  of the two is asked for first: did_you_mean's own prepend loads a
+  pending error_highlight underneath, and error_highlight's own prepend
+  leaves a pending did_you_mean pending.
+
+The checker for a misspelled local variable reads
+`NameError#local_variables`: the locals of the Ruby frame the error was
+created in (`NameError.new`), or, for one the interpreter raised, of the
+frame CRuby's `name_err_init_attr` picks — the failing frame for a
+missing method or variable, its caller for a constant or class variable
+that is not there.
+
+`monoruby/tests/syntax_report_did_you_mean_source_names.rs` compares the
+corrections, the reports and `local_variables` with the host CRuby.
+
 ## Which node a frame was executing
 
 The gem calls, in this order:
@@ -125,8 +163,8 @@ node's: that is what the `callee:` half of the report underlines.
 
 `monoruby/tests/error_highlight.rs` spawns the binary:
 `tests/error_highlight/cases.rb` holds 121 cases and `cases.expected`
-their output on CRuby 4.0.9 (`ruby --disable-did_you_mean cases.rb`,
-with the directory replaced by `@DIR@`). The gem's own
+their output on CRuby 4.0.9 (`ruby cases.rb`, with the directory
+replaced by `@DIR@`). The gem's own
 `test/error_highlight/test_error_highlight.rb` passes too, apart from
 three cases that differ in an unrelated TypeError message; it references
 a top-level `RubyVM` itself, so running it needs

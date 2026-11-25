@@ -84,8 +84,10 @@ class Rational
   # `div`, `divmod`, `%` / `modulo` and `remainder` are Numeric's, as in
   # CRuby (rational.c defines none of them).
 
-  def rationalize(eps = nil)
-    return self if eps.nil?
+  # An epsilon that is given is asked for its `abs`, nil included
+  # (`nurat_rationalize` hands `argv[0]` to `f_abs`).
+  def rationalize(eps = (no_eps = true; nil))
+    return self if no_eps
     eps = eps.abs
     # Stern-Brocot operates on non-negative rationals; handle sign outside.
     return -(-self).rationalize(eps) if self < 0

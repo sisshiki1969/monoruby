@@ -3980,6 +3980,26 @@ fn scrub_utf8(bytes: &[u8], repl: &[u8], out: &mut Vec<u8>) {
 }
 
 impl RStringInner {
+    /// CRuby's `StringValueCStr` check: the String holds no null
+    /// character. In an encoding whose characters are at least two
+    /// bytes wide (UTF-16, UTF-32) that is a whole zero code unit, not
+    /// a zero byte, and the error says "null char"; the bytes may then
+    /// hold zero bytes (#2231).
+    pub(crate) fn check_c_str(&self) -> Result<()> {
+        let bytes = self.as_bytes();
+        let unit = self.encoding().unit_width();
+        if unit == 1 {
+            if bytes.contains(&0) {
+                return Err(MonorubyErr::argumenterr("string contains null byte"));
+            }
+        } else if bytes.chunks_exact(unit).any(|c| c.iter().all(|b| *b == 0)) {
+            return Err(MonorubyErr::argumenterr("string contains null char"));
+        }
+        Ok(())
+    }
+}
+
+impl RStringInner {
     /// Low-level constructor. Callers pass the `cr` they want to
     /// record — either `Unknown` (defer classification to the first
     /// query) or a value computed up front (caller has already done

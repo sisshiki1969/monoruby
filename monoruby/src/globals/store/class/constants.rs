@@ -302,10 +302,9 @@ impl ClassInfoTable {
         &mut self,
         class_id: ClassId,
         name: IdentId,
-        file_name: String,
+        feature: std::path::PathBuf,
         encoding: crate::value::Encoding,
     ) {
-        let feature = std::path::PathBuf::from(file_name);
         // Whether this registers a feature the index does not have for
         // the constant yet.
         let indexed = match self[class_id].constants.get_mut(&name) {

@@ -203,16 +203,19 @@ fn error_highlight_is_loaded_on_first_use() {
     let got = eval(
         &[],
         &format!(
-            r#"begin; nil.foo; rescue => e; m = e.detailed_message; end
+            r#"begin; nil.foo; rescue => e; m = e.detailed_message(highlight: false); end
                p [m, {LOADED}, Object.autoload?(:ErrorHighlight),
-                  NameError.ancestors.first, TypeError.ancestors.first,
+                  NameError.ancestors.first(2), TypeError.ancestors.first,
                   ArgumentError.ancestors.first]"#
         ),
     );
+    // did_you_mean is loaded by the same message (#2238), and ends up
+    // on top, as it does on CRuby where it is required second.
     assert_eq!(
         got,
         "[\"undefined method 'foo' for nil (NoMethodError)\", true, nil, \
-         ErrorHighlight::CoreExt, ErrorHighlight::CoreExt, ErrorHighlight::CoreExt]"
+         [DidYouMean::Correctable, ErrorHighlight::CoreExt], ErrorHighlight::CoreExt, \
+         ErrorHighlight::CoreExt]"
     );
 
     let got = eval(
@@ -233,6 +236,8 @@ fn error_highlight_is_loaded_on_first_use() {
 
 /// The message that triggers the load is itself decorated, also when it
 /// was reached through a subclass's own `detailed_message`.
+/// (`highlight: false` is spelled out: with did_you_mean on top of a
+/// NameError the default is its own, `highlight: true`.)
 #[test]
 fn the_message_that_loads_it_is_decorated() {
     let script = Script::new(
@@ -243,8 +248,8 @@ fn the_message_that_loads_it_is_decorated() {
          begin\n\
          \x20 raise Mine, \"mine\"\n\
          rescue => e\n\
-         \x20 puts e.detailed_message\n\
-         \x20 puts e.detailed_message\n\
+         \x20 puts e.detailed_message(highlight: false)\n\
+         \x20 puts e.detailed_message(highlight: false)\n\
          end\n",
     );
     let out = script.run(&[]);

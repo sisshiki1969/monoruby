@@ -2647,21 +2647,41 @@ impl IoInner {
     /// out whole for the conversion. (CRuby converts first and looks for
     /// the separator in what it converted, which splits at the same
     /// places.) A limit is rounded up to a whole code unit.
+    ///
+    /// `paragraph` is paragraph mode: `sep` is two line feeds, and line
+    /// feeds ahead of the line and after its separator are skipped
+    /// (CRuby's `swallow`, which on a converting stream compares
+    /// characters; on one that converts nothing it compares bytes and
+    /// leaves the rest of a wide stream misaligned, which is not copied).
     pub fn getline_units(
         &mut self,
         sep: Option<&[u8]>,
         limit: Option<usize>,
         unit: usize,
+        paragraph: bool,
     ) -> Result<Option<Vec<u8>>> {
         if limit == Some(0) {
             return Ok(Some(Vec::new()));
         }
+        let lf = sep.filter(|_| paragraph).map(|s| &s[..unit]);
+        if let Some(lf) = lf {
+            self.skip_units(lf, &[])?;
+        }
+        let mut eof = false;
         let mut buf = match sep {
             None => {
                 let buf = self.read(limit)?;
                 if buf.is_empty() {
                     return Ok(None);
                 }
+                buf
+            }
+            Some(s) if limit.is_none() && Self::unit_sep_needle(s, unit).is_some() => {
+                let buf = self.read_to_unit_sep(s, unit)?;
+                if buf.is_empty() {
+                    return Ok(None);
+                }
+                eof = buf.len() % unit != 0 || !buf.ends_with(s);
                 buf
             }
             Some(s) => {
@@ -2674,7 +2694,10 @@ impl IoInner {
                         break;
                     }
                     match self.read1_preserving(&buf)? {
-                        None => break,
+                        None => {
+                            eof = true;
+                            break;
+                        }
                         Some(b) => {
                             buf.push(b);
                             if buf.len() % unit == 0 && !s.is_empty() && buf.ends_with(s) {
@@ -2695,7 +2718,93 @@ impl IoInner {
                 Some(b) => buf.push(b),
             }
         }
+        if let Some(lf) = lf
+            && !eof
+        {
+            self.skip_units(lf, &buf)?;
+        }
         Ok(Some(buf))
+    }
+
+    /// Take the code units equal to `lf` off the front of the stream.
+    /// `acc` is the line read so far, pushed back if the read is
+    /// interrupted and will be retried (see `read1_preserving`).
+    fn skip_units(&mut self, lf: &[u8], acc: &[u8]) -> Result<()> {
+        loop {
+            match self.read(Some(lf.len())) {
+                Ok(u) if u == lf => {}
+                Ok(u) => {
+                    if !u.is_empty() {
+                        self.unget(&u)?;
+                    }
+                    return Ok(());
+                }
+                Err(err) => {
+                    if (err.is_signal_interrupt() || err.is_would_block_interrupt())
+                        && !acc.is_empty()
+                    {
+                        let _ = self.unget(acc);
+                    }
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    /// The byte [`Self::read_to_unit_sep`] scans the stream for: the last
+    /// byte of `sep` that is not NUL (text in a wide encoding is full of
+    /// NULs), as its index in `sep`. `None` when the bytes after it reach
+    /// into another code unit — a separator ending in U+0000, or an empty
+    /// one — which the scan below does not cover.
+    fn unit_sep_needle(sep: &[u8], unit: usize) -> Option<usize> {
+        let k = sep.iter().rposition(|&b| b != 0)?;
+        (sep.len() - 1 - k < unit).then_some(k)
+    }
+
+    /// The line [`Self::getline_units`] reads when there is no limit, taken
+    /// off the buffer in bulk: everything up to the next occurrence of the
+    /// separator's needle byte ([`Self::unit_sep_needle`]) at a time, and a
+    /// look at the separator's remaining bytes only where the needle sits
+    /// at the right offset of a code unit after the separator's head.
+    /// (Reading byte by byte cost ~900 instructions a byte.) Empty at EOF.
+    fn read_to_unit_sep(&mut self, sep: &[u8], unit: usize) -> Result<Vec<u8>> {
+        let k = Self::unit_sep_needle(sep, unit).unwrap();
+        let (needle, after) = (sep[k], sep.len() - 1 - k);
+        // See `read1_preserving`: what was read so far goes back in front
+        // of the stream when the read is interrupted and will be retried.
+        let keep = |io: &mut Self, err: MonorubyErr, buf: &[u8]| {
+            if (err.is_signal_interrupt() || err.is_would_block_interrupt()) && !buf.is_empty() {
+                let _ = io.unget(buf);
+            }
+            err
+        };
+        let mut buf = Vec::new();
+        loop {
+            match self.read_line_bytes_by(|b: &[u8]| memchr::memchr(needle, b)) {
+                Ok(Some(chunk)) if buf.is_empty() => buf = chunk,
+                Ok(Some(chunk)) => buf.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(err) => return Err(keep(self, err, &buf)),
+            }
+            // Not a separator when the needle is at another offset of its
+            // code unit, or follows something else than the separator's
+            // head. Its last `after` bytes are NULs within the needle's
+            // own unit, so no later separator's needle is among them and
+            // reading them here skips none.
+            if (buf.len() + after) % unit != 0 || !buf.ends_with(&sep[..=k]) {
+                continue;
+            }
+            if after > 0 {
+                match self.read(Some(after)) {
+                    Ok(tail) => buf.extend_from_slice(&tail),
+                    Err(err) => return Err(keep(self, err, &buf)),
+                }
+            }
+            if buf.ends_with(sep) {
+                break;
+            }
+        }
+        Ok(buf)
     }
 
     /// After a limit cut, read up to 16 extra bytes to complete a UTF-8

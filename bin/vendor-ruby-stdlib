@@ -35,7 +35,7 @@ ARCHLIB=$(ruby -e 'print RbConfig::CONFIG["archdir"]')
 # Names whose Ruby code needs a native extension monoruby cannot load,
 # or which monoruby already implements itself. Keep authoritative copies
 # in monoruby/{builtins,stdlib,gem}; never vendor these from the host.
-EXCLUDE_RE='^(json|date|digest|stringio|strscan|psych|yaml|zlib|openssl|bigdecimal|fiddle|socket|fcntl|io/console|io/wait|io/nonblock|fiber|monitor|set|weakref|prism|did_you_mean|syntax_suggest|objspace|ripper|rbconfig/sizeof)(\.rb|/.*)$'
+EXCLUDE_RE='^(json|date|digest|stringio|strscan|psych|yaml|zlib|openssl|bigdecimal|fiddle|socket|fcntl|io/console|io/wait|io/nonblock|fiber|monitor|set|weakref|prism|syntax_suggest|objspace|ripper|rbconfig/sizeof)(\.rb|/.*)$'
 
 rm -rf "$DEST"
 mkdir -p "$DEST"

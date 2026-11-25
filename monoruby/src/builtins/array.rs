@@ -232,7 +232,10 @@ pub(super) fn init(globals: &mut Globals) {
         false,
     );
     globals.define_builtin_func_with(ARRAY_CLASS, "insert", insert, 1, 1, true);
-    globals.define_builtin_funcs(ARRAY_CLASS, "replace", &["initialize_copy"], replace, 1);
+    globals.define_builtin_func(ARRAY_CLASS, "replace", replace, 1);
+    // A method of its own, as in CRuby, and private as every
+    // `initialize_copy` is (an alias would carry `replace`'s visibility).
+    globals.define_private_builtin_func(ARRAY_CLASS, "initialize_copy", replace, 1);
     init_recv_escape(globals);
 }
 

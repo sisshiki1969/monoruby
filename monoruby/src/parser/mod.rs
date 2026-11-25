@@ -16,7 +16,9 @@ use std::sync::atomic::{AtomicI8, Ordering};
 use crate::ast::{LvarCollector, ParseResult};
 use crate::globals::MonorubyErr;
 
+mod parse_error;
 mod prism_backend;
+pub(crate) use parse_error::ErrorLevel;
 
 /// Implicit `while gets ... end` wrap requested by the `-n` / `-p`
 /// command-line switches. Applied to exactly one parse — the main

@@ -11,6 +11,14 @@ pub struct ParseErr {
 pub enum ParseErrKind {
     UnexpectedEOF,
     SyntaxError(String),
+    /// What prism reported for a source that does not parse, as the
+    /// error CRuby raises for it (`pm_parse_process_error`): its class,
+    /// and its message in the encoding of the source (#2230).
+    Diagnostics {
+        level: crate::parser::ErrorLevel,
+        message: Vec<u8>,
+        encoding: crate::value::Encoding,
+    },
 }
 
 impl std::fmt::Debug for ParseErrKind {
@@ -18,6 +26,9 @@ impl std::fmt::Debug for ParseErrKind {
         match self {
             Self::UnexpectedEOF => write!(f, "SyntaxError (Unexpected EOF.)"),
             Self::SyntaxError(msg) => write!(f, "SyntaxError ({})", msg),
+            Self::Diagnostics { level, message, .. } => {
+                write!(f, "{level:?} ({})", String::from_utf8_lossy(message))
+            }
         }
     }
 }

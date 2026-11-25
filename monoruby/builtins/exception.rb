@@ -190,13 +190,56 @@ class Exception
   # decorate the message with the class name; empty-message and
   # anonymous-class cases have special forms. The result is US-ASCII
   # while it is all ASCII, whatever the message's encoding (#2090).
-  def detailed_message(highlight: false, **opts)
+  def detailed_message(highlight: (default_highlight = true; false), **opts)
+    if (::NameError === self || ::KeyError === self || ::LoadError === self ||
+        ::NoMatchingPatternKeyError === self) && ::Object.autoload?(:DidYouMean)
+      m = __did_you_mean_message(default_highlight, highlight, opts)
+      return m if m
+    end
     if (::NameError === self || ::TypeError === self || ::ArgumentError === self) &&
        ::Object.autoload?(:ErrorHighlight)
       m = __error_highlight_message(highlight, opts)
       return m if m
     end
     __usascii_repr(__detailed_message(highlight))
+  end
+
+  # did_you_mean is loaded here, by the first message it would have
+  # added a suggestion to, rather than at boot
+  # (builtins/did_you_mean_prelude.rb). As with error_highlight below,
+  # the module it prepends to the receiver's class comes too late for
+  # the call under way, so this once its method is called directly; its
+  # `super` goes on to `ErrorHighlight::CoreExt` (loaded underneath it,
+  # see `Module#prepend`) and back to `#detailed_message` above.
+  #
+  # `Correctable#detailed_message` defaults `highlight:` to true, where
+  # `Exception#detailed_message` defaults it to false, so a call that
+  # did not say is passed on without one.
+  private def __did_you_mean_message(default_highlight, highlight, opts)
+    return nil unless ::Exception.__load_did_you_mean(self)
+    m = ::DidYouMean::Correctable.instance_method(:detailed_message)
+    default_highlight ? m.bind_call(self, **opts) : m.bind_call(self, highlight: highlight, **opts)
+  end
+
+  # Run the pending autoload of `DidYouMean`, if there is one, and say
+  # whether *exc* (when given) is one the library corrects by now.
+  # Called for the first message it would add a suggestion to (above),
+  # by the stand-ins for `Correctable`'s methods
+  # (builtins/did_you_mean_prelude.rb) and by `Module#prepend` on one of
+  # the classes it prepends its module to, so that the module ends up
+  # underneath the others, where a library loaded at boot has it.
+  def self.__load_did_you_mean(exc = nil)
+    if ::Object.autoload?(:DidYouMean)
+      begin
+        ::DidYouMean
+      rescue ::LoadError
+        # CRuby's gem_prelude says so once and goes on without it.
+        ::Object.__send__(:remove_const, :DidYouMean) if ::Object.autoload?(:DidYouMean)
+        warn "`did_you_mean' was not loaded."
+        return false
+      end
+    end
+    !!(defined?(::DidYouMean::Correctable) && ::DidYouMean::Correctable === exc)
   end
 
   # error_highlight is loaded here, by the first message it would have
@@ -239,7 +282,11 @@ class Exception
       base = instance_of?(::RuntimeError) ? "unhandled exception" : (cls.name || cls.to_s)
       return highlight ? "\e[1;4m#{base}\e[m" : base
     end
-    first, *rest = msg.split("\n", -1)
+    # Lines are told apart by the byte, as `rb_decorate_message` does:
+    # a message need not be valid in its encoding (a SyntaxError quotes
+    # its source).
+    enc = msg.encoding
+    first, *rest = msg.b.split("\n".b, -1).map { |l| l.force_encoding(enc) }
     # With :highlight every line of a multi-line message is bolded
     # individually (`\e[1m…\e[m` per line).
     if cls.name.nil?

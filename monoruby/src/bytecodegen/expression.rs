@@ -2214,7 +2214,7 @@ impl<'a> BytecodeGen<'a> {
                 // `rb_reg_check_preprocess`, which reads a fragment with
                 // no options (a `/x` literal's comments included).
                 if let Err(err) = crate::builtins::check_regexp_preprocess(bytes, enc, 0) {
-                    return Err(self.syntax_error(err.message(), loc));
+                    return Err(self.regexp_literal_error(err.message(), loc));
                 }
             }
         }
@@ -2361,7 +2361,7 @@ impl<'a> BytecodeGen<'a> {
             kcode,
         ) {
             Ok(re) => re,
-            Err(err) => return Err(self.syntax_error(err.message(), loc)),
+            Err(err) => return Err(self.regexp_literal_error(err.message(), loc)),
         };
         // Onigmo's diagnostics for the literal carry its location, as
         // CRuby's parse-time `rb_reg_warn` does; they are flushed with

@@ -399,10 +399,18 @@ impl Value {
             }
             // As above: `rb_Float` refuses nil although `nil.to_f` exists.
             RV::Nil => return Err(MonorubyErr::typeerr("can't convert nil into Float")),
+            RV::BigInt(_) => return self.coerce_to_f64(vm, globals),
             _ => {}
         };
-        if let Ok(f) = self.coerce_to_f64(vm, globals) {
-            return Ok(f);
+        // `rb_Float`'s `#to_f`: what it raises is the error (`"%f" % 1i`
+        // is Complex#to_f's RangeError), and only an object without one
+        // "can't be converted".
+        if let Some(result) = check_funcall(vm, globals, *self, IdentId::TO_F)? {
+            return match result.unpack() {
+                RV::Float(f) => Ok(f),
+                RV::Fixnum(i) => Ok(i as f64),
+                _ => Err(MonorubyErr::cant_convert_error_f(globals, *self, result)),
+            };
         }
         Err(MonorubyErr::cant_convert_into_float(globals, *self))
     }
@@ -617,6 +625,9 @@ impl Value {
         globals: &mut Globals,
     ) -> Result<RString> {
         let rs = self.coerce_to_path_rstring_allow_nul(vm, globals)?;
+        // The encoding first: a UTF-16 / UTF-32 path is a
+        // CompatibilityError, although its bytes hold NULs.
+        check_path_encoding(globals, &rs)?;
         // CRuby rejects NUL in paths up front (CVE-2018-8780 hardening):
         // `ArgumentError: path name contains null byte`. Without this the
         // failed CString conversion surfaced as an opaque
@@ -985,4 +996,22 @@ pub(crate) fn num_coerce_cmp(
         Some((a, b)) => vm.invoke_method_inner(globals, op, a, &[b], None, None),
         None => Ok(Value::nil()),
     }
+}
+
+/// `rb_get_path`'s encoding check: a path in an encoding that is not
+/// ASCII-compatible (UTF-16 / UTF-32, ISO-2022-JP) is an
+/// `Encoding::CompatibilityError`.
+pub(crate) fn check_path_encoding(globals: &Globals, rs: &RString) -> Result<()> {
+    let enc = rs.encoding();
+    if !enc.is_ascii_compatible() {
+        return Err(MonorubyErr::encoding_compatibility_error_with_store(
+            &globals.store,
+            format!(
+                "path name must be ASCII-compatible ({}): \"{}\"",
+                enc.name(),
+                rs.inspect().trim_matches('"'),
+            ),
+        ));
+    }
+    Ok(())
 }

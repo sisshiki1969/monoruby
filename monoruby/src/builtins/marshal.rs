@@ -1859,7 +1859,7 @@ fn has_no_dump_data(store: &Store, obj: Value) -> bool {
 /// variable of a loaded exception, whatever its name, and dumps it
 /// again. `bt_locations` is the one that matters — a loaded exception
 /// carries it as nil, and says so when dumped.
-const EXTRA_FIELD_PREFIX: &str = "/marshal/";
+pub(crate) const EXTRA_FIELD_PREFIX: &str = "/marshal/";
 
 /// Walk a Struct subclass's ancestor chain looking for the
 /// `/members` ivar (an Array of Symbols set by `Struct.new`).

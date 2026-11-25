@@ -530,6 +530,9 @@ pub struct Globals {
     /// `--disable-error_highlight`: `ErrorHighlight` is not registered
     /// as an autoload at boot (`builtins/gem_prelude.rb`).
     pub no_error_highlight: bool,
+    /// `--disable-did_you_mean`: `DidYouMean` is not registered as an
+    /// autoload (`builtins/did_you_mean_prelude.rb` is not run).
+    pub no_did_you_mean: bool,
     /// The `Warning[]` switches, one [`WarningCategory`] bit each.
     warning_categories: u8,
     /// The `Encoding` each `Encoding::<NAME>` constant object stands
@@ -584,6 +587,11 @@ pub struct Globals {
     /// in-place swap (`$"[0] = other`) is the one shape that slips past,
     /// since nothing about the array changes that an O(1) check can see.
     loaded_features_index: std::cell::RefCell<LoadedFeatureIndex>,
+    /// The encoding of the feature String the `require` under way was
+    /// given, once expanded (`expanded_path_encoding`): what a
+    /// `$LOADED_FEATURES` entry whose bytes are not UTF-8 text is
+    /// labelled with (#2235). Set by `Executor::require`.
+    pub(crate) feature_path_encoding: Option<crate::value::Encoding>,
     /// Memoized canonical (symlink-resolved) form of a directory,
     /// keyed by the path as it was given. `require` resolves every
     /// `$LOAD_PATH` entry to its canonical form to compare it against
@@ -1255,6 +1263,7 @@ impl Globals {
             no_jit,
             no_gems,
             no_error_highlight: false,
+            no_did_you_mean: false,
             warning_categories: WarningCategory::DEFAULT,
             encoding_of_object: HashMap::default(),
             encoding_object_roots: vec![],
@@ -1264,6 +1273,7 @@ impl Globals {
             random: Box::new(Prng::new()),
             loaded_features,
             loaded_features_index: std::cell::RefCell::new(LoadedFeatureIndex::default()),
+            feature_path_encoding: None,
             canonical_dirs: std::cell::RefCell::new(std::collections::HashMap::new()),
             capi_extensions: std::cell::RefCell::new(std::collections::HashMap::new()),
             shipped_extension_features: std::collections::HashMap::new(),
@@ -2280,7 +2290,16 @@ impl Globals {
         if self.is_feature_loaded(path) {
             return false;
         }
-        let value = Value::string_from_str(path.to_string_lossy().as_ref());
+        let value = match path.to_str() {
+            Some(path) => Value::string_from_str(path),
+            // A file found under a name in another encoding: the bytes
+            // it has, in the encoding of the feature that named it.
+            None => Value::string_from_source_bytes(
+                path.as_os_str().as_bytes(),
+                self.feature_path_encoding
+                    .unwrap_or(crate::value::Encoding::UTF8),
+            ),
+        };
         let mut array = self.loaded_features.as_array();
         array.push(value);
         // Keep the index in step rather than letting the length change

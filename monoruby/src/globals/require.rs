@@ -56,12 +56,18 @@ fn require_candidates(path: &std::path::Path) -> Vec<PathBuf> {
         Some(b"so") => vec![path.to_path_buf()],
         Some(b"bundle") if cfg!(target_os = "macos") => vec![path.to_path_buf()],
         _ => {
-            let s = path.as_os_str().to_string_lossy();
-            let mut cands = vec![PathBuf::from(format!("{s}.rb")), PathBuf::from(format!("{s}.so"))];
+            // Appended to the name as the bytes it is: it need not be
+            // UTF-8 text (#2235).
+            let with = |ext: &str| {
+                let mut s = path.as_os_str().to_os_string();
+                s.push(ext);
+                PathBuf::from(s)
+            };
+            let mut cands = vec![with(".rb"), with(".so")];
             // CRuby's `DLEXT` on macOS, and so what mkmf names an
             // extension built there (`RbConfig::CONFIG["DLEXT"]`).
             if cfg!(target_os = "macos") {
-                cands.push(PathBuf::from(format!("{s}.bundle")));
+                cands.push(with(".bundle"));
             }
             cands
         }

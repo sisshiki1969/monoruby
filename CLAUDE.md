@@ -712,6 +712,12 @@ reproducible build. It performs two jobs:
    answered from the node extent a `Thread::Backtrace::Location` carries.
    See `doc/error_highlight.md`.
 
+   `did_you_mean` is vendored unmodified and loaded lazily in the same
+   way (`builtins/did_you_mean_prelude.rb`): `DidYouMean` is an autoload,
+   run for the first NameError / KeyError / LoadError /
+   NoMatchingPatternKeyError that is asked for its detailed message or
+   its `corrections`. `--disable-did_you_mean` leaves it out.
+
 > **Note**: `build.rs` declares `cargo:rerun-if-changed` for each source tree
 > (and the `.ruby-version` pin and the install root's `.build-stamp` self-heal
 > file), so edits to `builtins/`, `stdlib/`, `gem/`, or the vendored snapshot
