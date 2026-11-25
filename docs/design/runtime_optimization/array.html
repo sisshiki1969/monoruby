@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-9088aae9.js";
+            window.path_to_searchindex_js = "../../searchindex-d2665449.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -571,12 +571,20 @@ unstable で良い。許可は <code>BASIC_OP_DEFS</code> + <code>cmp_redefined<
 <code>rb_cmpint</code> に従い、Bignum は符号を直接読み、非 Integer は <code>&lt;=&gt; 0</code> でなく
 <code>&gt; 0</code> と <code>&lt; 0</code> を尋ねる。<code>min(n)</code> / <code>max(n)</code> は部分選択ではなく rooted な
 コピーの 1 回ソートを使う。</li>
-<li><strong><code>hash</code> / <code>eql?</code></strong>: 外側再帰は <code>exec_recursive_outer_unregistered</code> で
+<li><strong><code>hash</code> / <code>eql?</code></strong>: 外側再帰は <code>exec_recursive_outer</code> で
 畳み、循環構造はすべて同じ番兵にハッシュする（<code>rec.hash == [{x: rec}].hash</code>
 が <code>eql?</code> と整合する）。<code>Store::has_builtin_container_hash</code> が「この
 Array / Hash はまだ builtin の <code>:hash</code> に解決するか」を class version で
-キャッシュしていて、真なら <code>Value::ruby_hash</code> が構造ダイジェストを
-<strong>native で</strong>計算する。singleton / mock / monkey-patch があれば dispatch。</li>
+キャッシュしていて、真なら <code>Value::hash_value</code>（<code>array_hash_value</code>）が
+構造ハッシュを<strong>native で</strong>計算する。singleton / mock / monkey-patch が
+あれば dispatch。要素が葉（immediate / Bignum / Float / String）だけの
+Array は再帰ガードも通らない。要素の <code>#hash</code> / <code>eql?</code> / <code>==</code> は Ruby で、
+歩いている Array 自身を縮めうるので、<code>hash</code>・<code>eql?</code>（<code>Value::array_elements_eql</code>、
+Hash の probe が Array キーを比べるのもこれ）・<code>==</code> は呼び出しのたびに長さと
+要素を読み直す（<code>rb_ary_hash</code> / <code>recursive_eql</code> / <code>recursive_equal</code> と同じ）。
+1 本の <code>&amp;ArrayInner</code> を呼び出しをまたいで持つと、コンパイラが長さを 1 回しか
+読まず、pop 済みの要素を歩くことがある。呼び出しの要らない先頭部分
+（immediate、同一オブジェクト）だけはスライスのまま比べる。</li>
 <li><strong><code>include?</code> / <code>index</code> / <code>count</code> / <code>delete</code></strong>（<code>EqSearch</code>、<code>executor/op.rs</code>）:
 needle を 1 回準備してから走査する。Integer / Symbol / nil / true / false
 の needle なら同クラスでビットが違う要素は <code>==</code> 無しで不一致、String は

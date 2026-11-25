@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9088aae9.js";
+            window.path_to_searchindex_js = "../searchindex-d2665449.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -1025,15 +1025,15 @@ op は無く（<code>opt_neq</code> は <code>BOP_EQ</code> に乗る）、<code
 <p>理由は BOP 表の性質そのものにある。表は「この仮定を置いてよい」という<em>許可</em>と
 <em>検知</em>であって、速度は「仮定を使う fast path」を書いて初めて出る。そして
 <code>hash</code> / <code>eql?</code> については <strong>その fast path が既にあり、無条件に効いている</strong> —
-<code>Value::ruby_hash</code> / <code>Value::eql</code>（<code>value.rs</code>）が <code>ObjTy</code> で分岐して Rust 側で
-直接計算する:</p>
+<code>Value::hash_value</code>（当時は <code>Value::ruby_hash</code>）/ <code>Value::eql</code>（<code>value.rs</code>）が
+<code>ObjTy</code> で分岐して Rust 側で直接計算する:</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th></th><th>ネイティブ計算（ディスパッチ無し）</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ruby_hash</code></td><td>Fixnum, Flonum, nil/true/false/Symbol, BigInt, Float, String, Array, Hash, Range</td></tr>
+<tr><td><code>hash_value</code></td><td>Fixnum, Flonum, nil/true/false/Symbol, BigInt, Float, String, Array, Hash（Range は #2204 の修正から <code>Range#hash</code> を dispatch）</td></tr>
 <tr><td><code>eql</code></td><td>同一 id, 両方 immediate, BigInt, Float, Complex, String, Array, Range, Hash</td></tr>
 </tbody>
 </table>
