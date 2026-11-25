@@ -6,6 +6,14 @@ use jitgen::{AbstractState, JitContext};
 // Hash class
 //
 
+/// CRuby's `RHASH_AR_TABLE_MAX_SIZE`: up to this many pairs a Hash is an
+/// "ar table", a linear array of pairs, and past it an st table. The
+/// boundary is observable where the two tables answer differently —
+/// `rb_hash_assoc` looks a key up by its hash only in an st table — and
+/// monoruby's own inline / boxed boundary is not the same one (it is
+/// about what the *keys* are), so the pair count stands in for it.
+const AR_TABLE_MAX_SIZE: usize = 8;
+
 pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_class_under_obj("Hash", HASH_CLASS, ObjTy::HASH);
     // `Hash.new(ifnone = nil, capacity: nil)` / `Hash.new { … }`. The
@@ -210,6 +218,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(HASH_CLASS, "sort", sort, 0);
     globals.define_builtin_func(HASH_CLASS, "store", index_assign, 2);
     globals.define_builtin_func(HASH_CLASS, "key", key, 1);
+    globals.define_builtin_funcs(HASH_CLASS, "has_value?", &["value?"], has_value, 1);
     globals.define_builtin_func(HASH_CLASS, "keep_if", keep_if, 0);
     globals.define_builtin_func(HASH_CLASS, "values", values, 0);
     globals.define_builtin_funcs_with_kw(
@@ -314,6 +323,7 @@ fn init_recv_escape(globals: &mut Globals) {
         ("values", RecvEscape::transparent()),
         ("values_at", RecvEscape::transparent()),
         ("key", RecvEscape::transparent()),
+        ("has_value?", RecvEscape::transparent()),
         ("assoc", RecvEscape::transparent()),
         ("rassoc", RecvEscape::transparent()),
         ("invert", RecvEscape::transparent()),
@@ -343,7 +353,6 @@ pub(crate) fn init_recv_escape_ruby(globals: &mut Globals) {
         ("slice", RecvEscape::transparent()),
         ("except", RecvEscape::transparent()),
         ("fetch_values", RecvEscape::transparent()),
-        ("has_value?", RecvEscape::transparent()),
         ("any?", RecvEscape::transparent()),
         ("all?", RecvEscape::transparent()),
         ("count", RecvEscape::transparent()),
@@ -2785,10 +2794,27 @@ fn sort(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn assoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let key = lfp.arg(0);
     let hash = lfp.self_val().as_hash();
+    if hash.len() == 0 {
+        return Ok(Value::nil());
+    }
+    // `rb_hash_assoc`: a Hash whose table is an st one — more pairs than
+    // an ar table holds — and not an identity table looks the key up
+    // first: one `#hash` on the argument, and the pairs filed under it
+    // compared with the argument's `==`. Found that way, the pair is
+    // `[argument, stored value]`, as `rb_assoc_new(key, value)` makes it.
+    // Only a miss scans (#2206).
+    if hash.len() > AR_TABLE_MAX_SIZE && !hash.is_compare_by_identity() {
+        if let Some(value) = hash.assoc_value(key, vm, globals)? {
+            return Ok(Value::array2(key, value));
+        }
+    }
     // Walked (`Hashmap::walk`): a key's `==` may change the receiver.
     let mut found = Value::nil();
     hash.walk(vm, globals, |vm, globals, _, k, v| {
-        let hit = vm.eq_values_bool(globals, key, k)?;
+        // `rb_equal(argument, stored key)` (`assoc_i`): the argument is
+        // the receiver of the `==`, and a key that *is* the argument is
+        // found without a call.
+        let hit = vm.rb_equal(globals, key, k)?;
         if hit {
             found = Value::array2(k, v);
         }
@@ -2810,7 +2836,8 @@ fn rassoc(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // Walked (`Hashmap::walk`): a value's `==` may change the receiver.
     let mut found = Value::nil();
     hash.walk(vm, globals, |vm, globals, _, k, v| {
-        let hit = vm.eq_values_bool(globals, value, v)?;
+        // `rb_equal(argument, stored value)` (`rassoc_i`).
+        let hit = vm.rb_equal(globals, value, v)?;
         if hit {
             found = Value::array2(k, v);
         }
@@ -4420,13 +4447,37 @@ fn key(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
     // Walked (`Hashmap::walk`): a value's `==` may change the receiver.
     let mut found = Value::nil();
     hash.walk(vm, globals, |vm, globals, _, k, v| {
-        let hit = vm.eq_values_bool(globals, v, target)?;
+        // `rb_equal(stored value, argument)` (`key_i`).
+        let hit = vm.rb_equal(globals, v, target)?;
         if hit {
             found = k;
         }
         Ok(hit)
     })?;
     Ok(found)
+}
+
+///
+/// ### Hash#has_value?
+///
+/// - has_value?(value) -> bool
+/// - value?(value) -> bool
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Hash/i/has_value=3f.html]
+#[monoruby_builtin]
+fn has_value(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let hash = lfp.self_val().as_hash();
+    let target = lfp.arg(0);
+    // Walked (`Hashmap::walk`): a value's `==` may change the receiver.
+    let mut found = false;
+    hash.walk(vm, globals, |vm, globals, _, _, v| {
+        // `rb_equal(stored value, argument)` (`rb_hash_search_value`): the
+        // stored value is the receiver of the `==`, and one that *is* the
+        // argument answers true without it.
+        found = vm.rb_equal(globals, v, target)?;
+        Ok(found)
+    })?;
+    Ok(Value::bool(found))
 }
 
 ///
@@ -7637,6 +7688,7 @@ mod tests {
         // across the `warn` call and the Ruby dispatches inside `get`.
         // Covers all four outcomes: hit, default argument, block, and the
         // block-supersedes-default warning path.
+        let _g = env_lock();
         run_test(
             r#"
             ENV["MONORUBY_COV_FETCH"] = "hit"

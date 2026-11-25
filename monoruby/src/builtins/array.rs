@@ -30,10 +30,6 @@ pub(super) fn init(globals: &mut Globals) {
     // suite), and a future pre-load `Array.new(n)` fails loudly through
     // `Object#initialize`'s arity check rather than silently diverging.
     // Native legs of the Ruby `initialize` (private, `__`-prefixed).
-    // `rb_equal` for the Ruby-level searches in builtins/array.rb
-    // (`rindex`, `assoc`, `rassoc`), which need the identity step a bare
-    // `==` does not have.
-    globals.define_private_builtin_func(ARRAY_CLASS, "__rb_equal", rb_equal_, 2);
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_fill", init_fill, 2);
     globals.define_private_builtin_func(ARRAY_CLASS, "__init_from", init_from, 1);
     globals.define_private_builtin_func(ARRAY_CLASS, "__size_to_int", size_to_int, 1);
@@ -856,6 +852,134 @@ fn ary_make_set(ary: Array, vm: &mut Executor, globals: &mut Globals) -> Result<
     Ok(set)
 }
 
+/// The leading elements of `ary` whose keys ask nothing
+/// ([`crate::value::rvalue::is_observed_key`] is false: immediates, plain
+/// Strings, Bignums, non-zero Floats, objects that are keys by identity).
+/// No Ruby runs while they are hashed, so `ary` cannot change under the
+/// walk and nothing can be collected: the ones to keep are gathered in
+/// Rust memory, and neither they nor `seen`'s keys need rooting.
+///
+/// Answers where it stopped — the position of the first element whose key
+/// has to be asked, or the end.
+fn ary_add_new_unasked(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    seen: &mut RubySet<Value>,
+    ary: Array,
+    kept: &mut Vec<Value>,
+) -> Result<usize> {
+    let mut i = 0;
+    while i < ary.len() {
+        let elem = ary[i];
+        if crate::value::rvalue::is_observed_key(elem, globals) {
+            break;
+        }
+        if seen.insert(elem, vm, globals)? {
+            kept.push(elem);
+        }
+        i += 1;
+    }
+    Ok(i)
+}
+
+/// `ary_add_hash` / `ary_add_hash_by` from the position `start` on:
+/// append to `res` each element of `ary` whose key no earlier element
+/// had. The key is the element, or what the block answers for it; keys
+/// are compared as Hash keys.
+///
+/// A key's `#hash` / `eql?` and the block may resize `ary`, so its length
+/// and the element are read afresh each round: an element that was popped
+/// in the meantime is not looked at (#2213).
+///
+/// The caller holds a temp scope and has rooted `res` and `ary`. `seen`
+/// is not marked, so each key it keeps is rooted here: the element of a
+/// pair it accepted is in `res` by then, and a block's answer is pushed.
+fn ary_add_new_asked(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    seen: &mut RubySet<Value>,
+    mut res: Array,
+    ary: Value,
+    block: Option<&ProcData>,
+    start: usize,
+) -> Result<()> {
+    // Two slots, kept for the walk: the element being asked, and its key
+    // for the duration of the probe (as `HashRef::walk_from` keeps its).
+    let elem_slot = vm.temp_len();
+    vm.temp_push(Value::nil());
+    vm.temp_push(Value::nil());
+    let mut i = start;
+    while let Some(elem) = ary.as_array().get(i).copied() {
+        i += 1;
+        if !elem.is_packed_value() {
+            vm.temp_set(elem_slot, elem);
+        }
+        let key = match block {
+            Some(data) => vm.invoke_block(globals, data, &[elem])?,
+            None => elem,
+        };
+        // The key for the duration of the probe, whatever it answers.
+        if !key.is_packed_value() {
+            vm.temp_set(elem_slot + 1, key);
+        }
+        if seen.insert(key, vm, globals)? {
+            res.push(elem);
+            if block.is_some() && !key.is_packed_value() {
+                // Kept by `seen`, and asked `eql?` by later rounds.
+                vm.temp_push(key);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `ary_add_hash` over the whole of `ary`, appending to `res`
+/// ([`ary_add_new_unasked`] while it can, then [`ary_add_new_asked`]).
+fn ary_add_new(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    seen: &mut RubySet<Value>,
+    mut res: Array,
+    ary: Array,
+) -> Result<()> {
+    let mut kept = Vec::with_capacity(ary.len());
+    let start = ary_add_new_unasked(vm, globals, seen, ary, &mut kept)?;
+    res.extend(kept);
+    ary_add_new_asked(vm, globals, seen, res, ary.into(), None, start)
+}
+
+/// `ary_make_hash` + `rb_hash_values`: the elements of `ary` without
+/// those whose key an earlier one had, as a fresh Array. The caller holds
+/// a temp scope (the result is rooted in it).
+fn ary_uniq_values(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    ary: Value,
+    block: Option<BlockHandler>,
+) -> Result<Array> {
+    let mut seen = RubySet::default();
+    // Room for the elements the no-call pass keeps; with a block there is
+    // no such pass, since the block is Ruby.
+    let mut kept = match block {
+        Some(_) => vec![],
+        None => Vec::with_capacity(ary.as_array().len()),
+    };
+    let start = match block {
+        Some(_) => 0,
+        None => ary_add_new_unasked(vm, globals, &mut seen, ary.as_array(), &mut kept)?,
+    };
+    let res = Array::new_from_vec(kept);
+    vm.temp_push(res.into());
+    if start < ary.as_array().len() {
+        let data = match block {
+            Some(bh) => Some(vm.get_block_data(globals, bh)?),
+            None => None,
+        };
+        ary_add_new_asked(vm, globals, &mut seen, res, ary, data.as_ref(), start)?;
+    }
+    Ok(res)
+}
+
 /// `rb_ary_and`: the elements of `lhs` that are also in `rhs`, without
 /// duplicates, in `lhs` order. The caller roots both arrays.
 fn ary_and(lhs: Array, rhs: Array, vm: &mut Executor, globals: &mut Globals) -> Result<Array> {
@@ -1039,7 +1163,7 @@ fn ary_union_multi(
     globals: &mut Globals,
 ) -> Result<Value> {
     let sum = lhs.len() + others.iter().map(|a| a.len()).sum::<usize>();
-    let mut res = Array::new_empty();
+    let res = Array::new_empty();
     vm.with_temp_scope(|vm| {
         vm.temp_push(res.into());
         if sum <= SMALL_ARRAY_LEN {
@@ -1048,11 +1172,11 @@ fn ary_union_multi(
                 ary_union_linear(res, *other, vm, globals)?;
             }
         } else {
-            res.extend(lhs.iter().cloned());
+            let mut seen = RubySet::default();
+            ary_add_new(vm, globals, &mut seen, res, lhs)?;
             for other in others {
-                res.extend(other.iter().cloned());
+                ary_add_new(vm, globals, &mut seen, res, *other)?;
             }
-            res.uniq(vm, globals)?;
         }
         Ok(res.into())
     })
@@ -1427,55 +1551,48 @@ fn eq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Res
 #[monoruby_builtin]
 fn cmp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_val = lfp.self_val();
-    let arg = lfp.arg(0);
-    let lhs = self_val.as_array();
-    let rhs = if let Some(rhs) = arg.try_array_ty() {
-        rhs
-    } else if let Some(v) = crate::coerce::check_funcall(vm, globals, arg, IdentId::TO_ARY)? {
-        if let Some(ary) = v.try_array_ty() {
-            ary
-        } else {
-            return Ok(Value::nil());
-        }
-    } else {
+    // `rb_check_array_type`: a `to_ary` that answers something other than
+    // an Array or nil is a TypeError.
+    let Some(rhs) = lfp.arg(0).check_array_type(vm, globals)? else {
         return Ok(Value::nil());
     };
+    if self_val.id() == rhs.id() {
+        return Ok(Value::integer(Ordering::Equal as i64));
+    }
     // `rhs` may be a fresh Array `#to_ary` made, held only here across
     // every element's `<=>`: root it, or a collection there frees it.
     vm.with_temp_scope(|vm| {
         vm.temp_push(rhs.into());
+        // `recursive_cmp`: the first pair whose `<=>` is not exactly the
+        // Fixnum `0` decides, with its *raw* answer (`nil`, `±1`, or even
+        // a String). The pairs are those below the shorter length *as it
+        // was on entry*; an element's `<=>` may resize either Array, so
+        // each element is read afresh, and one that is gone by then is
+        // `nil` (`rb_ary_elt`).
+        let mut decided = None;
         crate::value::exec_recursive_paired(
             self_val.id(),
-            arg.id(),
+            rhs.id(),
             || {
-                // By index, as CRuby's `recursive_cmp` does: an element's
-                // `<=>` may resize either Array, so neither is held as an
-                // iterator across the call.
-                let mut i = 0;
-                while let Some(&l) = lhs.get(i) {
-                    if let Some(&r) = rhs.get(i) {
-                        // Compare each pair with the element's own `<=>` and
-                        // return the *raw* result of the first pair that isn't
-                        // exactly the Fixnum `0` — CRuby returns whatever the
-                        // element comparison produced (`nil`, `±1`, or even a
-                        // non-Integer like a String), not a normalized value.
-                        let res =
-                            vm.invoke_method_inner(globals, IdentId::_CMP, l, &[r], None, None)?;
-                        if res.try_fixnum() != Some(0) {
-                            return Ok(res);
-                        }
-                    } else {
-                        return Ok(Value::integer(Ordering::Greater as i64));
+                let len = self_val.as_array().len().min(rhs.len());
+                for i in 0..len {
+                    let l = self_val.as_array().get(i).copied().unwrap_or_default();
+                    let r = rhs.get(i).copied().unwrap_or_default();
+                    let res =
+                        vm.invoke_method_inner(globals, IdentId::_CMP, l, &[r], None, None)?;
+                    if res.try_fixnum() != Some(0) {
+                        decided = Some(res);
+                        break;
                     }
-                    i += 1;
                 }
-                if rhs.len() > lhs.len() {
-                    return Ok(Value::integer(Ordering::Less as i64));
-                }
-                Ok(Value::integer(Ordering::Equal as i64))
+                Ok(Value::nil())
             },
-            Value::integer(Ordering::Equal as i64),
-        )
+            Value::nil(),
+        )?;
+        // No pair decided, or this very pair is already being compared
+        // further up: the lengths as they are now do.
+        Ok(decided
+            .unwrap_or_else(|| Value::integer(self_val.as_array().len().cmp(&rhs.len()) as i64)))
     })
 }
 
@@ -4004,20 +4121,6 @@ fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 ///
 /// - include?(val) -> bool
 ///
-/// `rb_equal(element, needle)` for the Ruby-level searches: `element ==
-/// needle`, except that an element which *is* the needle is equal however
-/// its `==` answers. Private; see the registration above.
-///
-#[monoruby_builtin]
-fn rb_equal_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    Ok(Value::bool(vm.rb_equal(globals, lfp.arg(0), lfp.arg(1))?))
-}
-
-///
-/// #### Array#include?
-///
-/// - include?(val) -> bool
-///
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/include=3f.html]
 #[monoruby_builtin]
 fn include_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
@@ -4426,93 +4529,33 @@ fn intersect_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Array/i/uniq.html]
 #[monoruby_builtin]
 fn uniq(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    match lfp.block() {
-        None => {
-            let mut ary = Array::new_from_vec(lfp.self_val().as_array().to_vec());
-            // Root the fresh copy across `uniq`'s Ruby `hash`/`eql?`
-            // dispatches.
-            vm.with_temp_scope(|vm| {
-                vm.temp_push(ary.into());
-                ary.uniq(vm, globals)?;
-                Ok(ary.into())
-            })
-        }
-        Some(bh) => vm.with_temp_scope(|vm| {
-            let data = vm.get_block_data(globals, bh)?;
-            // `result` is a GC-rooted Array on the temp_stack; collected
-            // elements come from self's array (already rooted via lfp), but
-            // each block-returned `key` is a fresh allocation that we also
-            // temp_push so that the unmarked RubySet below holds only live
-            // pointers across subsequent invoke_block / h.insert callbacks.
-            vm.temp_array_new(None);
-            let result_idx = vm.temp_len() - 1;
-            let mut h = RubySet::default();
-            let mut i = 0;
-            loop {
-                let ary = lfp.self_val().as_array();
-                if i >= ary.len() {
-                    break;
-                }
-                let elem = ary[i];
-                let key = vm.invoke_block(globals, &data, &[elem])?;
-                vm.temp_push(key);
-                if h.insert(key, vm, globals)? {
-                    vm.temp_at(result_idx).as_array().push(elem);
-                }
-                i += 1;
-            }
-            Ok(vm.temp_at(result_idx))
-        }),
+    let self_val = lfp.self_val();
+    // `rb_ary_uniq`: nothing to compare with, so neither `#hash` nor the
+    // block is called.
+    if self_val.as_array().len() <= 1 {
+        return Ok(Value::array_from_vec(self_val.as_array().to_vec()));
     }
+    vm.with_temp_scope(|vm| Ok(ary_uniq_values(vm, globals, self_val, lfp.block())?.into()))
 }
 
 #[monoruby_builtin]
 fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    lfp.self_val().ensure_not_frozen(&globals.store)?;
-    let deleted = match lfp.block() {
-        None => {
-            let mut ary = lfp.self_val().as_array();
-            ary.uniq(vm, globals)?
-        }
-        Some(bh) => vm.with_temp_scope(|vm| -> Result<bool> {
-            let data = vm.get_block_data(globals, bh)?;
-            let mut h = RubySet::default();
-            let mut i = 0;
-            let mut del = 0;
-            loop {
-                let ary = lfp.self_val().as_array();
-                if i >= ary.len() {
-                    break;
-                }
-                let elem = ary[i];
-                let key = vm.invoke_block(globals, &data, &[elem])?;
-                // Keep `key` alive across the rest of the loop so the unmarked
-                // RubySet's stored pointers remain valid when h.insert() of a
-                // future iteration dereferences them via .eql?.
-                vm.temp_push(key);
-                if h.insert(key, vm, globals)? {
-                    if del > 0 {
-                        let mut ary = lfp.self_val().as_array();
-                        ary[i - del] = elem;
-                    }
-                } else {
-                    del += 1;
-                }
-                i += 1;
-            }
-            if del > 0 {
-                let mut ary = lfp.self_val().as_array();
-                let new_len = ary.len() - del;
-                ary.truncate(new_len);
-            }
-            Ok(del > 0)
-        })?,
-    };
-    if deleted {
-        Ok(lfp.self_val())
-    } else {
-        Ok(Value::nil())
+    let self_val = lfp.self_val();
+    self_val.ensure_not_frozen(&globals.store)?;
+    if self_val.as_array().len() <= 1 {
+        return Ok(Value::nil());
     }
+    vm.with_temp_scope(|vm| {
+        let res = ary_uniq_values(vm, globals, self_val, lfp.block())?;
+        // `rb_ary_uniq_bang`: the receiver as it is *now* decides — a
+        // key's method or the block may have resized or frozen it.
+        if self_val.as_array().len() == res.len() {
+            return Ok(Value::nil());
+        }
+        self_val.ensure_not_frozen(&globals.store)?;
+        self_val.as_array().replace(res.to_vec());
+        Ok(self_val)
+    })
 }
 
 ///

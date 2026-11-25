@@ -219,11 +219,13 @@ module Enumerable
     else
       raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)" if args.size > 1
       warn "warning: given block not used" if block_given?
-      # When given a value, block is ignored (matches CRuby) — search by ==.
+      # When given a value, block is ignored (matches CRuby) — search by
+      # `rb_equal`, which finds an element that *is* the target whatever
+      # its `==` answers.
       target = args[0]
       i = 0
       __gather_each do |x|
-        return i if x == target
+        return i if __rb_equal(x, target)
         i += 1
       end
       nil
@@ -676,7 +678,9 @@ module Enumerable
   end
 
   def include?(obj)
-    __gather_each { |x| return true if x == obj }
+    # `rb_equal`: an element that *is* `obj` is found however its `==`
+    # answers, and without calling it.
+    __gather_each { |x| return true if __rb_equal(x, obj) }
     false
   end
   alias member? include?
