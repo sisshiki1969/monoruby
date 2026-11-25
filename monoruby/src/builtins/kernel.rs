@@ -3720,6 +3720,86 @@ const POSIX_SH_CMDS: &[&str] = &[
     "shift", "then", "times", "trap", "umask", "unset", "until", "wait", "while",
 ];
 
+/// `$?` for a command that could not be exec'd at all: CRuby forks, the
+/// child's exec fails, and that child leaves with status 127, so `$?` is
+/// an exit-127 Status. Nothing is forked on this path (the failure is the
+/// parent's own, out of `std::process::Command`), so the pid is 0 where
+/// CRuby has the child's.
+fn set_exec_failure_status(vm: &mut Executor, globals: &mut Globals) {
+    if let Ok(status) = crate::builtins::process::new_status(vm, globals, 127 << 8, 0) {
+        crate::scheduler::set_last_status(vm, status);
+    }
+}
+
+/// A raw `poll(2)` / `read(2)` result: `None` where the call is simply to
+/// be made again (`EINTR`, `EAGAIN`).
+fn retriable(ret: isize) -> std::io::Result<Option<usize>> {
+    if ret >= 0 {
+        return Ok(Some(ret as usize));
+    }
+    let e = std::io::Error::last_os_error();
+    match e.kind() {
+        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock => Ok(None),
+        _ => Err(e),
+    }
+}
+
+/// Read a child's two pipes to EOF, taking from whichever has something
+/// next, so that neither fills up while the other is being drained --
+/// which is what `Child::wait_with_output` does with the two of them,
+/// and what reading one and then the other would get wrong. Touches
+/// nothing of the interpreter, so it may run with the GVL released.
+fn drain_child_output(
+    out: Option<std::process::ChildStdout>,
+    err: Option<std::process::ChildStderr>,
+) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
+    use std::os::fd::AsRawFd;
+    let mut bufs = [Vec::new(), Vec::new()];
+    let mut live: Vec<(i32, usize)> = [
+        out.as_ref().map(|o| o.as_raw_fd()),
+        err.as_ref().map(|e| e.as_raw_fd()),
+    ]
+    .into_iter()
+    .enumerate()
+    .filter_map(|(i, fd)| fd.map(|fd| (fd, i)))
+    .collect();
+    let mut chunk = [0u8; 8192];
+    while !live.is_empty() {
+        let mut polls: Vec<libc::pollfd> = live
+            .iter()
+            .map(|&(fd, _)| libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        // SAFETY: `polls` is a valid array of its length.
+        let n = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as libc::nfds_t, -1) };
+        retriable(n as isize)?;
+        let mut done = vec![];
+        for (slot, poll) in polls.iter().enumerate() {
+            if poll.revents == 0 {
+                continue;
+            }
+            let (fd, which) = live[slot];
+            // SAFETY: reading a descriptor we own into a local buffer.
+            let got =
+                unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
+            match retriable(got)? {
+                // End of file: the write end is gone.
+                Some(0) => done.push(slot),
+                Some(got) => bufs[which].extend_from_slice(&chunk[..got]),
+                None => {}
+            }
+        }
+        for slot in done.into_iter().rev() {
+            live.remove(slot);
+        }
+    }
+    let [stdout, stderr] = bufs;
+    Ok((stdout, stderr))
+}
+
 pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
     let mut args = vec![];
     let include_meta = input.contains([
@@ -3771,6 +3851,11 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // `system` differs from the conversion methods: a `nil` here is the
     // default (no exception), not an error. It is `system`'s own option,
     // so it is taken out before the rest reaches the spawn parser.
+    // CRuby's `rb_f_system` forgets `$?` before it spawns anything, so
+    // one that never reaches a wait (a command that cannot be run, a
+    // fiber scheduler's `#process_wait` raising) leaves no status from
+    // whatever ran before it.
+    crate::scheduler::clear_last_status(vm);
     let mut exception = false;
     let spec = vm.with_temp_scope(|vm| {
         if argv.len() > 1
@@ -3824,8 +3909,8 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             }
             Err(err) => return Err(err),
         };
-        let Some((_, raw, status_obj)) =
-            crate::builtins::process::waitpid_status(vm, globals, pid as i32, 0)?
+        let Some((raw, status_obj)) =
+            crate::builtins::process::system_wait(vm, globals, pid as i32)?
         else {
             return Ok(Value::nil());
         };
@@ -3863,17 +3948,18 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     let mut cmd = Command::new(&program);
     cmd.args(&args);
     crate::scheduler::command_for_child(&mut cmd);
-    let mut child = match cmd.spawn() {
-        Ok(child) => child,
+    let spawned = match cmd.spawn() {
         // ENOEXEC (an executable file without a shebang that isn't a
         // binary): retry through `sh`, like execvp-era shells and CRuby.
         Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
-            match Command::new("/bin/sh").arg(&program).args(&args).spawn() {
-                Ok(child) => child,
-                Err(_) => return Ok(Value::nil()),
-            }
+            Command::new("/bin/sh").arg(&program).args(&args).spawn()
         }
+        spawned => spawned,
+    };
+    let mut child = match spawned {
+        Ok(child) => child,
         Err(err) => {
+            set_exec_failure_status(vm, globals);
             if exception {
                 // e.g. Errno::ENOENT: "No such file or directory - cmd"
                 return Err(MonorubyErr::from_io_err(
@@ -3886,42 +3972,51 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     };
     let pid = child.id();
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(_) => return Ok(Value::nil()),
-    };
-    // Set `$?` / Process.last_status from the raw wait(2) status, like
-    // CRuby does after #system.
-    {
-        use std::os::unix::process::ExitStatusExt;
-        let raw = status.into_raw();
-        if let Ok(status_class) =
-            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-        {
-            if let Ok(status_obj) = vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("__new"),
-                status_class,
-                &[Value::integer(raw as i64), Value::integer(pid as i64)],
-                None,
-                None,
-            ) {
-                crate::scheduler::set_last_status(vm, status_obj);
-            }
+    // The scheduler's `#process_wait` takes the wait in a non-blocking
+    // fiber; otherwise this one waits itself, with the GVL released, so
+    // that the other threads of this process keep running for as long as
+    // the child does.
+    let raw = match crate::builtins::process::system_wait(vm, globals, pid as i32)? {
+        Some((raw, status_obj)) => {
+            // The child was reaped by the scheduler, so there is nothing
+            // left for `Child`'s own wait; dropping it reaps nothing.
+            drop(child);
+            crate::scheduler::set_last_status(vm, status_obj);
+            raw
         }
-    }
-    if exception && !status.success() {
-        use std::os::unix::process::ExitStatusExt;
-        let detail = match (status.code(), status.signal()) {
-            (Some(code), _) => format!("exit {code}"),
-            (None, Some(sig)) => format!("signal {sig}"),
-            _ => "unknown status".to_string(),
+        None => {
+            use std::os::unix::process::ExitStatusExt;
+            let status = match crate::scheduler::without_gvl(vm, || child.wait()) {
+                Ok(status) => status,
+                Err(_) => return Ok(Value::nil()),
+            };
+            // Set `$?` / Process.last_status from the raw wait(2) status,
+            // like CRuby does after #system.
+            let raw = status.into_raw();
+            let status_obj = crate::builtins::process::new_status(vm, globals, raw, pid as i32)?;
+            crate::scheduler::set_last_status(vm, status_obj);
+            raw
+        }
+    };
+    let success = libc::WIFEXITED(raw) && libc::WEXITSTATUS(raw) == 0;
+    if exception && !success {
+        let detail = if libc::WIFEXITED(raw) {
+            format!("exit {}", libc::WEXITSTATUS(raw))
+        } else if libc::WIFSIGNALED(raw) {
+            // CRuby: "SIGKILL (signal 9)".
+            let signo = libc::WTERMSIG(raw);
+            match crate::builtins::process::signal_number_to_name(signo as i64) {
+                Some(name) => format!("SIG{name} (signal {signo})"),
+                None => format!("signal {signo}"),
+            }
+        } else {
+            "unknown status".to_string()
         };
         return Err(MonorubyErr::runtimeerr(format!(
             "Command failed with {detail}: {cmd_str}"
         )));
     }
-    Ok(Value::bool(status.success()))
+    Ok(Value::bool(success))
 }
 
 ///
@@ -4045,14 +4140,18 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         }
     };
     crate::scheduler::command_for_child(&mut builder);
-    let child = builder
+    let mut child = match builder
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|err| {
-            // e.g. Errno::ENOENT for a nonexistent command (the direct-exec
-            // path; the shell path reports through the exit status instead).
-            MonorubyErr::from_io_err(
+    {
+        Ok(child) => child,
+        // e.g. Errno::ENOENT for a nonexistent command (the direct-exec
+        // path; the shell path reports through the exit status instead).
+        // `$?` is the exit-127 of CRuby's failed child either way.
+        Err(err) => {
+            set_exec_failure_status(vm, globals);
+            return Err(MonorubyErr::from_io_err(
                 &globals.store,
                 &err,
                 format!(
@@ -4060,10 +4159,56 @@ fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                     errno_description(&err),
                     String::from_utf8_lossy(&bytes)
                 ),
-            )
-        })?;
+            ));
+        }
+    };
     let pid = child.id();
-    match child.wait_with_output() {
+    // In a non-blocking fiber with a scheduler, waiting for the child is
+    // the scheduler's `#process_wait` (CRuby reaches it through
+    // `rb_io_close` on the pipe), and its answer is read as `rb_waitpid`
+    // reads it: nil reaped nothing and leaves no `$?`, anything else but
+    // a Status raises. The pipes are drained first, so this cannot be
+    // `wait_with_output`, which waits as well.
+    if !vm.is_fiber_blocking() && globals.fiber_scheduler.is_some() {
+        let out = child.stdout.take();
+        let err = child.stderr.take();
+        let drained = crate::scheduler::without_gvl(vm, move || drain_child_output(out, err));
+        let answer = crate::builtins::process::scheduler_process_wait(vm, globals, pid as i32, 0);
+        // Our own wait, wherever the hook did not take it: a scheduler
+        // without one, and one that raised, so that no child is left
+        // behind.
+        let own = match answer {
+            Ok(Some(_)) => None,
+            _ => Some(crate::scheduler::without_gvl(vm, || {
+                use std::os::unix::process::ExitStatusExt;
+                child.wait().map(|st| st.into_raw()).unwrap_or(0)
+            })),
+        };
+        let (stdout, stderr) = drained
+            .map_err(|e| MonorubyErr::from_io_err(&globals.store, &e, errno_description(&e)))?;
+        let status_obj = match (answer?, own) {
+            (Some(answer), _) => crate::builtins::process::hooked_last_status(vm, globals, answer)?,
+            (None, raw) => Some(crate::builtins::process::new_status(
+                vm,
+                globals,
+                raw.unwrap_or(0),
+                pid as i32,
+            )?),
+        };
+        std::io::stderr().write_all(&stderr).unwrap();
+        if let Some(status_obj) = status_obj {
+            crate::scheduler::set_last_status(vm, status_obj);
+        }
+        let mut s = Value::string_from_vec(stdout);
+        let ext_obj = super::io::enc_default_external_obj(globals);
+        if let Some(enc) = super::io::enc_obj_to_enum(globals, ext_obj) {
+            s.as_rstring_inner_mut().set_encoding(enc);
+        }
+        return Ok(s);
+    }
+    // The whole wait runs with the GVL released: it lasts as long as the
+    // child does, and the other threads of this process keep running.
+    match crate::scheduler::without_gvl(vm, || child.wait_with_output()) {
         Ok(output) => {
             std::io::stderr().write_all(&output.stderr).unwrap();
             // Set `$?` / Process.last_status from the raw wait(2) status so
@@ -10568,6 +10713,34 @@ mod tests {
             "false.nil?",
             "[].nil?",
         ]);
+    }
+
+    /// The backtick's drain of the child's pipes ends with the error of
+    /// a read that failed, and makes again one that only had nothing
+    /// yet.
+    #[test]
+    fn drain_child_output_reports_a_failed_read() {
+        use std::os::fd::{AsRawFd, OwnedFd};
+        // A regular file always polls ready, and one opened for writing
+        // only cannot be read: `EBADF`.
+        let path = std::env::temp_dir().join(format!("monoruby_drain_{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        let out = std::process::ChildStdout::from(OwnedFd::from(file));
+        let err = super::drain_child_output(Some(out), None).unwrap_err();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
+
+        // An empty non-blocking pipe: `EAGAIN`, which is no error.
+        let (reader, _writer) = std::io::pipe().unwrap();
+        let fd = reader.as_raw_fd();
+        let mut byte = 0u8;
+        // SAFETY: `fd` is the open read end, and `byte` a one-byte buffer.
+        let got = unsafe {
+            libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
+            libc::read(fd, &mut byte as *mut u8 as *mut libc::c_void, 1)
+        };
+        assert_eq!(super::retriable(got).unwrap(), None);
+        assert_eq!(super::retriable(3).unwrap(), Some(3));
     }
 
     #[test]

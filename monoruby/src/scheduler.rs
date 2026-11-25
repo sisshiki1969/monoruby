@@ -470,6 +470,14 @@ pub(crate) fn set_last_status(vm: &mut Executor, status: Value) {
     thread.as_thread_inner_mut().last_status = Some(status);
 }
 
+/// Forget the current thread's `$?` / `Process.last_status` (CRuby's
+/// `rb_last_status_clear`): a wait that reaped nothing leaves no status
+/// behind, and neither does one that has not finished.
+pub(crate) fn clear_last_status(vm: &mut Executor) {
+    let mut thread = current_thread(vm);
+    thread.as_thread_inner_mut().last_status = None;
+}
+
 /// All alive threads (`Thread.list`).
 pub(crate) fn thread_list(vm: &mut Executor) -> Vec<Value> {
     ensure_main(vm);

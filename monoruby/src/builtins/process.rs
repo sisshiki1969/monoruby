@@ -889,7 +889,10 @@ fn process_wait(
     _: BytecodePtr,
 ) -> Result<Value> {
     let Some((pid, status)) = do_waitpid(vm, globals, lfp)? else {
-        // WNOHANG and no child was ready.
+        // Nothing was reaped: `WNOHANG` with no child ready, or a fiber
+        // scheduler's `#process_wait` answering nil. `$?` is forgotten,
+        // as in CRuby's `proc_wait`.
+        crate::scheduler::clear_last_status(vm);
         return Ok(Value::nil());
     };
     crate::scheduler::set_last_status(vm, status);
@@ -909,7 +912,8 @@ fn process_wait2(
     _: BytecodePtr,
 ) -> Result<Value> {
     let Some((pid, status)) = do_waitpid(vm, globals, lfp)? else {
-        // WNOHANG and no child was ready.
+        // Nothing was reaped; see `process_wait`.
+        crate::scheduler::clear_last_status(vm);
         return Ok(Value::nil());
     };
     crate::scheduler::set_last_status(vm, status);
@@ -933,6 +937,169 @@ fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Opti
     waitpid_status(vm, globals, pid, flags).map(|r| r.map(|(pid, _, status)| (pid, status)))
 }
 
+/// CRuby's `rb_process_status_wait` asking the fiber scheduler first: in
+/// a non-blocking fiber with a scheduler that answers `#process_wait`,
+/// waiting for a child is the scheduler's business
+/// (`rb_fiber_scheduler_process_wait`), and `Some` holds whatever it
+/// answered. Nothing is checked here, as in CRuby, because every caller
+/// reads that answer its own way. `None` means nobody was asked: a
+/// blocking fiber, no scheduler, no such hook (it is optional, through
+/// `rb_check_funcall`), or `WNOHANG`, which does not block and so never
+/// asks.
+pub(crate) fn scheduler_process_wait(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pid: i32,
+    flags: i32,
+) -> Result<Option<Value>> {
+    if flags & libc::WNOHANG != 0 || vm.is_fiber_blocking() {
+        return Ok(None);
+    }
+    let Some(scheduler) = globals.fiber_scheduler else {
+        return Ok(None);
+    };
+    crate::value::coerce::check_funcall_args(
+        vm,
+        globals,
+        scheduler,
+        IdentId::get_id("process_wait"),
+        &[Value::integer(pid as i64), Value::integer(flags as i64)],
+    )
+}
+
+/// The raw wait status and the pid of the `Process::Status` the hook
+/// answered with, read as CRuby's `rb_check_typeddata` reads it
+/// (`rb_f_system`, and `rb_waitpid` once it has taken `nil` out):
+/// anything that is not a Status, `nil` included, is a TypeError. One
+/// that was never initialized reads as zeroes, like CRuby's freshly
+/// allocated one.
+pub(crate) fn hooked_status_fields(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    answer: Value,
+) -> Result<(i32, i32)> {
+    let class = vm
+        .get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?
+        .as_class()
+        .id();
+    if !answer.is_kind_of(&globals.store, class) {
+        return Err(MonorubyErr::typeerr(format!(
+            "wrong argument type {} (expected Process::Status)",
+            answer.builtin_class_name(&globals.store)
+        )));
+    }
+    let field = |globals: &Globals, name: &str| -> i32 {
+        globals
+            .store
+            .get_ivar(answer, IdentId::get_id(name))
+            .and_then(|v| v.try_fixnum())
+            .unwrap_or(0) as i32
+    };
+    Ok((field(globals, "/__status"), field(globals, "/__pid")))
+}
+
+/// What the hook answered, read as `rb_waitpid` reads it (`Process.wait`
+/// and its relatives).
+enum Hooked {
+    /// `nil`: no child was reaped, and `$?` is left alone.
+    Nothing,
+    /// A Status whose pid is -1 carries an errno rather than a child.
+    /// CRuby's `Process::Status.wait` puts `ECHILD` there when there is
+    /// nothing to wait for, which is the only errno it can be here,
+    /// since a Status is only ever made by the interpreter.
+    NoChild,
+    /// The reaped pid, its raw wait status, and the Status itself, which
+    /// is what `$?` becomes, as in `rb_waitpid`.
+    Reaped(i32, i32, Value),
+}
+
+/// The `$?` the hook's answer leaves behind, read as `rb_waitpid` reads
+/// it: `None` where there is none to set, which is `nil` (nothing was
+/// reaped) and a Status carrying an errno rather than a child.
+pub(crate) fn hooked_last_status(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    answer: Value,
+) -> Result<Option<Value>> {
+    Ok(match hooked_waitpid(vm, globals, answer)? {
+        Hooked::Nothing | Hooked::NoChild => None,
+        Hooked::Reaped(_, _, status) => Some(status),
+    })
+}
+
+/// A `Process::Status` over a raw `wait(2)` status word and the pid it
+/// came from, as every wait here makes one.
+pub(crate) fn new_status(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    raw: i32,
+    pid: i32,
+) -> Result<Value> {
+    let status_class = vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
+    vm.invoke_method_inner(
+        globals,
+        IdentId::get_id("__new"),
+        status_class,
+        &[Value::integer(raw as i64), Value::integer(pid as i64)],
+        None,
+        None,
+    )
+}
+
+fn hooked_waitpid(vm: &mut Executor, globals: &mut Globals, answer: Value) -> Result<Hooked> {
+    if answer.is_nil() {
+        return Ok(Hooked::Nothing);
+    }
+    let (raw, pid) = hooked_status_fields(vm, globals, answer)?;
+    if pid == -1 {
+        return Ok(Hooked::NoChild);
+    }
+    Ok(Hooked::Reaped(pid, raw, answer))
+}
+
+/// `Errno::ECHILD`, as the native `waitpid(2)` path raises it.
+fn echild(globals: &Globals) -> MonorubyErr {
+    let err = std::io::Error::from_raw_os_error(libc::ECHILD);
+    let msg = crate::builtins::errno::strerror(libc::ECHILD);
+    MonorubyErr::from_io_err(&globals.store, &err, msg)
+}
+
+/// `Kernel#system`'s wait for its child: the raw wait status and the
+/// `Process::Status` to put in `$?`. CRuby's `rb_f_system` asks the
+/// scheduler and reads the answer itself, so `nil` from the hook is a
+/// TypeError here, where `Process.wait` takes it for "no child".
+pub(super) fn system_wait(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pid: i32,
+) -> Result<Option<(i32, Value)>> {
+    if let Some(answer) = scheduler_process_wait(vm, globals, pid, 0)? {
+        let (raw, _) = hooked_status_fields(vm, globals, answer)?;
+        return Ok(Some((raw, answer)));
+    }
+    Ok(waitpid_status(vm, globals, pid, 0)?.map(|(_, raw, status)| (raw, status)))
+}
+
+/// `IO#close`'s wait for a popen child (CRuby's `rb_io_close`, through
+/// `rb_syswait`): the raw wait status and the `Process::Status` for `$?`,
+/// or `None` where there is none to set. The scheduler's `#process_wait`
+/// takes the wait when there is one; otherwise `waitpid(2)` runs with the
+/// GVL released, since it lasts as long as the child does.
+pub(crate) fn wait_popen_child(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    pid: u32,
+) -> Result<Option<(i32, Value)>> {
+    if let Some(answer) = scheduler_process_wait(vm, globals, pid as i32, 0)? {
+        return Ok(match hooked_waitpid(vm, globals, answer)? {
+            Hooked::Nothing | Hooked::NoChild => None,
+            Hooked::Reaped(_, raw, status) => Some((raw, status)),
+        });
+    }
+    let raw = crate::scheduler::without_gvl(vm, move || crate::value::rvalue::io::reap_child(pid));
+    Ok(Some((raw, new_status(vm, globals, raw, pid as i32)?)))
+}
+
 /// `waitpid(2)` with the GVL released, retried across `EINTR` after the
 /// VM poll point ran: the reaped pid, the raw wait status and it as a
 /// `Process::Status`, or `None` under `WNOHANG` with nothing to reap.
@@ -943,6 +1110,13 @@ pub(super) fn waitpid_status(
     pid: i32,
     flags: i32,
 ) -> Result<Option<(i32, i32, Value)>> {
+    if let Some(answer) = scheduler_process_wait(vm, globals, pid, flags)? {
+        return match hooked_waitpid(vm, globals, answer)? {
+            Hooked::Nothing => Ok(None),
+            Hooked::NoChild => Err(echild(globals)),
+            Hooked::Reaped(pid, raw, status) => Ok(Some((pid, raw, status))),
+        };
+    }
     let mut status: i32 = 0;
     let ret = loop {
         // SAFETY: waitpid is a POSIX system call; `status` is a stack
@@ -1018,6 +1192,14 @@ fn process_status_wait(
         Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
         None => 0,
     };
+    // Whatever the scheduler's hook answers is this method's answer:
+    // CRuby's `rb_process_status_waitv` hands it back unchecked, and so
+    // a scheduler that answers something else than a Status is only
+    // found out by the callers that do check (`Kernel#system`,
+    // `Process.wait`).
+    if let Some(answer) = scheduler_process_wait(vm, globals, pid, flags)? {
+        return Ok(answer);
+    }
     let mut raw: i32 = 0;
     let ret = loop {
         // SAFETY: waitpid is a POSIX system call; `raw` is a stack slot,
@@ -1670,7 +1852,33 @@ fn process_waitall(
     vm.with_temp_scope(|vm| {
         vm.temp_array_new(None);
         let pairs_idx = vm.temp_len() - 1;
+        // CRuby's `proc_waitall` starts by forgetting `$?`, so a call
+        // that reaps nothing leaves none behind.
+        crate::scheduler::clear_last_status(vm);
         loop {
+            // Every round asks the scheduler's hook, as CRuby's
+            // `proc_waitall` does through `rb_waitpid`. A hook answering
+            // nil reaps nothing and ends nothing, so the loop runs on,
+            // as it does there.
+            if let Some(answer) = scheduler_process_wait(vm, globals, -1, 0)? {
+                match hooked_waitpid(vm, globals, answer)? {
+                    Hooked::NoChild => break,
+                    Hooked::Nothing => {
+                        let pair = Value::array_from_vec(vec![
+                            Value::integer(0),
+                            crate::scheduler::last_status(vm).unwrap_or_default(),
+                        ]);
+                        vm.temp_at(pairs_idx).as_array().push(pair);
+                        continue;
+                    }
+                    Hooked::Reaped(pid, _, status) => {
+                        crate::scheduler::set_last_status(vm, status);
+                        let pair = Value::array_from_vec(vec![Value::integer(pid as i64), status]);
+                        vm.temp_at(pairs_idx).as_array().push(pair);
+                        continue;
+                    }
+                }
+            }
             let mut status: i32 = 0;
             // SAFETY: waitpid is a POSIX system call; `status` is a
             // stack slot, so the GVL-less region touches no interpreter
@@ -1964,6 +2172,282 @@ fn process_executable(_: &mut Executor, _: &mut Globals, _: Lfp, _: BytecodePtr)
 
 #[cfg(test)]
 mod tests {
+
+    // #2211: in a non-blocking fiber with a fiber scheduler installed,
+    // every wait for a child goes to the scheduler's `#process_wait`
+    // (CRuby's `rb_fiber_scheduler_process_wait`, out of
+    // `rb_process_status_wait`), and the `Process::Status` it answers
+    // with is both the answer and the new `$?`. monoruby waited for the
+    // child itself and never asked.
+    #[test]
+    fn process_wait_goes_through_the_fiber_scheduler() {
+        run_test_once(
+            r##"
+            class Sched
+              def initialize = @log = []
+              attr_reader :log
+              def block(*) = nil
+              def unblock(*) = nil
+              def kernel_sleep(*) = nil
+              def io_wait(io, events, _timeout)
+                Fiber.blocking { events & 1 != 0 ? IO.select([io]) : IO.select(nil, [io]) }
+                events
+              end
+              def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+              def process_wait(pid, flags)
+                @log << [pid > 0 ? :pid : pid, flags]
+                Fiber.blocking { Process::Status.wait(pid, flags) }
+              end
+            end
+            st = ->(s) { s.is_a?(Process::Status) ? [:st, s.exitstatus, s.pid > 0] : s }
+            sched = Sched.new
+            res = []
+            Fiber.set_scheduler(sched)
+            Fiber.new(blocking: false) do
+              res << [system("exit 3"), st.($?)]
+              res << [system("exit 4", in: :in), st.($?)]
+              res << [Process.wait(spawn("exit 5")) > 0, st.($?)]
+              pid, status = Process.wait2(spawn("exit 6"))
+              res << [pid > 0, st.(status), st.($?)]
+              res << [Process.waitpid2(spawn("exit 7")).then { |p, s| [p > 0, st.(s)] }, st.($?)]
+              res << [st.(Process::Status.wait(spawn("exit 8"))), st.($?)]
+              res << [`exit 9`, st.($?)]
+              res << [IO.popen("exit 10") { |io| io.read }, st.($?)]
+              io = IO.popen("exit 11"); io.read; io.close
+              res << [st.($?)]
+            end.resume
+            Fiber.set_scheduler(nil)
+            Fiber.set_scheduler(Sched.new)
+            Fiber.new(blocking: true) { res << [system("exit 12"), st.($?)] }.resume
+            Fiber.set_scheduler(nil)
+            res << [system("exit 13"), st.($?)]
+            res << sched.log
+            res
+            "##,
+        );
+    }
+
+    /// `Process.waitall` asks the hook as well. It reaps *any* child, and
+    /// the tests of this binary share a process, so it runs in a child of
+    /// it, where the only children are its own.
+    #[test]
+    fn waitall_goes_through_the_fiber_scheduler() {
+        run_test_once(
+            r##"
+            read, write = IO.pipe
+            if (pid = fork)
+              write.close
+              got = read.read
+              read.close
+              Process.wait(pid)
+              [got, $?.exitstatus]
+            else
+              read.close
+              class Sched
+                def initialize = @log = []
+                attr_reader :log
+                def block(*) = nil
+                def unblock(*) = nil
+                def kernel_sleep(*) = nil
+                def io_wait(*) = nil
+                def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+                def process_wait(pid, flags)
+                  @log << [pid > 0 ? :pid : pid, flags]
+                  Fiber.blocking { Process::Status.wait(pid, flags) }
+                end
+              end
+              sched = Sched.new
+              out = []
+              Fiber.set_scheduler(sched)
+              Fiber.new(blocking: false) do
+                spawn("exit 7")
+                out << Process.waitall.map { |p, s| [p > 0, s.exitstatus] }
+                out << $?.exitstatus
+                out << Process.waitall
+                out << $?
+                out << sched.log
+              end.resume
+              Fiber.set_scheduler(nil)
+              write.write(out.inspect)
+              write.close
+              exit!(0)
+            end
+            "##,
+        );
+    }
+
+    /// The corners of that reading, in a child of this process again
+    /// (they wait for any child): a hook's Status for "there is no
+    /// child" is `Errno::ECHILD`; a hook answering nil in
+    /// `Process.waitall` is noted as a pid of 0 and the walk goes on;
+    /// what the hook raises from `IO.popen { }`'s close replaces what
+    /// the block raised (CRuby closes from an `rb_ensure`). And
+    /// `system(..., exception: true)` names the signal that killed the
+    /// child on its own path too.
+    #[test]
+    fn process_wait_hook_corner_answers() {
+        run_test_once(
+            r##"
+            read, write = IO.pipe
+            if (pid = fork)
+              write.close
+              got = read.read
+              read.close
+              Process.wait(pid)
+              [got, $?.exitstatus]
+            else
+              read.close
+              class Sched
+                def initialize(answers) = @answers = answers
+                def block(*) = nil
+                def unblock(*) = nil
+                def kernel_sleep(*) = nil
+                def io_wait(io, events, _timeout)
+                  Fiber.blocking { events & 1 != 0 ? IO.select([io]) : IO.select(nil, [io]) }
+                  events
+                end
+                def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+                def process_wait(pid, flags)
+                  case @answers.shift
+                  when :nil then nil
+                  when :raise
+                    Fiber.blocking { Process::Status.wait(pid, flags) }
+                    raise ArgumentError, "from the hook"
+                  else Fiber.blocking { Process::Status.wait(pid, flags) }
+                  end
+                end
+              end
+              t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+              out = []
+              # No child at all: the hook's Status carries ECHILD (its pid is -1).
+              Fiber.set_scheduler(Sched.new([]))
+              Fiber.new(blocking: false) do
+                out << t.() { Process.wait }
+                out << t.() { Process.wait2(-1) }
+                out << $?
+              end.resume
+              Fiber.set_scheduler(nil)
+              # A hook answering nil once: waitall notes a pid of 0 and goes on.
+              Fiber.set_scheduler(Sched.new([:nil]))
+              Fiber.new(blocking: false) do
+                spawn("exit 7")
+                out << Process.waitall.map { |p, s| [p > 0, s && s.exitstatus] }
+              end.resume
+              Fiber.set_scheduler(nil)
+              # The block raises, and then so does the hook.
+              Fiber.set_scheduler(Sched.new([:raise]))
+              Fiber.new(blocking: false) do
+                out << t.() { IO.popen("exit 9") { |io| io.read; raise "from the block" } }
+              end.resume
+              Fiber.set_scheduler(nil)
+              # A child killed by a signal, on `system`'s own path.
+              out << t.() { system("kill -9 $$", exception: true) }
+              out << t.() { system("kill -TERM $$", exception: true) }
+              write.write(out.inspect)
+              write.close
+              exit!(0)
+            end
+            "##,
+        );
+    }
+
+    /// What the hook answers is read as CRuby reads it. `Kernel#system`
+    /// wants a `Process::Status` and raises TypeError for anything else,
+    /// `nil` included (`rb_check_typeddata`). The backtick, the wait
+    /// behind `IO#close` and `Process.wait` read it as `rb_waitpid`
+    /// does: `nil` is "no child was reaped", which leaves `$?`
+    /// forgotten, and only another kind of object is a TypeError.
+    /// `Process::Status.wait` hands the answer back unread. A scheduler
+    /// without the hook changes nothing: it is optional
+    /// (`rb_check_funcall`).
+    #[test]
+    fn process_wait_hook_answer_is_read_as_cruby_reads_it() {
+        run_test_once(
+            r##"
+            class Sched
+              def initialize(answer) = @answer = answer
+              def block(*) = nil
+              def unblock(*) = nil
+              def kernel_sleep(*) = nil
+              def io_wait(io, events, _t)
+                Fiber.blocking { events & 1 != 0 ? IO.select([io]) : IO.select(nil, [io]) }
+                events
+              end
+              def fiber(&b) = Fiber.new(blocking: false, &b).tap(&:resume)
+              def process_wait(pid, flags)
+                Fiber.blocking { Process::Status.wait(pid, flags) }
+                raise ArgumentError, "from the hook" if @answer == :raise
+                @answer
+              end
+            end
+            t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+            st = ->(s) { s.is_a?(Process::Status) ? [:st, s.exitstatus] : s }
+            res = []
+            [nil, 42, :raise].each do |answer|
+              spawned = []
+              sp = ->(cmd) { spawned << (pid = spawn(cmd)); pid }
+              Fiber.set_scheduler(Sched.new(answer))
+              Fiber.new(blocking: false) do
+                res << [answer, t.() { system("exit 3") }, st.($?)]
+                res << t.() { Process.wait(sp.("exit 4")) }
+                res << st.($?)
+                res << t.() { Process.wait2(sp.("exit 5")) }
+                res << t.() { st.(Process::Status.wait(sp.("exit 6"))) }
+                res << t.() { `exit 7` }
+                res << st.($?)
+                res << t.() { io = IO.popen("exit 8"); io.read; io.close }
+                res << st.($?)
+                res << t.() { IO.popen("exit 9") { |io| io.read } }
+              end.resume
+              Fiber.set_scheduler(nil)
+              # Whatever the hook left unreaped is this process's to reap.
+              spawned.each { |pid| Process.wait(pid) rescue nil }
+            end
+            class NoHook < Sched
+              undef_method :process_wait
+            end
+            Fiber.set_scheduler(NoHook.new(nil))
+            Fiber.new(blocking: false) do
+              res << [system("exit 3"), st.($?), `exit 4`, st.($?)]
+              res << [Process.wait(spawn("exit 5")) > 0, st.($?)]
+            end.resume
+            Fiber.set_scheduler(nil)
+            res
+            "##,
+        );
+    }
+
+    /// Waiting for a child lasts as long as the child runs, so it happens
+    /// with the GVL released and the other threads of this process keep
+    /// running. `Kernel#system`'s own path and the backtick held it.
+    #[test]
+    fn a_child_is_waited_for_without_the_gvl() {
+        // Only the 1:1 model has a GVL to hand over: in the M:1 green
+        // model `scheduler::without_gvl` runs its closure inline, so a
+        // waitpid stops the process there by design. `bin/test` re-runs
+        // this module under `MONORUBY_THREAD_MODEL=green`, so skip it
+        // there rather than assert the other model's behaviour.
+        if std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green") {
+            return;
+        }
+        run_test_once(
+            r#"
+            res = []
+            ticks = 0
+            th = Thread.new { loop { ticks += 1; sleep 0.02 } }
+            Thread.pass until ticks > 0
+            [->{ system("sleep 0.4") }, ->{ system("sleep", "0.4") }, ->{ `sleep 0.4` },
+             ->{ system("sleep 0.4", in: :in) },
+             ->{ Process.wait(spawn("sleep 0.4")) }].each do |run|
+              before = ticks
+              run.call
+              res << (ticks - before >= 3)
+            end
+            th.kill
+            res
+            "#,
+        );
+    }
     use crate::tests::*;
 
     #[test]

@@ -2852,26 +2852,9 @@ fn close(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         .self_val()
         .as_io_inner_mut()
         .close_detaching_child(&globals.store)?;
-    let popen_result = detached.map(|pid| {
-        let status =
-            crate::scheduler::without_gvl(vm, move || crate::value::rvalue::io::reap_child(pid));
-        (status, pid)
-    });
-    if let Some((exit_status, pid)) = popen_result {
-        // Set $? (Process::Status) via Process::Status.new(exitstatus, pid)
-        let status_class =
-            vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])?;
-        let status_obj = vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("__new"),
-            status_class,
-            &[
-                Value::integer(exit_status as i64),
-                Value::integer(pid as i64),
-            ],
-            None,
-            None,
-        )?;
+    if let Some(pid) = detached
+        && let Some((_, status_obj)) = crate::builtins::process::wait_popen_child(vm, globals, pid)?
+    {
         crate::scheduler::set_last_status(vm, status_obj);
     }
     Ok(Value::nil())
@@ -4095,36 +4078,22 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
                 Err(e) => e.for_each_value(|v| vm.temp_push(v)),
             }
             let mut io_close = io_val;
-            // Reaped outside the GVL, as `IO#close` does.
-            let detached = io_close
+            // Waited for outside the GVL, as `IO#close` does, or by the
+            // fiber scheduler's `#process_wait` where there is one.
+            // A stream the block closed itself is not this call's
+            // error (as on master, where the close was `if let Ok`).
+            let child = io_close
                 .as_io_inner_mut()
                 .close_detaching_child(&globals.store)
-                .map(|d| {
-                    d.map(|pid| {
-                        let status = crate::scheduler::without_gvl(vm, move || {
-                            crate::value::rvalue::io::reap_child(pid)
-                        });
-                        (status, pid)
-                    })
-                });
-            if let Ok(Some((exit_status, pid))) = detached {
-                if let Ok(status_class) =
-                    vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-                {
-                    if let Ok(status_obj) = vm.invoke_method_inner(
-                        globals,
-                        IdentId::get_id("__new"),
-                        status_class,
-                        &[
-                            Value::integer(exit_status as i64),
-                            Value::integer(pid as i64),
-                        ],
-                        None,
-                        None,
-                    ) {
-                        crate::scheduler::set_last_status(vm, status_obj);
-                    }
-                }
+                .unwrap_or(None);
+            // What that hook raises is this call's error, and takes the
+            // place of the block's own value and of what the block
+            // raised alike: CRuby closes from an `rb_ensure`.
+            if let Some(pid) = child
+                && let Some((_, status_obj)) =
+                    crate::builtins::process::wait_popen_child(vm, globals, pid)?
+            {
+                crate::scheduler::set_last_status(vm, status_obj);
             }
             res
         })
