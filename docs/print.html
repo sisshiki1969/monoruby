@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a042514b.js";
+            window.path_to_searchindex_js = "searchindex-f29ced9f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -5581,6 +5581,23 @@ join, and that path’s segment emits the literal write
 every resuming path arrives with the slot current. A path that kept the
 claim writes nothing. Before this, keeping a constant required the claim
 to survive <em>every</em> path or be given up everywhere.</p>
+<p>A <code>break</code> and a <code>return</code> out of a block are edges of the same kind, of
+the continuation they land in: the call that was handed the block for a
+<code>break</code> (<code>iter_caller_pos</code>), the call of the method for a <code>return</code>
+(<code>method_caller_pos</code>). They get no return segment — the exit leaves
+through the specialized teardown or the unwinder — so each records its
+chain up to the landing frame instead (<code>record_exit_edge</code>, kept joined in
+<code>JitStackFrame::exit_chains</code> and handed up one frame per finished callee,
+as <code>return_context</code> is), and <code>build_return_segments</code> of the landing call
+joins it with that call’s return edges before it emits their bridges. An
+exit edge needs no bridge of its own: it boxes every deferred float home
+of the frames it lands on before it leaves
+(<code>box_deferred_homes_before_exit</code>), and a constant a frame keeps
+unwritten across its call is written ahead of that call once the frame
+resumes without the claim (<code>held</code> in <code>specialized_iseq</code>). Leaving the
+exits out of the join let the frames <em>above</em> the resuming one keep what
+an exit path had given up: <code>t = a * 2.0; c0 { c6 { t = 7; break }; t }</code>
+went on reading <code>t</code> as a Float (#2201).</p>
 <h2 id="3-the-resume-asymmetry"><a class="header" href="#3-the-resume-asymmetry">3. The resume asymmetry</a></h2>
 <p>When <code>specialized_compile</code> returns, the caller resumes from the join of
 the return-path chains — with one deliberate asymmetry, learned by
@@ -5598,13 +5615,21 @@ either held the claim or emitted its surrender write), spill-homed
 <code>Sf(Float)</code> promotions the subtree made, and the monotone
 <code>subtree_float_read</code> mark bits.</li>
 </ul>
-<p>If the callee compiled <strong>no</strong> plain <code>Ret</code> (every path raises, breaks, or
-returns non-locally), the caller’s continuation is unreachable on
-compiled paths. The resume state is then rebuilt from a copy of the
-call’s own entry chain, re-widened by the callee-era delta of the
+<p>If the callee compiled <strong>no</strong> plain <code>Ret</code> but an exit lands here (§2),
+the exits’ join is the resume chain: <code>loop { t += 1.5; break if … }</code> has
+no other way out, and resumes with <code>t</code> in the home the loop left it in.</p>
+<p>If nothing arrives at all (every path raises, or leaves for a frame
+further out), the caller’s continuation is unreachable on compiled
+paths. The resume state is then rebuilt from a copy of the call’s own
+entry chain, re-widened by the callee-era delta of the
 <code>widened_outer_log</code>. Any claim that placeholder still carries is
-vacuous — no execution arrives through it — and a later merge’s claims
-are established by its <em>reachable</em> entries’ bridges.</p>
+vacuous for the continuation — no execution arrives through it — and a
+later merge’s claims are established by its <em>reachable</em> entries’
+bridges. It is not vacuous for the call itself: the frame’s write-back
+for an exit taken <em>under</em> the call is built from this state, so a float
+local the call entered with in a deferred home (<code>F(spill home)</code>, slot
+stale) stays that, or a deoptimization in the callee reads the stale
+slot (<code>keep_deferred_homes</code>).</p>
 <h2 id="4-invariants-travel-lexically-on-the-live-chain"><a class="header" href="#4-invariants-travel-lexically-on-the-live-chain">4. Invariants travel lexically on the live chain</a></h2>
 <p>The frame-chain no-capture invariant (<code>no_capture_guard</code>, licensing
 static chain addressing) is maintained on the live chain by a lexical
