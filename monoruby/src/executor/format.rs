@@ -1131,20 +1131,15 @@ impl Executor {
                     arg_no += 1;
                     v
                 };
-                let w = width_val.coerce_to_integer(self, globals)?;
-                match w {
-                    IntegerBase::Fixnum(v) => {
-                        if v < 0 {
-                            minus_flag = true;
-                            zero_flag = false;
-                            width = (-v) as usize;
-                        } else {
-                            width = v as usize;
-                        }
-                    }
-                    IntegerBase::BigInt(_) => {
-                        return Err(MonorubyErr::argumenterr("width too big"));
-                    }
+                // `NUM2INT`: no `Kernel#Integer` conversion here, so a
+                // String or nil is a TypeError.
+                let v = width_val.num2long(self, globals)?;
+                if v < 0 {
+                    minus_flag = true;
+                    zero_flag = false;
+                    width = v.unsigned_abs() as usize;
+                } else {
+                    width = v as usize;
                 }
                 if i >= flen {
                     return Err(MonorubyErr::argumenterr(
@@ -1222,17 +1217,11 @@ impl Executor {
                         arg_no += 1;
                         v
                     };
-                    match prec_val.coerce_to_integer(self, globals)? {
-                        IntegerBase::Fixnum(v) => {
-                            if v >= 0 {
-                                precision = Some(v as usize);
-                            }
-                            // negative precision: ignored (stays None)
-                        }
-                        IntegerBase::BigInt(_) => {
-                            return Err(MonorubyErr::argumenterr("precision too big"));
-                        }
+                    let v = prec_val.num2long(self, globals)?;
+                    if v >= 0 {
+                        precision = Some(v as usize);
                     }
+                    // negative precision: ignored (stays None)
                     if i >= flen {
                         return Err(MonorubyErr::argumenterr(
                             "malformed format string",

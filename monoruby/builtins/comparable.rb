@@ -51,8 +51,10 @@ module Comparable
     __cmpint(res, self, other) < 0
   end
 
-  def clamp(min_val = nil, max_val = nil)
-    if min_val.is_a?(Range)
+  def clamp(min_val, max_val = (one = true; nil))
+    if one
+      # The one-argument form takes a Range and nothing else.
+      raise TypeError, "wrong argument type #{__builtin_class_name(min_val)} (expected Range)" unless min_val.is_a?(Range)
       range = min_val
       # Use `#begin` / `#end` (raw endpoint accessors) rather than
       # `#first` / `#last`. The latter raise RangeError on

@@ -410,7 +410,7 @@ fn add(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/String/i/=2a.html]
 #[monoruby_builtin]
 fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let count = match lfp.arg(0).coerce_to_int_i64(vm, globals)? {
+    let count = match lfp.arg(0).num2long(vm, globals)? {
         i if i < 0 => return Err(MonorubyErr::negative_argument()),
         i => i as usize,
     };
@@ -1293,7 +1293,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_int_i64(vm, globals)? {
+            let len = match arg1.num2long(vm, globals)? {
                 0 => return Ok(string_substring(self_, 0, 0)),
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
@@ -1329,7 +1329,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let mut beg = if info.start().is_nil() {
             0
         } else {
-            info.start().coerce_to_int_i64(vm, globals)?
+            info.start().num2long(vm, globals)?
         };
         if beg < 0 {
             beg += char_length;
@@ -1341,7 +1341,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
         let end_excl = if info.end().is_nil() {
             char_length
         } else {
-            let mut end = info.end().coerce_to_int_i64(vm, globals)?;
+            let mut end = info.end().num2long(vm, globals)?;
             if end < 0 {
                 end += char_length;
             }
@@ -1366,7 +1366,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                 let name = sym.with_ident_name(|name, _| name.as_bytes().to_vec());
                 return string_match_named(vm, globals, self_, lhs, &re, &name);
             }
-            let nth = arg1.coerce_to_int_i64(vm, globals)?;
+            let nth = arg1.num2long(vm, globals)?;
             string_match_index(vm, globals, self_, lhs, &re, nth)
         } else {
             string_match_index(vm, globals, self_, lhs, &re, 0)
@@ -1686,11 +1686,11 @@ fn range_bounds(
 ) -> Result<(Option<i64>, Option<i64>)> {
     let start = match info.start().is_nil() {
         true => None,
-        false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+        false => Some(info.start().num2long(vm, globals)?),
     };
     let end = match info.end().is_nil() {
         true => None,
-        false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+        false => Some(info.end().num2long(vm, globals)?),
     };
     Ok((start, end))
 }
@@ -1817,20 +1817,20 @@ fn index_assign(
     let target = if let Some(info) = arg0_val.is_range() {
         let start_raw = match info.start().is_nil() {
             true => None,
-            false => Some(info.start().coerce_to_int_i64(vm, globals)?),
+            false => Some(info.start().num2long(vm, globals)?),
         };
         let end_raw = match info.end().is_nil() {
             true => None,
-            false => Some(info.end().coerce_to_int_i64(vm, globals)?),
+            false => Some(info.end().num2long(vm, globals)?),
         };
         Target::Range(start_raw, end_raw, info.exclude_end())
     } else {
         let idx = match arg0_val.try_fixnum() {
             Some(idx) => idx,
-            None => arg0_val.coerce_to_int_i64(vm, globals)?,
+            None => arg0_val.num2long(vm, globals)?,
         };
         let len = match arg1_opt {
-            Some(a1) => match a1.coerce_to_int_i64(vm, globals)? {
+            Some(a1) => match a1.num2long(vm, globals)? {
                 len if len < 0 => {
                     return Err(MonorubyErr::indexerr(format!("negative length {len}")));
                 }
@@ -2018,7 +2018,7 @@ fn locate_regex_match(
     );
     let total = spans.len();
     let idx = if let Some(nth) = nth_arg {
-        let n = nth.coerce_to_int_i64(vm, globals)?;
+        let n = nth.num2long(vm, globals)?;
         if n < 0 {
             // Negative indexing counts from the end of the capture
             // groups (group 0 being the full match is *not* a valid
@@ -3368,7 +3368,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     {
         mustnot_broken(&recv)?;
         let lim = if let Some(a1) = lfp.try_arg(1) {
-            a1.coerce_to_int_i64(vm, globals)?
+            a1.num2long(vm, globals)?
         } else {
             0
         };
@@ -3420,7 +3420,7 @@ fn split(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // value does not fit in a C `int`.
     let limit_given = lfp.try_arg(1).is_some();
     let lim: i64 = if let Some(arg1) = lfp.try_arg(1) {
-        let n = arg1.coerce_to_int_i64(vm, globals)?;
+        let n = arg1.num2long(vm, globals)?;
         if n > i32::MAX as i64 || n < i32::MIN as i64 {
             return Err(MonorubyErr::rangeerr(format!(
                 "integer {n} too big to convert to `int'"
@@ -3937,7 +3937,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 None => return Ok(Value::nil()),
             };
             if let Some(a1) = lfp.try_arg(1) {
-                match a1.coerce_to_int_i64(vm, globals)? {
+                match a1.num2long(vm, globals)? {
                     l if l < 0 => return Ok(Value::nil()),
                     l => (idx, l as usize),
                 }
@@ -3993,7 +3993,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                         }
                         (0, Some(members))
                     }
-                    None => (arg1.coerce_to_int_i64(vm, globals)?, None),
+                    None => (arg1.num2long(vm, globals)?, None),
                 }
             }
         };
@@ -4072,7 +4072,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_int_i64(vm, globals)? {
+            let len = match arg1.num2long(vm, globals)? {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -4106,7 +4106,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             None => return Ok(Value::nil()),
         };
         if let Some(arg1) = lfp.try_arg(1) {
-            let len = match arg1.coerce_to_int_i64(vm, globals)? {
+            let len = match arg1.num2long(vm, globals)? {
                 i if i < 0 => return Ok(Value::nil()),
                 i => i as usize,
             };
@@ -6114,7 +6114,7 @@ fn string_match(
     // Coerce both arguments before borrowing the subject: either
     // coercion may run Ruby code that mutates the receiver.
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_int_i64(vm, globals)?)
+        Some(arg1.num2long(vm, globals)?)
     } else {
         None
     };
@@ -6383,7 +6383,7 @@ fn string_match_(
     // of the `pos` argument's coercion.
     check_string_pattern_valid(lfp.arg(0))?;
     let raw_pos = if let Some(arg1) = lfp.try_arg(1) {
-        Some(arg1.coerce_to_int_i64(vm, globals)?)
+        Some(arg1.num2long(vm, globals)?)
     } else {
         None
     };
@@ -6478,7 +6478,7 @@ fn string_index(
 ) -> Result<Value> {
     let arg0 = index_pattern(vm, globals, lfp.arg(0))?;
     let char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        arg1.coerce_to_int_i64(vm, globals)?
+        arg1.num2long(vm, globals)?
     } else {
         0
     };
@@ -6560,7 +6560,7 @@ fn byteindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     check_pattern_encoding_compat(&given, lfp.arg(0), globals)?;
     let haystack = given.as_bytes();
     let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
-        let offset = arg1.coerce_to_int_i64(vm, globals)?;
+        let offset = arg1.num2long(vm, globals)?;
         if offset < 0 {
             let len = haystack.len() as i64;
             let pos = len + offset;
@@ -6669,7 +6669,7 @@ fn byterindex(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     let bytesize = haystack.len();
 
     let byte_offset = if let Some(arg1) = lfp.try_arg(1) {
-        let offset = arg1.coerce_to_int_i64(vm, globals)?;
+        let offset = arg1.num2long(vm, globals)?;
         if offset < 0 {
             let pos = bytesize as i64 + offset;
             if pos < 0 {
@@ -6946,7 +6946,7 @@ fn string_rindex(
     let len = subject.len();
 
     let max_char_pos = if let Some(arg1) = lfp.try_arg(1) {
-        let pos = arg1.coerce_to_int_i64(vm, globals)?;
+        let pos = arg1.num2long(vm, globals)?;
         match given.conv_char_index2(pos) {
             Some(pos) => pos,
             // As in `byteindex`: the offset wrapped past the start, and
@@ -7238,7 +7238,7 @@ fn string_rindex_string(
     // negative offset wraps past the start of the string.
     let max_char_pos = match pos_arg {
         Some(p) => {
-            let n = p.coerce_to_int_i64(vm, globals)?;
+            let n = p.num2long(vm, globals)?;
             match given.conv_char_index2(n) {
                 Some(pos) => pos.min(char_len),
                 None => return Ok(Value::nil()),
@@ -7701,7 +7701,7 @@ fn pad_string_inner(
 fn pad_builtin(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, side: PadSide) -> Result<Value> {
     let self_val = lfp.self_val();
     let self_inner = self_val.as_rstring_inner();
-    let width = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let width = lfp.arg(0).num2long(vm, globals)?;
     if let Some(arg) = lfp.try_arg(1) {
         // The encoding-compat check must precede the `to_str`
         // coercion: `coerce_to_rstring` may invoke arbitrary Ruby on
@@ -7815,7 +7815,7 @@ fn getbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let receiver = lfp.self_val();
     let s = receiver.as_rstring_inner();
     let len = s.len() as i64;
-    let mut idx = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let mut idx = lfp.arg(0).num2long(vm, globals)?;
     if idx < 0 {
         idx += len;
     }
@@ -7839,14 +7839,14 @@ fn setbyte(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let byte_val = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
     let s = self_.as_rstring_inner();
     let len = s.len() as i64;
-    let mut idx = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let mut idx = lfp.arg(0).num2long(vm, globals)?;
     if idx < 0 {
         idx += len;
     }
     if idx < 0 || idx >= len {
         return Err(MonorubyErr::indexerr(format!(
             "index {} out of string",
-            lfp.arg(0).coerce_to_int_i64(vm, globals)?
+            lfp.arg(0).num2long(vm, globals)?
         )));
     }
     self_
@@ -7961,7 +7961,7 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let start = if range.start().is_nil() {
             0
         } else {
-            range.start().coerce_to_int_i64(vm, globals)?
+            range.start().num2long(vm, globals)?
         };
         // For endless ranges, treat the end as `byte_len` so the slice
         // extends to the end of the string. Apply the inclusive/
@@ -7970,7 +7970,7 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         let end = if endless {
             byte_len as i64
         } else {
-            range.end().coerce_to_int_i64(vm, globals)?
+            range.end().num2long(vm, globals)?
         };
         let start = match {
             if start >= 0 {
@@ -8017,10 +8017,10 @@ fn byteslice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
         // Zero-copy shared substring when long enough (CoW).
         Ok(string_substring(self_, start, end))
     } else {
-        let i = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let i = lfp.arg(0).num2long(vm, globals)?;
         if let Some(arg1) = lfp.try_arg(1) {
             // byteslice(nth, len)
-            let len = arg1.coerce_to_int_i64(vm, globals)?;
+            let len = arg1.num2long(vm, globals)?;
             if len < 0 {
                 return Ok(Value::nil());
             }
@@ -8089,8 +8089,8 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
 
     // Parse target range (index, length) from the first args
     let (start, splice_len) = if let Some(range) = lfp.arg(0).is_range() {
-        let rstart = range.start().coerce_to_int_i64(vm, globals)?;
-        let rend = range.end().coerce_to_int_i64(vm, globals)?;
+        let rstart = range.start().num2long(vm, globals)?;
+        let rend = range.end().num2long(vm, globals)?;
         // The Range form reports an out-of-range left boundary the way
         // `rb_range_beg_len` does under `bytesplice` — a RangeError
         // naming the range — where the (index, length) form raises the
@@ -8131,8 +8131,8 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
                 "wrong argument type Integer (expected Range)",
             ));
         }
-        let idx = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-        let len = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+        let idx = lfp.arg(0).num2long(vm, globals)?;
+        let len = lfp.arg(1).num2long(vm, globals)?;
         if len < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length {}", len)));
         }
@@ -8168,8 +8168,8 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             let src_range = src_range.is_range().ok_or_else(|| {
                 MonorubyErr::typeerr("wrong argument type Integer (expected Range)")
             })?;
-            let src_start = src_range.start().coerce_to_int_i64(vm, globals)?;
-            let src_end = src_range.end().coerce_to_int_i64(vm, globals)?;
+            let src_start = src_range.start().num2long(vm, globals)?;
+            let src_end = src_range.end().num2long(vm, globals)?;
             // Same as the receiver's range above: an out-of-range left
             // boundary is a RangeError naming the range.
             let src_start_i = src_start;
@@ -8205,8 +8205,8 @@ fn bytesplice(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
             &str_bytes[src_start..src_end_val]
         } else {
             // bytesplice(idx, len, str, str_idx, str_len)
-            let src_idx = lfp.arg(str_arg_idx + 1).coerce_to_int_i64(vm, globals)?;
-            let src_len = lfp.arg(str_arg_idx + 2).coerce_to_int_i64(vm, globals)?;
+            let src_idx = lfp.arg(str_arg_idx + 1).num2long(vm, globals)?;
+            let src_len = lfp.arg(str_arg_idx + 2).num2long(vm, globals)?;
             if src_len < 0 {
                 return Err(MonorubyErr::indexerr(format!(
                     "negative length {}",
@@ -9110,7 +9110,7 @@ fn to_i(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let lossy = String::from_utf8_lossy(inner.as_bytes());
     let s: &str = &lossy;
     let radix = if let Some(arg0) = lfp.try_arg(0) {
-        match arg0.coerce_to_int_i64(vm, globals)? {
+        match arg0.num2long(vm, globals)? {
             0 => 0,
             n if !(2..=36).contains(&n) => {
                 return Err(MonorubyErr::argumenterr(format!("invalid radix {n}")));
@@ -12093,7 +12093,7 @@ impl Charset {
 #[monoruby_builtin]
 fn sum(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let bits = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int_i64(vm, globals)?
+        arg0.num2long(vm, globals)?
     } else {
         16
     };
@@ -12181,7 +12181,7 @@ fn initialize(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr
     {
         // Raises TypeError for a non-Integer (`#to_int` is honoured) and
         // RangeError for a Bignum, both as CRuby does.
-        let cap = cap_v.coerce_to_int_i64(vm, globals)?;
+        let cap = cap_v.num2long(vm, globals)?;
         // A frozen receiver raises even when the capacity is 0 or
         // negative — CRuby checks before it looks at the value.
         lfp.self_val().ensure_string_mutable(vm, globals)?;
@@ -12746,7 +12746,7 @@ fn unpack1(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 fn unpack_offset(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, len: usize) -> Result<usize> {
     match lfp.try_arg(1) {
         Some(v) => {
-            let offset = v.coerce_to_int_i64(vm, globals)?;
+            let offset = v.num2long(vm, globals)?;
             if offset < 0 {
                 Err(MonorubyErr::argumenterr("offset can't be negative"))
             } else if offset as usize > len {

@@ -645,13 +645,13 @@ impl Array {
         arg0: Value,
         arg1: Value,
     ) -> Result<Value> {
-        let index = arg0.coerce_to_int_i64(vm, globals)?;
+        let index = arg0.num2long(vm, globals)?;
         let self_len = self.len();
         let index = match self.get_array_index(index) {
             Some(i) => i,
             None => return Ok(Value::nil()), // negative index beyond array size
         };
-        let len = arg1.coerce_to_int_i64(vm, globals)?;
+        let len = arg1.num2long(vm, globals)?;
         let val = if len < 0 || index > self_len {
             Value::nil()
         } else if index == self_len {
@@ -698,7 +698,7 @@ impl Array {
             let i_start = if range.start().is_nil() {
                 0
             } else {
-                match range.start().coerce_to_int_i64(vm, globals)? {
+                match range.start().num2long(vm, globals)? {
                     i if i < 0 => len + i,
                     i => i,
                 }
@@ -716,7 +716,7 @@ impl Array {
             let end = if range.end().is_nil() {
                 self.len()
             } else {
-                let i_end = range.end().coerce_to_int_i64(vm, globals)?;
+                let i_end = range.end().num2long(vm, globals)?;
                 if i_end >= 0 {
                     let end = i_end as usize + if range.exclude_end() { 0 } else { 1 };
                     if self.len() < end { self.len() } else { end }
@@ -733,7 +733,7 @@ impl Array {
             }
             Ok(self.slice_value(start, end))
         } else {
-            let index = idx.coerce_to_int_i64(vm, globals)?;
+            let index = idx.num2long(vm, globals)?;
             let self_len = self.len();
             let index = self.get_array_index(index).unwrap_or(self_len);
             let val = self.get(index).cloned().unwrap_or_default();

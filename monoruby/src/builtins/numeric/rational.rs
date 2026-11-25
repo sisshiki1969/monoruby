@@ -428,6 +428,8 @@ fn pow_by_integer(lhs: &RationalInner, exp: &BigInt) -> Result<Value> {
 /// Coerce ndigits argument to i64 (supports to_int coercion).
 fn coerce_ndigits(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<i64> {
     match lfp.try_arg(0) {
+        // CRuby's `f_round_common` takes an Integer and nothing else.
+        Some(v) if !v.is_integer() => Err(MonorubyErr::typeerr("not an integer")),
         Some(v) => v.coerce_to_int_i64(vm, globals),
         None => Ok(0),
     }

@@ -632,7 +632,7 @@ fn getutc(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// [https://docs.ruby-lang.org/ja/latest/method/Time/i/getlocal.html]
 #[monoruby_builtin]
 fn getlocal(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let new = if let Some(arg0) = lfp.try_arg(0) {
+    let new = if let Some(arg0) = lfp.try_arg(0).filter(|v| !v.is_nil()) {
         // A timezone object (responding to `#utc_to_local`) re-zones the
         // time and becomes its `#zone`.
         let utc_dt = time_utc_instant(lfp.self_val().as_time());
@@ -941,7 +941,7 @@ pub(crate) fn time_reinterpret_offset(mut time: Value, offset_secs: i32) {
 #[monoruby_builtin]
 fn iso8601(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let digits = if let Some(a) = lfp.try_arg(0) {
-        let v = a.coerce_to_int_i64(vm, globals)?;
+        let v = a.num2long(vm, globals)?;
         // CRuby has no ceiling here: it renders an exact rational, so
         // more digits simply show more of it — or more zeros.
         if v < 0 {
@@ -1017,7 +1017,8 @@ fn year_digits(y: i32) -> String {
 }
 
 fn precision_arg(vm: &mut Executor, globals: &mut Globals, lfp: &Lfp) -> Result<u32> {
-    if let Some(a) = lfp.try_arg(0) {
+    // `round(nil)` is `round`.
+    if let Some(a) = lfp.try_arg(0).filter(|a| !a.is_nil()) {
         let v = a.coerce_to_int_i64(vm, globals)?;
         // CRuby has no upper bound here: it rounds an exact rational,
         // so a precision past nine digits simply keeps more of it.
@@ -3187,7 +3188,7 @@ fn gmtime(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 #[monoruby_builtin]
 fn localtime(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut self_val = lfp.self_val();
-    if let Some(arg0) = lfp.try_arg(0) {
+    if let Some(arg0) = lfp.try_arg(0).filter(|v| !v.is_nil()) {
         // A timezone object (`#utc_to_local`) re-zones the receiver in
         // place and becomes its `#zone`.
         let utc_dt = time_utc_instant(self_val.as_time());

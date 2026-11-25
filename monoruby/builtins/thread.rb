@@ -1065,10 +1065,8 @@ class Thread
     end
 
     def self.__slice_int(v)
-      return v if v.is_a?(Integer)
-      r = __check_int(v)
-      raise TypeError, "no implicit conversion of #{__builtin_class_name(v)} into Integer" if r.nil?
-      r
+      # `NUM2LONG`, as CRuby reads a level or a count.
+      __num2long(v)
     end
 
     class Location

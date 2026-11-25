@@ -1183,7 +1183,7 @@ fn class_eval(
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if supplied >= 3 {
-            args[2].coerce_to_int_i64(vm, globals)?
+            args[2].num2long(vm, globals)?
         } else {
             1
         };

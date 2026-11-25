@@ -44,7 +44,7 @@ class Dir
   # Wrap an existing directory file descriptor (no dup: closing this Dir
   # closes the caller's fd, and a second close raises Errno::EBADF).
   def self.for_fd(fd)
-    raise TypeError, "no implicit conversion of #{__builtin_class_name(fd)} into Integer" unless fd.is_a?(Integer)
+    fd = __num2long(fd)
     dir = allocate
     dir.__setup_fd(fd)
     dir
