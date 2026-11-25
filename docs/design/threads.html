@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-f29ced9f.js";
+            window.path_to_searchindex_js = "../searchindex-9088aae9.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -531,7 +531,24 @@ revents が立ったスレッドを起こす(POLLERR/HUP/NVAL も起床 → 本�
 <li><strong><code>IO.select</code></strong>: グリーンパスでは与えられた全 fd を <code>wait_fds</code> で待つ
 (timeout は deadline として sleepers に併載)。非 IO オブジェクトは <code>#to_io</code> で変換。
 全セット空 + timeout なしは CRuby 同様「status “sleep” で永眠(kill/wakeup 可能)」。
-単独スレッド時は従来の <code>select(2)</code>(EINTR → ポーリング → 再試行)。</li>
+単独スレッド時は <code>select(2)</code>(EINTR → ポーリング → 再試行)。fd 集合は最大 fd に
+合わせて伸びるビット列(<code>FdSet</code>、CRuby の <code>rb_fdset_t</code> 相当)で、<code>FD_SETSIZE</code> の
+上限はない(macOS は <code>select$DARWIN_EXTSN</code>)。
+<ul>
+<li>3 つの Array は添字で辿り、長さを毎回読み直す(<code>#to_io</code> が Array を変え得る)。
+待つ前に持ち出すのは fd の整数だけで、戻り値は待ったあとに Array をもう一度
+辿って(各要素を再変換して)作る。CRuby の <code>select_internal</code> と同じ 2 回走査で、
+待っている間に他スレッドやトラップが Array を変えても、消えた要素には触れない。</li>
+<li>何が ready かは他スレッドがいるときも <code>select(2)</code> が決める(CRuby と同じ)。
+グリーンパスはゼロタイムアウトの <code>select(2)</code> で判定し、何もなければ <code>wait_fds</code>
+(<code>poll(2)</code>)で眠って、起きたら判定し直す。<code>poll(2)</code> の revents をそのまま答えに
+しないのは、hangup / error を read・write・error のどれに数えるかが <code>select(2)</code> と
+<code>poll(2)</code> で違い、OS でも違うため(macOS の <code>poll(2)</code> は <code>POLLHUP</code> と一緒に
+<code>POLLPRI</code> を返し、macOS の <code>select(2)</code> は終了したパイプの読み側を書き込み可能と
+する、など)。<code>poll(2)</code> が何か返すのに <code>select(2)</code> が ready としない fd は待ち対象
+から外し(外さないと空回りする)、以後は 100 ms ごとに <code>select(2)</code> を聞き直す。</li>
+</ul>
+</li>
 <li><strong>ソケット</strong>: TCP の <code>connect</code> は非ブロッキング発行(<code>EINPROGRESS</code>)→ <code>POLLOUT</code> を
 <code>wait_fd</code> で待って <code>SO_ERROR</code> 確認、<code>accept</code> はリスナ fd を恒久 non-blocking にして
 <code>POLLIN</code> の park-retry ループで受ける(いずれも native worker ではなくスケジューラの
