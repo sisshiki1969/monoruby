@@ -177,9 +177,22 @@ fn drain_err(
 /// (`autoclose: false`, released via `into_raw_fd` without closing) so
 /// only the original owner ever closes the fd.
 ///
+/// Descriptors 0, 1 and 2 are never in the set, because no
+/// `FileDescriptor` ever closes them ([`fd_is_kept_open`]).
+///
 /// One set per interpreter (`vm::OWNED_FDS`): in the 1:1 thread model
 /// several OS threads open and wrap descriptors of the same process.
 use crate::vm::OWNED_FDS;
+
+/// Whether `fd` is one of the three standard descriptors, which an IO
+/// made over them (`IO.new(1)`, `File.open(2, "w")`) leaves open when it
+/// is closed or collected — `autoclose?` notwithstanding. CRuby's
+/// `fptr_finalize_flush` does the same (`fd <= 2`: "need to keep FILE
+/// objects of stdin, stdout and stderr"): the process's own `$stdin` /
+/// `$stdout` / `$stderr` go on using them.
+fn fd_is_kept_open(fd: i32) -> bool {
+    (0..=2).contains(&fd)
+}
 
 /// Whether `fd` is already owned by a live autoclosing `FileDescriptor`.
 pub fn fd_is_owned(fd: i32) -> bool {
@@ -187,6 +200,9 @@ pub fn fd_is_owned(fd: i32) -> bool {
 }
 
 fn register_owned_fd(fd: i32) {
+    if fd_is_kept_open(fd) {
+        return;
+    }
     OWNED_FDS.with(|s| {
         s.borrow_mut().insert(fd);
     });
@@ -613,7 +629,7 @@ impl Drop for FileDescriptor {
         // here, exactly once, in `Drop`. After this, `self.reader` must not
         // be accessed.
         let reader = unsafe { ManuallyDrop::take(&mut self.reader) };
-        if self.autoclose.get() {
+        if self.autoclose.get() && !fd_is_kept_open(fd) {
             // Normal case: dropping the `IoReader<File>` closes the fd via
             // `OwnedFd::drop`. This descriptor was the owner; release the
             // fd from the owned-fd set (before the number can be reused),
@@ -623,7 +639,8 @@ impl Drop for FileDescriptor {
             drop(reader);
         } else {
             // Borrowed-fd case: release ownership without closing. Some
-            // other Ruby IO is responsible for the fd's lifetime.
+            // other Ruby IO is responsible for the fd's lifetime — or the
+            // fd is a standard one, which stays open for the process.
             let _fd = reader.into_inner().into_raw_fd();
         }
     }

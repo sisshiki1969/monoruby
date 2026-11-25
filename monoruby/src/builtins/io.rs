@@ -265,11 +265,6 @@ pub(super) fn io_init_from_fd(
     // fd: implicit #to_int conversion (TypeError for nil/String/IO).
     let fd = fd.coerce_to_int_i64(vm, globals)?;
     let fd_i32 = fd as i32;
-    if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
-        let err = std::io::Error::from_raw_os_error(libc::EBADF);
-        // CRuby's message is the bare strerror ("Bad file descriptor").
-        return Err(MonorubyErr::errno_plain(&globals.store, &err));
-    }
 
     // `invalid:` / `undef:` / `replace:` for what the stream reads.
     let ecopts = super::encoding::io_read_ecopts(globals, 0, kw)?;
@@ -362,95 +357,21 @@ pub(super) fn io_init_from_fd(
         return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
     }
 
-    // Encodings: the mode-string suffix conflicts with any encoding
-    // keyword; `encoding:` is ignored (with a warning) when an explicit
-    // external/internal_encoding is also given.
-    let kw_enc = kw_opt(vm, globals, &kw, "encoding")?;
-    let kw_ext = kw_opt(vm, globals, &kw, "external_encoding")?;
-    let kw_int = kw_opt(vm, globals, &kw, "internal_encoding")?;
-    if menc.is_some() && (kw_enc.is_some() || kw_ext.is_some() || kw_int.is_some()) {
-        return Err(MonorubyErr::argumenterr("encoding specified twice"));
-    }
-    let kw_enc = match kw_enc {
-        Some(e) if kw_ext.is_some() || kw_int.is_some() => {
-            let enc_desc = if let Some(s) = e.is_str() {
-                s.to_string()
-            } else {
-                e.to_s(globals)
-            };
-            let used = if kw_ext.is_some() {
-                "external_encoding"
-            } else {
-                "internal_encoding"
-            };
-            let msg = Value::string(format!(
-                "warning: Ignoring encoding parameter '{enc_desc}': {used} is used"
-            ));
-            let main = globals.main_object;
-            let _ =
-                vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None);
-            None
-        }
-        other => other,
-    };
-
-    // Resolve explicit encoding objects. String-ish values go through
-    // #to_str (implicit conversion); `internal_encoding: "-"` means "no
-    // conversion" (nil internal).
-    fn enc_value_to_obj(
-        vm: &mut Executor,
-        globals: &mut Globals,
-        v: Value,
-    ) -> Result<Option<Value>> {
-        if v.class() == super::encoding::encoding_class(globals) {
-            return Ok(Some(v));
-        }
-        let name = v.coerce_to_string(vm, globals)?;
-        Ok(enc_by_name(globals, &name))
-    }
-    let mut ext_obj: Option<Value> = None;
-    let mut int_obj: Option<Value> = None;
+    // Encodings: the mode string's suffix and the options, read (and
+    // rejected) before the descriptor is touched.
+    let names = open_enc_names(vm, globals, menc.as_deref(), kw)?;
     // A "BOM|utf-..." external asks for byte-order-mark detection; the
     // name after the prefix is the fallback when the stream has no BOM.
-    let mut bom = false;
-    if let Some(enc_part) = &menc {
-        let mut parts = enc_part.splitn(2, ':');
-        ext_obj = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
-            let (name, b) = split_bom_prefix(x);
-            bom = b;
-            enc_by_name(globals, name)
-        });
-        int_obj = parts
-            .next()
-            .filter(|x| !x.is_empty() && *x != "-")
-            .and_then(|x| enc_by_name(globals, x));
-    }
-    if let Some(e) = kw_enc {
-        if e.class() == super::encoding::encoding_class(globals) {
-            ext_obj = Some(e);
-        } else {
-            let s = e.coerce_to_string(vm, globals)?;
-            let mut parts = s.splitn(2, ':');
-            ext_obj = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
-                let (name, b) = split_bom_prefix(x);
-                bom = b;
-                enc_by_name(globals, name)
-            });
-            int_obj = parts
-                .next()
-                .filter(|x| !x.is_empty() && *x != "-")
-                .and_then(|x| enc_by_name(globals, x));
-        }
-    }
-    if let Some(e) = kw_ext {
-        ext_obj = enc_value_to_obj(vm, globals, e)?;
-    }
-    if let Some(i) = kw_int {
-        int_obj = if i.is_str().is_some_and(|s| s == "-") {
-            None
-        } else {
-            enc_value_to_obj(vm, globals, i)?
-        };
+    let bom = names.is_some_and(|n| n.bom);
+
+    // The descriptor itself is looked at only now: `rb_io_initialize`
+    // reads the mode and the options (`rb_io_extract_modeenc`) first, so
+    // an unknown `external_encoding:` is reported even for a bad one.
+    // SAFETY: F_GETFD reads no memory.
+    if fd_i32 < 0 || unsafe { libc::fcntl(fd_i32, libc::F_GETFD) } == -1 {
+        let err = std::io::Error::from_raw_os_error(libc::EBADF);
+        // CRuby's message is the bare strerror ("Bad file descriptor").
+        return Err(MonorubyErr::errno_plain(&globals.store, &err));
     }
 
     // The requested access mode must be satisfiable by the fd itself.
@@ -484,10 +405,7 @@ pub(super) fn io_init_from_fd(
     );
     *obj.as_io_inner_mut() = io_inner;
 
-    let de = enc_default_external_obj(globals);
-    let di = enc_default_internal_obj(globals);
-    let (slot, i) =
-        resolve_io_encodings(globals, ext_obj, int_obj, binmode, readable, writable, de, di);
+    let (slot, i) = resolve_named_encodings(globals, names, binmode, readable, writable);
     store_io_encodings(globals, obj, slot, i);
     set_io_ecopts(globals, obj, ecopts)?;
     // Without a mode, `rb_io_initialize` takes the fmode from the
@@ -629,21 +547,6 @@ fn coerce_enc_arg(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<
     Ok(v.check_string_type(vm, globals)?.unwrap_or(v))
 }
 
-/// Argument `Value` -> Encoding object: an `Encoding` is taken as-is, a
-/// String is resolved by name; anything else (incl. `nil`) -> `None`.
-pub(super) fn arg_to_enc_obj(globals: &Globals, v: Value) -> Option<Value> {
-    if v.is_nil() {
-        return None;
-    }
-    if v.class() == super::encoding::encoding_class(globals) {
-        return Some(v);
-    }
-    if let Some(s) = v.is_str() {
-        return enc_by_name(globals, &s);
-    }
-    None
-}
-
 /// CRuby's `rb_io_ext_int_to_encs` external/internal resolution,
 /// operating on Encoding objects.
 fn resolve_io_encodings(
@@ -742,158 +645,468 @@ fn fixed_ext_encoding(globals: &mut Globals, io: Value) -> Option<Value> {
     }
 }
 
-/// Strip a leading "BOM|" (case-insensitive) from an external-encoding
-/// name, reporting whether it was present.
-fn split_bom_prefix(name: &str) -> (&str, bool) {
-    if name.len() >= 4 && name[..4].eq_ignore_ascii_case("bom|") {
-        (&name[4..], true)
-    } else {
-        (name, false)
-    }
+/// The encodings an open, `IO#set_encoding` or `IO.pipe` *names*, before
+/// the defaults are applied (the arguments of CRuby's
+/// `rb_io_ext_int_to_encs`).
+#[derive(Clone, Copy, Default)]
+pub(super) struct EncNames {
+    pub(super) ext: Option<Value>,
+    pub(super) int: Option<Value>,
+    /// The internal encoding was given as "no conversion" (`"-"`,
+    /// `internal_encoding: nil`, or the external encoding once more), so
+    /// `Encoding.default_internal` does not stand in for it.
+    pub(super) no_int: bool,
+    /// The external name came behind `BOM|`.
+    pub(super) bom: bool,
 }
 
-/// Split a mode string's `":ext[:int]"` suffix into encoding names.
-fn mode_encoding_names(mode: &str) -> (Option<&str>, Option<&str>) {
-    let mut it = mode.split(':');
-    let _base = it.next();
-    let ext = it.next().filter(|s| !s.is_empty());
-    let int = it.next().filter(|s| !s.is_empty());
-    (ext, int)
-}
-
-/// Parse the explicit external/internal encoding objects and binmode
-/// flag from a mode string and an options Hash. Precedence:
-/// `:external_encoding` / `:internal_encoding` > `:encoding` >
-/// mode-string suffix.
-fn parse_open_encodings(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    lfp: Lfp,
-    opt_range: std::ops::Range<usize>,
-    mode: &str,
-    extra: Option<Value>,
-) -> Result<(Option<Value>, Option<Value>, bool, bool)> {
-    let base = mode.split(':').next().unwrap_or("");
-    let mut binmode = base.contains('b');
-    let (mext, mint) = mode_encoding_names(mode);
-    // The mode string already carried an encoding, so a later
-    // `encoding:` option is CRuby's "encoding specified twice".
-    let mode_has_enc = mext.is_some();
-    // A "BOM|utf-..." external requests byte-order-mark detection; the
-    // name after the prefix is the fallback when no BOM is present.
-    let (mext, mut bom) = match mext {
-        Some(e) => {
-            let (n, b) = split_bom_prefix(e);
-            (Some(n), b)
-        }
-        None => (None, false),
-    };
-    let mut ext = mext.and_then(|s| enc_by_name(globals, s));
-    let mut int = mint.and_then(|s| enc_by_name(globals, s));
-
-    let candidates = opt_range
-        .filter_map(|i| lfp.try_arg(i))
-        .chain(extra)
-        .collect::<Vec<_>>();
-    for arg in candidates {
-        let Some(h) = arg.try_hash_ty() else { continue };
-        // `binmode: true` is the option spelling of the mode string's
-        // `b`, and it has to reach `set_binmode` the same way.
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("binmode")), vm, globals)?
-            && v.as_bool()
-        {
-            binmode = true;
-        }
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            if mode_has_enc {
-                return Err(MonorubyErr::argumenterr("encoding specified twice"));
-            }
-            if let Some(s) = v.is_str() {
-                let mut parts = s.split(':');
-                // `encoding: "BOM|UTF-8"` asks for the mark's detection
-                // as the mode string's suffix does.
-                ext = parts.next().filter(|x| !x.is_empty()).and_then(|x| {
-                    let (name, b) = split_bom_prefix(x);
-                    bom = b;
-                    enc_by_name(globals, name)
-                });
-                int = parts
-                    .next()
-                    .filter(|x| !x.is_empty())
-                    .and_then(|x| enc_by_name(globals, x));
-            } else {
-                ext = arg_to_enc_obj(globals, v);
-            }
-        }
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            ext = arg_to_enc_obj(globals, v);
-        }
-        if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
-            && !v.is_nil()
-        {
-            int = arg_to_enc_obj(globals, v);
-        }
-    }
-    Ok((ext, int, binmode, bom))
-}
-
-/// Pull `(mode, ext, int)` out of a single options Hash element (mode
-/// string suffix + `:encoding`/`:external_encoding`/`:internal_encoding`).
-fn read_opts_from_hash(
-    vm: &mut Executor,
-    globals: &mut Globals,
-    h: crate::value::Hashmap,
-    mode: &mut String,
-    ext: &mut Option<Value>,
-    int: &mut Option<Value>,
-    bom: &mut bool,
-) -> Result<()> {
-    if let Some(m) = h.get(Value::symbol(IdentId::get_id("mode")), vm, globals)?
-        && let Some(s) = m.is_str()
+/// CRuby's `rb_warn`: `file:line: warning: msg` through `Kernel#warn`,
+/// which `$VERBOSE = nil` silences. The location is the Ruby frame that
+/// called into the builtin.
+fn io_warn(vm: &mut Executor, globals: &mut Globals, msg: &str) -> Result<()> {
+    if globals
+        .get_gvar(IdentId::GVAR_VERBOSE)
+        .is_some_and(|v| v.is_nil())
     {
-        *mode = s.to_string();
-        let (me, mi) = mode_encoding_names(mode);
-        if let Some(e) = me {
-            let (e, b) = split_bom_prefix(e);
-            *bom = b;
-            *ext = enc_by_name(globals, e);
-        }
-        if let Some(i) = mi {
-            *int = enc_by_name(globals, i);
-        }
+        return Ok(());
     }
-    if let Some(v) = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?
-        && !v.is_nil()
-    {
-        if let Some(s) = v.is_str() {
-            let mut parts = s.split(':');
-            *ext = parts
-                .next()
-                .filter(|x| !x.is_empty())
-                .and_then(|x| enc_by_name(globals, x));
-            *int = parts
-                .next()
-                .filter(|x| !x.is_empty())
-                .and_then(|x| enc_by_name(globals, x));
-        } else {
-            *ext = arg_to_enc_obj(globals, v);
-        }
-    }
-    if let Some(v) = h.get(Value::symbol(IdentId::get_id("external_encoding")), vm, globals)?
-        && !v.is_nil()
-    {
-        *ext = arg_to_enc_obj(globals, v);
-    }
-    if let Some(v) = h.get(Value::symbol(IdentId::get_id("internal_encoding")), vm, globals)?
-        && !v.is_nil()
-    {
-        *int = arg_to_enc_obj(globals, v);
-    }
+    let loc = vm
+        .nearest_caller_location(&globals.store)
+        .map(|l| format!("{l}: "))
+        .unwrap_or_default();
+    let msg = Value::string(format!("{loc}warning: {msg}"));
+    let main = globals.main_object;
+    vm.invoke_method_inner(globals, IdentId::get_id("warn"), main, &[msg], None, None)?;
     Ok(())
+}
+
+/// `unsupported_encoding` of io.c: an unknown name where a mode string's
+/// suffix, `encoding:`, `IO#set_encoding` or `IO.pipe` wants one is
+/// warned about and left to the default — never an error.
+fn unsupported_encoding(vm: &mut Executor, globals: &mut Globals, name: &str) -> Result<()> {
+    io_warn(vm, globals, &format!("Unsupported encoding {name} ignored"))
+}
+
+/// What a name is to the encoding table.
+enum NamedEnc {
+    Found(Value),
+    /// `"internal"` while `Encoding.default_internal` is nil. CRuby keeps
+    /// the name registered with an index that stands for no encoding
+    /// (`UNSPECIFIED_ENCODING`), so it is neither an error nor worth a
+    /// warning: the argument just counts as not given.
+    Unspecified,
+    Unknown,
+}
+
+fn named_enc(globals: &mut Globals, name: &str) -> NamedEnc {
+    match enc_by_name(globals, name) {
+        Some(v) => NamedEnc::Found(v),
+        None if name.eq_ignore_ascii_case("internal") => NamedEnc::Unspecified,
+        None => NamedEnc::Unknown,
+    }
+}
+
+/// The encoding a String names, when the name is a known one: the usual
+/// argument, answered without copying the name or asking what else the
+/// value could be. Everything else (an Encoding, `"ext:int"`, `"-"`, an
+/// unknown name, a `#to_str` object) is left to the caller.
+fn known_enc(globals: &Globals, v: Value) -> Option<Value> {
+    enc_by_name(globals, v.is_str()?)
+}
+
+/// CRuby's `rb_to_encoding`, answering the `Encoding` object: an
+/// Encoding is itself, anything else is a name (`#to_str`), and an
+/// unknown name is an `ArgumentError`. `external_encoding:`,
+/// `internal_encoding:` and `Dir`'s `encoding:` are read this way.
+/// `None` is the name that stands for no encoding ([`NamedEnc`]).
+pub(super) fn to_encoding_obj(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<Value>> {
+    if let Some(e) = known_enc(globals, v) {
+        return Ok(Some(e));
+    }
+    if super::encoding::is_encoding_object(globals, v) {
+        return Ok(Some(v));
+    }
+    let name = v.coerce_to_string(vm, globals)?;
+    enc_by_name_or_raise(globals, &name)
+}
+
+/// A name where an unknown one is an `ArgumentError`.
+fn enc_by_name_or_raise(globals: &mut Globals, name: &str) -> Result<Option<Value>> {
+    match named_enc(globals, name) {
+        NamedEnc::Found(v) => Ok(Some(v)),
+        NamedEnc::Unspecified => Ok(None),
+        NamedEnc::Unknown => Err(MonorubyErr::argumenterr(format!(
+            "unknown encoding name - {name}"
+        ))),
+    }
+}
+
+/// A name where an unknown one is only warned about
+/// ([`unsupported_encoding`]).
+fn enc_by_name_or_warn(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    name: &str,
+) -> Result<Option<Value>> {
+    match named_enc(globals, name) {
+        NamedEnc::Found(v) => Ok(Some(v)),
+        NamedEnc::Unspecified => Ok(None),
+        NamedEnc::Unknown => {
+            unsupported_encoding(vm, globals, name)?;
+            Ok(None)
+        }
+    }
+}
+
+/// `find_encoding` of io.c (`IO#set_encoding`'s and `IO.pipe`'s own
+/// arguments): as [`to_encoding_obj`], but an unknown name is warned
+/// about and answers `None`.
+fn find_encoding_or_warn(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<Option<Value>> {
+    if let Some(e) = known_enc(globals, v) {
+        return Ok(Some(e));
+    }
+    if super::encoding::is_encoding_object(globals, v) {
+        return Ok(Some(v));
+    }
+    let name = v.coerce_to_string(vm, globals)?;
+    enc_by_name_or_warn(vm, globals, &name)
+}
+
+/// CRuby's `parse_mode_enc`: `"ext"`, `"ext:int"` or `"ext:-"`, the
+/// external name optionally behind `BOM|`. The *last* colon separates
+/// the two names. A name that is unknown, empty or longer than CRuby's
+/// `ENCODING_MAXNAMELEN` is warned about and left unset.
+fn parse_mode_enc(vm: &mut Executor, globals: &mut Globals, estr: &str) -> Result<EncNames> {
+    const MAX_NAME_LEN: usize = 63;
+    let colon = estr.rfind(':');
+    let int_name = colon.map(|p| &estr[p + 1..]);
+    let mut estr = estr;
+    let mut ext_len = colon.unwrap_or(estr.len());
+    let mut bom = false;
+    // `io_encname_bom_p`: the prefix counts only with a name after it.
+    if ext_len > 4 && estr.as_bytes()[..4].eq_ignore_ascii_case(b"bom|") {
+        estr = &estr[4..];
+        ext_len -= 4;
+        if estr.len() >= 4 && estr.as_bytes()[..4].eq_ignore_ascii_case(b"utf-") {
+            bom = true;
+        } else {
+            io_warn(
+                vm,
+                globals,
+                &format!("BOM with non-UTF encoding {estr} is nonsense"),
+            )?;
+        }
+    }
+    let ext = if ext_len == 0 || ext_len > MAX_NAME_LEN {
+        // CRuby never cuts the name out in this case, so the warning
+        // shows the internal name too.
+        unsupported_encoding(vm, globals, estr)?;
+        None
+    } else {
+        enc_by_name_or_warn(vm, globals, &estr[..ext_len])?
+    };
+    let mut int = None;
+    let mut no_int = false;
+    match int_name {
+        None => {}
+        Some("-") => no_int = true,
+        Some(name) => match enc_by_name_or_warn(vm, globals, name)? {
+            None => {}
+            // The external encoding once more is no conversion (under a
+            // BOM the external one may still change, so it stays).
+            Some(i) if !bom && ext.is_some_and(|e| e.id() == i.id()) => no_int = true,
+            Some(i) => int = Some(i),
+        },
+    }
+    Ok(EncNames {
+        ext,
+        int,
+        no_int,
+        bom,
+    })
+}
+
+/// CRuby's `rb_io_extract_encoding_option`: the encodings an options
+/// Hash names, `None` when it names none.
+///
+/// - `external_encoding:` / `internal_encoding:` are `rb_to_encoding`:
+///   an unknown name raises. `internal_encoding: nil` and `"-"` ask for
+///   no conversion; `external_encoding: nil` is as if absent.
+/// - `encoding:` is an Encoding, or a String read by
+///   [`parse_mode_enc`]. It is dropped, with a warning, when either of
+///   the other two is given.
+fn extract_encoding_option(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    kw: Option<crate::value::Hashmap>,
+) -> Result<Option<EncNames>> {
+    let Some(h) = kw else { return Ok(None) };
+    let encoding = h.get(Value::symbol(IdentId::get_id("encoding")), vm, globals)?;
+    let extenc = h.get(
+        Value::symbol(IdentId::get_id("external_encoding")),
+        vm,
+        globals,
+    )?;
+    let intenc = h.get(
+        Value::symbol(IdentId::get_id("internal_encoding")),
+        vm,
+        globals,
+    )?;
+    encoding_option_names(vm, globals, encoding, extenc, intenc)
+}
+
+/// [`extract_encoding_option`] for the three option values already
+/// taken out of the Hash (`None` for an absent key).
+fn encoding_option_names(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    encoding: Option<Value>,
+    extenc: Option<Value>,
+    intenc: Option<Value>,
+) -> Result<Option<EncNames>> {
+    let encoding = encoding.filter(|v| !v.is_nil());
+    let extenc = extenc.filter(|v| !v.is_nil());
+    let encoding = match encoding {
+        Some(e) if extenc.is_some() || intenc.is_some() => {
+            // The name is shown as the encoding's own when it is one.
+            let shown = match e.is_str() {
+                Some(s) => enc_by_name(globals, s)
+                    .and_then(|o| super::encoding::encoding_object_name(globals, o))
+                    .unwrap_or_else(|| s.to_string()),
+                None => super::encoding::encoding_object_name(globals, e)
+                    .unwrap_or_else(|| e.to_s(globals)),
+            };
+            let used = if extenc.is_some() {
+                "external"
+            } else {
+                "internal"
+            };
+            io_warn(
+                vm,
+                globals,
+                &format!("Ignoring encoding parameter '{shown}': {used}_encoding is used"),
+            )?;
+            None
+        }
+        other => other,
+    };
+    let ext = match extenc {
+        Some(v) => to_encoding_obj(vm, globals, v)?,
+        None => None,
+    };
+    let mut int = None;
+    let mut no_int = false;
+    if let Some(v) = intenc {
+        if v.is_nil() {
+            no_int = true;
+        } else if let Some(i) = known_enc(globals, v) {
+            int = Some(i);
+        } else if super::encoding::is_encoding_object(globals, v) {
+            int = Some(v);
+        } else {
+            let name = v.coerce_to_string(vm, globals)?;
+            if name == "-" {
+                no_int = true;
+            } else {
+                int = enc_by_name_or_raise(globals, &name)?;
+            }
+        }
+        if let (Some(e), Some(i)) = (ext, int)
+            && e.id() == i.id()
+        {
+            int = None;
+            no_int = true;
+        }
+    }
+    if let Some(e) = encoding {
+        // A lone known name is what [`parse_mode_enc`] would answer too.
+        let ext = match known_enc(globals, e) {
+            Some(found) => Some(found),
+            None if super::encoding::is_encoding_object(globals, e) => Some(e),
+            None => None,
+        };
+        if ext.is_some() {
+            return Ok(Some(EncNames {
+                ext,
+                ..Default::default()
+            }));
+        }
+        let s = e.coerce_to_string(vm, globals)?;
+        return parse_mode_enc(vm, globals, &s).map(Some);
+    }
+    if ext.is_some() || int.is_some() || no_int {
+        return Ok(Some(EncNames {
+            ext,
+            int,
+            no_int,
+            bom: false,
+        }));
+    }
+    Ok(None)
+}
+
+/// The encoding half of CRuby's `rb_io_extract_modeenc`: what a mode
+/// string's `:ext[:int]` suffix (`mode_enc`, the text after the first
+/// colon) and the options name between them. Naming encodings both ways
+/// is an error — raised after both were read, so an unknown name in
+/// either is still reported first. `None` is "no encoding given", which
+/// is what lets binary mode choose ASCII-8BIT.
+fn open_enc_names(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mode_enc: Option<&str>,
+    kw: Option<crate::value::Hashmap>,
+) -> Result<Option<EncNames>> {
+    let from_mode = match mode_enc {
+        Some(e) => Some(parse_mode_enc(vm, globals, e)?),
+        None => None,
+    };
+    let from_opts = extract_encoding_option(vm, globals, kw)?;
+    one_enc_spec(from_mode, from_opts)
+}
+
+/// The mode string's encodings or the options', never both.
+fn one_enc_spec(
+    from_mode: Option<EncNames>,
+    from_opts: Option<EncNames>,
+) -> Result<Option<EncNames>> {
+    if from_mode.is_some() && from_opts.is_some() {
+        return Err(MonorubyErr::argumenterr("encoding specified twice"));
+    }
+    Ok(from_mode.or(from_opts))
+}
+
+/// CRuby's `rb_io_ext_int_to_encs` for what [`open_enc_names`] answered.
+/// Binary mode reads ASCII-8BIT only when no encoding was named at all:
+/// a named one that turned out unknown still leaves the default.
+fn resolve_named_encodings(
+    globals: &mut Globals,
+    names: Option<EncNames>,
+    binmode: bool,
+    readable: bool,
+    writable: bool,
+) -> (ExtSlot, Option<Value>) {
+    let de = enc_default_external_obj(globals);
+    let di = enc_default_internal_obj(globals);
+    match names {
+        None => resolve_io_encodings(globals, None, None, binmode, readable, writable, de, di),
+        Some(n) => {
+            let di = if n.no_int { None } else { di };
+            resolve_io_encodings(globals, n.ext, n.int, false, readable, writable, de, di)
+        }
+    }
+}
+
+/// CRuby's `io_encoding_set`: the encodings `IO#set_encoding(v1, v2)` and
+/// `IO.pipe(v1, v2)` name (`None` for nil or an absent argument).
+///
+/// One argument is an Encoding or a `"ext[:int]"` String
+/// ([`parse_mode_enc`]; a `BOM|` prefix is dropped). Two arguments are
+/// stored as the pair they are, with no default standing in for either,
+/// and an unknown name among them is warned about rather than raised:
+/// an unknown external leaves the internal one as the external
+/// encoding, and an unknown internal one leaves a conversion to
+/// `default_external` (`de`), which is what CRuby's `io_read_encoding`
+/// answers for the slot left empty.
+fn encoding_set_names(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v1: Option<Value>,
+    v2: Option<Value>,
+    de: Value,
+) -> Result<EncNames> {
+    let Some(v2) = v2 else {
+        return match v1 {
+            None => Ok(EncNames::default()),
+            Some(v) => {
+                // A lone known name is what [`parse_mode_enc`] answers too.
+                let ext = match known_enc(globals, v) {
+                    Some(found) => Some(found),
+                    None if super::encoding::is_encoding_object(globals, v) => Some(v),
+                    None => None,
+                };
+                if ext.is_some() {
+                    return Ok(EncNames {
+                        ext,
+                        ..Default::default()
+                    });
+                }
+                let s = v.coerce_to_string(vm, globals)?;
+                let mut names = parse_mode_enc(vm, globals, &s)?;
+                names.bom = false;
+                Ok(names)
+            }
+        };
+    };
+    // The external encoding has to be given before the internal one.
+    let Some(v1) = v1 else {
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion of nil into String",
+        ));
+    };
+    let ext = find_encoding_or_warn(vm, globals, v1)?;
+    let (int, dash) = if let Some(i) = known_enc(globals, v2) {
+        (Some(i), false)
+    } else if super::encoding::is_encoding_object(globals, v2) {
+        (Some(v2), false)
+    } else {
+        let name = v2.coerce_to_string(vm, globals)?;
+        if name == "-" {
+            (None, true)
+        } else {
+            (enc_by_name_or_warn(vm, globals, &name)?, false)
+        }
+    };
+    let (ext, int) = match (ext, int) {
+        (Some(e), Some(i)) if e.id() == i.id() => (Some(e), None),
+        (Some(e), None) if !dash && !enc_same(globals, e, de) => (Some(e), Some(de)),
+        (None, Some(i)) => (Some(i), None),
+        pair => pair,
+    };
+    Ok(EncNames {
+        ext,
+        int,
+        no_int: true,
+        bom: false,
+    })
+}
+
+/// The mode string's base and its `:ext[:int]` suffix.
+fn split_mode_enc(mode: &str) -> (&str, Option<&str>) {
+    match mode.split_once(':') {
+        Some((base, enc)) => (base, Some(enc)),
+        None => (mode, None),
+    }
+}
+
+/// The encodings and the binary flag an open with a mode string and an
+/// options Hash asks for (`File#initialize`). This runs *before* the
+/// file is opened, as `rb_io_extract_modeenc` does: an unknown
+/// `external_encoding:` must not leave a created or truncated file
+/// behind.
+pub(super) fn parse_open_encodings(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    mode: &str,
+    kw: Option<crate::value::Hashmap>,
+) -> Result<(Option<EncNames>, bool)> {
+    let (base, mode_enc) = split_mode_enc(mode);
+    let mut binmode = base.contains('b');
+    // `binmode: true` is the option spelling of the mode string's `b`,
+    // and it has to reach `set_binmode` the same way.
+    if kw_opt(vm, globals, &kw, "binmode")?.is_some_and(|v| v.as_bool()) {
+        binmode = true;
+    }
+    let names = open_enc_names(vm, globals, mode_enc, kw)?;
+    Ok((names, binmode))
 }
 
 /// Resolve `(mode, ext, int)` for `IO.read`. When `:open_args` is given
@@ -905,49 +1118,43 @@ fn class_read_opts(
     opts: Option<crate::value::Hashmap>,
 ) -> Result<(String, Option<Value>, Option<Value>, bool)> {
     let mut mode = "r".to_string();
-    let mut ext = None;
-    let mut int = None;
-    let mut bom = false;
     let Some(h) = opts else {
-        return Ok((mode, ext, int, bom));
+        return Ok((mode, None, None, false));
     };
-    let mut binopt = None;
+    // `open_args: [mode, opts]` stands for the mode and the options alike.
+    let mut hash = Some(h);
     if let Some(oa) = h.get(Value::symbol(IdentId::get_id("open_args")), vm, globals)?
         && let Some(ary) = oa.try_array_ty()
     {
+        hash = None;
         for v in ary.iter() {
             if let Some(s) = v.is_str() {
                 mode = s.to_string();
-                let (me, mi) = mode_encoding_names(&mode);
-                if let Some(e) = me {
-                    let (e, b) = split_bom_prefix(e);
-                    bom = b;
-                    ext = enc_by_name(globals, e);
-                }
-                if let Some(i) = mi {
-                    int = enc_by_name(globals, i);
-                }
             } else if let Some(hh) = v.try_hash_ty() {
-                read_opts_from_hash(vm, globals, hh, &mut mode, &mut ext, &mut int, &mut bom)?;
-                binopt = Some(hh);
+                hash = Some(hh);
             }
         }
-    } else {
-        read_opts_from_hash(vm, globals, h, &mut mode, &mut ext, &mut int, &mut bom)?;
-        binopt = Some(h);
+    }
+    if let Some(m) = kw_opt(vm, globals, &hash, "mode")?
+        && let Some(s) = m.is_str()
+    {
+        mode = s.to_string();
     }
     // `b` (or `binmode: true`) with no encoding given reads BINARY, as
     // `File.open(path, "rb")` does (`rb_io_extract_modeenc`).
-    let mut binmode = mode.split(':').next().unwrap_or("").contains('b');
-    if let Some(hh) = binopt
-        && let Some(v) = hh.get(Value::symbol(IdentId::get_id("binmode")), vm, globals)?
-        && v.as_bool()
-    {
-        binmode = true;
-    }
-    if binmode && ext.is_none() && int.is_none() {
-        ext = enc_by_name(globals, "ASCII-8BIT");
-    }
+    let (names, binmode) = parse_open_encodings(vm, globals, &mode, hash)?;
+    let (ext, int, bom) = match names {
+        // The callers take `Encoding.default_internal` for an internal
+        // encoding left out, and convert nothing between an encoding and
+        // itself — which is how "no conversion" is said to them.
+        Some(n) if n.no_int && n.int.is_none() => {
+            let ext = n.ext.unwrap_or_else(|| enc_default_external_obj(globals));
+            (Some(ext), Some(ext), n.bom)
+        }
+        Some(n) => (n.ext, n.int, n.bom),
+        None if binmode => (enc_by_name(globals, "ASCII-8BIT"), None, false),
+        None => (None, None, false),
+    };
     Ok((mode, ext, int, bom))
 }
 
@@ -1079,8 +1286,10 @@ fn class_read_ecopts(
     super::encoding::io_read_ecopts(globals, 0, Some(h))
 }
 
-/// Resolve + store IO encodings at creation time. `opt_range` is the
-/// `lfp` arg span to scan for a trailing options Hash.
+/// Store the encodings [`parse_open_encodings`] read (`names`,
+/// `binmode`) on a freshly opened stream, with the rest of what the mode
+/// and the options ask of it. `opt_range` is the `lfp` arg span to scan
+/// for a trailing options Hash.
 pub(super) fn init_io_encodings(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -1088,18 +1297,17 @@ pub(super) fn init_io_encodings(
     mut io: Value,
     mode: &str,
     readable: bool,
+    names: Option<EncNames>,
+    binmode: bool,
     opt_range: std::ops::Range<usize>,
     extra: Option<Value>,
 ) -> Result<()> {
-    let (ext, int, binmode, bom) =
-        parse_open_encodings(vm, globals, lfp, opt_range.clone(), mode, extra)?;
+    let bom = names.is_some_and(|n| n.bom);
     // The stream's write-ability decides whether a missing external
     // encoding tracks default_external (read-only) or stays nil.
     let base = mode.split(':').next().unwrap_or("");
     let writable = base.contains('w') || base.contains('a') || base.contains('+');
-    let de = enc_default_external_obj(globals);
-    let di = enc_default_internal_obj(globals);
-    let (slot, i) = resolve_io_encodings(globals, ext, int, binmode, readable, writable, de, di);
+    let (slot, i) = resolve_named_encodings(globals, names, binmode, readable, writable);
     store_io_encodings(globals, io, slot, i);
     if binmode {
         io.as_io_inner_mut().set_binmode();
@@ -3220,51 +3428,32 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // Optional read-end encodings: (ext), (ext, int), ("ext:int"), each a
     // String (#to_str) or an Encoding; a trailing options Hash carries the
     // read end's conversion options (`invalid: :replace`, ...).
-    let mut ext_obj: Option<Value> = None;
-    let mut int_obj: Option<Value> = None;
     let mut enc_args: Vec<Value> = Vec::new();
-    for i in 0..3 {
+    for i in 0..2 {
         if let Some(v) = lfp.try_arg(i)
-            && !v.is_nil()
             && v.try_hash_ty().is_none()
         {
             enc_args.push(v);
         }
     }
-    if let Some(&v) = enc_args.first() {
-        if v.class() == super::encoding::encoding_class(globals) {
-            ext_obj = Some(v);
-        } else {
-            let s = v.coerce_to_string(vm, globals)?;
-            // A "BOM|" prefix requests BOM detection on read; the base
-            // encoding is what IO#external_encoding reports.
-            let s = s
-                .strip_prefix("BOM|")
-                .or_else(|| s.strip_prefix("bom|"))
-                .unwrap_or(&s);
-            let mut parts = s.splitn(2, ':');
-            ext_obj = parts
-                .next()
-                .filter(|x| !x.is_empty())
-                .and_then(|x| enc_by_name(globals, x));
-            int_obj = parts
-                .next()
-                .filter(|x| !x.is_empty() && *x != "-")
-                .and_then(|x| enc_by_name(globals, x));
-        }
+    while enc_args.last().is_some_and(|v| v.is_nil()) {
+        enc_args.pop();
     }
-    if let Some(&v) = enc_args.get(1) {
-        int_obj = if v.class() == super::encoding::encoding_class(globals) {
-            Some(v)
-        } else {
-            let s = v.coerce_to_string(vm, globals)?;
-            if s == "-" {
-                None
-            } else {
-                enc_by_name(globals, &s)
-            }
-        };
-    }
+    // Read as `#set_encoding` reads its arguments: an unknown name is
+    // warned about, not raised, and an internal encoding after a nil
+    // external one is a TypeError.
+    let de = enc_default_external_obj(globals);
+    let names = if enc_args.is_empty() {
+        None
+    } else {
+        Some(encoding_set_names(
+            vm,
+            globals,
+            enc_args.first().copied().filter(|v| !v.is_nil()),
+            enc_args.get(1).copied(),
+            de,
+        )?)
+    };
 
     // The read end's conversion options, as `#set_encoding` takes them
     // (`io_encoding_set`): read from the Hash when two encodings or an
@@ -3319,11 +3508,10 @@ fn io_pipe(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     // The read end carries the requested (or default) encodings; the
     // write end carries none — `#initialize` with mode "w" already left
     // it encoding-less.
-    if ext_obj.is_some() || int_obj.is_some() {
-        let de = enc_default_external_obj(globals);
-        let di = enc_default_internal_obj(globals);
-        let (slot, i) =
-            resolve_io_encodings(globals, ext_obj, int_obj, false, true, false, de, di);
+    if let Some(n) = names
+        && (n.ext.is_some() || n.int.is_some())
+    {
+        let (slot, i) = resolve_named_encodings(globals, names, false, true, false);
         store_io_encodings(globals, read_io, slot, i);
     }
     set_io_ecopts(globals, read_io, ecopts)?;
@@ -3488,6 +3676,30 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         None => None,
     }
     .or(textmode.then_some(crate::value::rvalue::io::NewlineMode::Universal));
+    // The encodings for the read end, from the mode string's suffix or
+    // the options, also before the child starts: an unknown
+    // `external_encoding:` raises without running the command.
+    // The option values are the ones taken out of the Hash above (and
+    // rooted there): Ruby that ran since may have emptied the Hash.
+    let enc_names = {
+        let from_mode = match split_mode_enc(&mode).1 {
+            Some(e) => Some(parse_mode_enc(vm, globals, e)?),
+            None => None,
+        };
+        let taken = |name: &str| {
+            io_opts
+                .iter()
+                .find(|(k, _)| k.try_symbol().is_some_and(|s| s.get_name() == name))
+                .map(|(_, v)| *v)
+        };
+        let (encoding, extenc, intenc) = (
+            taken("encoding"),
+            taken("external_encoding"),
+            taken("internal_encoding"),
+        );
+        let from_opts = encoding_option_names(vm, globals, encoding, extenc, intenc)?;
+        one_enc_spec(from_mode, from_opts)?
+    };
 
     let fork = cmd_val.try_array_ty().is_none()
         && cmd_val.is_rstring().is_some_and(|s| s.as_bytes() == b"-");
@@ -3570,56 +3782,12 @@ fn popen_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
         (pid as u32, reader, writer)
     };
 
-    // Encodings for the read end: the options, then the mode string's
-    // "r:ext:int" suffix.
-    let mut ext_obj: Option<Value> = None;
-    let mut int_obj: Option<Value> = None;
-    for (k, v) in io_opts {
-        let Some(sym) = k.try_symbol() else { continue };
-        if v.is_nil() {
-            continue;
-        }
-        match sym.get_name().as_str() {
-            "encoding" => {
-                if let Some(sv) = v.is_str() {
-                    let mut parts = sv.split(':');
-                    ext_obj = parts
-                        .next()
-                        .filter(|x| !x.is_empty())
-                        .and_then(|x| enc_by_name(globals, x));
-                    int_obj = parts
-                        .next()
-                        .filter(|x| !x.is_empty())
-                        .and_then(|x| enc_by_name(globals, x));
-                } else {
-                    ext_obj = arg_to_enc_obj(globals, v);
-                }
-            }
-            "external_encoding" => ext_obj = arg_to_enc_obj(globals, v),
-            "internal_encoding" => int_obj = arg_to_enc_obj(globals, v),
-            _ => {}
-        }
-    }
-    {
-        let (me, mi) = mode_encoding_names(&mode);
-        if ext_obj.is_none() {
-            ext_obj = me.and_then(|e| enc_by_name(globals, e));
-        }
-        if int_obj.is_none() {
-            int_obj = mi.and_then(|i| enc_by_name(globals, i));
-        }
-    }
-
     // Instantiate as the receiver class (a subclass' popen yields the
     // subclass), and install the resolved encodings on the read end.
     let class_id = lfp.self_val().as_class_id();
     let io_val = Value::new_io_with_class(IoInner::popen(pid, reader, writer), class_id);
     {
-        let de = enc_default_external_obj(globals);
-        let di = enc_default_internal_obj(globals);
-        let (slot, i) = resolve_io_encodings(
-            globals, ext_obj, int_obj, binmode, readable, !readable, de, di,
-        );
+        let (slot, i) = resolve_named_encodings(globals, enc_names, binmode, readable, !readable);
         store_io_encodings(globals, io_val, slot, i);
         let mut io = io_val;
         if binmode {
@@ -5985,72 +6153,39 @@ fn set_encoding(
         .rev()
         .find_map(|i| lfp.try_arg(i).and_then(|a| a.try_hash_ty()));
     validate_newline_option(vm, globals, self_, opts)?;
+    let arg0 = coerce_enc_arg(vm, globals, lfp.arg(0))?;
+    let arg1 = match lfp.try_arg(1) {
+        Some(a) if !a.is_nil() && a.try_hash_ty().is_none() => {
+            Some(coerce_enc_arg(vm, globals, a)?)
+        }
+        _ => None,
+    };
     // `set_encoding(nil, enc)` is a TypeError: the external encoding
     // has to be given before the internal one.
-    if lfp.arg(0).is_nil()
-        && let Some(a1) = lfp.try_arg(1)
-        && !a1.is_nil()
-        && a1.try_hash_ty().is_none()
-    {
+    if arg0.is_nil() && arg1.is_some() {
         return Err(MonorubyErr::typeerr(
             "no implicit conversion of nil into String",
         ));
     }
-    let arg0 = coerce_enc_arg(vm, globals, lfp.arg(0))?;
     // CRuby resolves each name through `StringValueCStr`, so an
     // embedded NUL is rejected before the name is looked up at all.
-    for a in [Some(arg0), lfp.try_arg(1)].into_iter().flatten() {
+    for a in [Some(arg0), arg1].into_iter().flatten() {
         if let Some(s) = a.is_rstring_inner()
             && s.as_bytes().contains(&0)
         {
-            return Err(MonorubyErr::argumenterr(
-                "invalid encoding name (NUL byte)",
-            ));
+            return Err(MonorubyErr::argumenterr("invalid encoding name (NUL byte)"));
         }
     }
-    let (mut ext, mut int) = (None, None);
-    // CRuby's `"-"` internal name means *no* conversion, which is not
-    // the same as leaving it out: the latter takes
-    // `Encoding.default_internal`.
-    let mut int_suppressed = false;
-    if let Some(s) = arg0.is_str() {
-        // A single string may carry both as "ext:int".
-        let mut parts = s.split(':');
-        if let Some(e) = parts.next().filter(|x| !x.is_empty()) {
-            ext = Some(enc_by_name(globals, e).ok_or_else(|| {
-                MonorubyErr::argumenterr(format!("unknown encoding name - {e}"))
-            })?);
-        }
-        if let Some(i) = parts.next().filter(|x| !x.is_empty()) {
-            if i == "-" {
-                int_suppressed = true;
-            } else {
-                int = Some(enc_by_name(globals, i).ok_or_else(|| {
-                    MonorubyErr::argumenterr(format!("unknown encoding name - {i}"))
-                })?);
-            }
-        }
-    } else if !arg0.is_nil() {
-        ext = arg_to_enc_obj(globals, arg0);
-    }
-    if int.is_none()
-        && !int_suppressed
-        && let Some(arg1) = lfp.try_arg(1)
-        && !arg1.is_nil()
-        && arg1.try_hash_ty().is_none()
-    {
-        let arg1 = coerce_enc_arg(vm, globals, arg1)?;
-        if arg1.is_str().map(|s| s == "-").unwrap_or(false) {
-            int_suppressed = true;
-        } else {
-            int = arg_to_enc_obj(globals, arg1);
-        }
-    }
+    let de = enc_default_external_obj(globals);
+    let names = encoding_set_names(vm, globals, Some(arg0).filter(|v| !v.is_nil()), arg1, de)?;
+    let (ext, int) = (names.ext, names.int);
     let readable = self_.as_io_inner().is_readable();
     let writable = self_.as_io_inner().is_writable();
-    let de = enc_default_external_obj(globals);
-    let di = enc_default_internal_obj(globals);
-    let di = if int_suppressed { None } else { di };
+    let di = if names.no_int {
+        None
+    } else {
+        enc_default_internal_obj(globals)
+    };
     let (slot, i) = resolve_io_encodings(globals, ext, int, false, readable, writable, de, di);
     // `io_encoding_set`: the options are read (`rb_econv_prepare_options`)
     // when the encodings came as two arguments or as one `"ext:int"`
@@ -12555,6 +12690,109 @@ mod tests {
             ensure
               File.unlink(path)
             end
+            "##,
+        );
+    }
+    /// #2209 for `io_encoding_set`: `IO#set_encoding` and `IO.pipe` warn
+    /// about an unknown name and go on with what is left — the internal
+    /// encoding as the external one, or a conversion to
+    /// `default_external` — and take the default internal encoding only
+    /// for a lone external name.
+    #[test]
+    fn set_encoding_and_pipe_unknown_encoding_names() {
+        run_test_once(
+            r##"
+            $w = []
+            def Warning.warn(m, category: nil) = $w << m.sub(/\A.+?:\d+: warning: /, "LOC ").chomp
+            def t
+              $w.clear
+              v = yield
+              [v, $w.dup]
+            rescue Exception => e
+              [e.class, e.message, $w.dup]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            path = "/tmp/mr_set_enc_unknown_#{Process.pid}.txt"
+            File.binwrite(path, "abc\n")
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            se = ->(*a, mode: "r") { File.open(path, mode) { |f| f.set_encoding(*a); ee.(f) } }
+            pe = ->(*a) { r, w = IO.pipe(*a); v = ee.(r); r.close; w.close; v }
+            res = []
+            [nil, Encoding::EUC_JP].each do |di|
+              Encoding.default_internal = di
+              res << [
+                t { se.("nosuch") },
+                t { se.("utf-8:nosuch") },
+                t { se.("nosuch:utf-8") },
+                t { se.("BOM|nosuch") },
+                t { se.("euc-jp:utf-8:sjis") },
+                t { se.("utf-8", "nosuch") },
+                t { se.("nosuch", "utf-8") },
+                t { se.("nosuch", "nosuch2") },
+                t { se.("nosuch", "utf-8", mode: "r+") },
+                t { se.("euc-jp", "utf-8:sjis") },
+                t { se.("utf-8", "-") },
+                t { se.("utf-8", "utf-8") },
+                t { se.("utf-8", "sjis") },
+                t { se.("utf-8") },
+                t { se.("utf-8:-") },
+                t { se.(Encoding::UTF_8, Encoding::Shift_JIS) },
+                t { se.(:nosuch) },
+                t { se.(nil, "utf-8") },
+                t { pe.("nosuch") },
+                t { pe.("utf-8", "nosuch") },
+                t { pe.("utf-8:nosuch") },
+                t { pe.("nosuch:utf-8") },
+                t { pe.("nosuch", "utf-8") },
+                t { pe.("utf-8", "-") },
+                t { pe.("utf-8", "sjis") },
+                t { pe.("utf-8") },
+                t { pe.(nil, "sjis") },
+                t { pe.("utf-8", nil) },
+                # Not `IO.pipe`'s options: only the conversion ones are.
+                t { r, w = IO.pipe(external_encoding: "nosuch"); v = ee.(r); r.close; w.close; v },
+              ]
+            end
+            Encoding.default_internal = nil
+            Encoding.default_external = de
+            File.delete(path)
+            res
+            "##,
+        );
+    }
+
+    /// #2208: an IO made over descriptor 0, 1 or 2 leaves it open when
+    /// it is closed or collected (`fptr_finalize_flush`'s `fd <= 2`),
+    /// and each such IO reports `autoclose?` as it was asked.
+    #[test]
+    fn standard_descriptors_survive_close() {
+        run_test_once(
+            r##"
+            r = []
+            # Opening the descriptor again fails with EBADF once it is closed.
+            alive = ->(fd) { IO.new(fd, "w", autoclose: false).fileno }
+            [1, 2].each do |fd|
+              f = IO.new(fd, "w")
+              r << [f.autoclose?, f.close, f.closed?, alive.(fd)]
+              IO.open(fd, "w") { }
+              r << alive.(fd)
+              File.open(fd, "w") { |g| r << g.autoclose? }
+              r << alive.(fd)
+              g = File.new(fd, "w"); g.close
+              r << alive.(fd)
+              a = IO.new(fd, "w"); b = IO.new(fd, "w")
+              r << [a.autoclose?, b.autoclose?]
+              b.autoclose = false; b.autoclose = true
+              a.close; b.close
+              r << alive.(fd)
+              h = IO.for_fd(fd, "w"); h.close_write
+              r << [h.closed?, alive.(fd)]
+            end
+            200.times { IO.new(1, "w") }
+            GC.start
+            r << alive.(1)
+            r
             "##,
         );
     }

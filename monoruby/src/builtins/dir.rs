@@ -140,11 +140,18 @@ fn external_str_with_enc(globals: &mut Globals, bytes: Vec<u8>, enc_obj: Option<
     super::io::tag_with_encs_lossy(globals, bytes, enc_obj, None)
 }
 
-/// Resolve an `encoding:` keyword value (String name or Encoding
-/// object; nil/absent → None = default external).
-fn entries_enc_obj(globals: &Globals, v: Option<Value>) -> Option<Value> {
-    v.filter(|v| !v.is_nil())
-        .and_then(|v| super::io::arg_to_enc_obj(globals, v))
+/// Resolve an `encoding:` keyword value (`rb_to_encoding`: an Encoding
+/// or a name, an unknown name being an `ArgumentError`; nil/absent →
+/// None = default external).
+fn entries_enc_obj(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Option<Value>,
+) -> Result<Option<Value>> {
+    match v.filter(|v| !v.is_nil()) {
+        Some(v) => super::io::to_encoding_obj(vm, globals, v),
+        None => Ok(None),
+    }
 }
 
 ///
@@ -202,7 +209,7 @@ fn foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) 
     };
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     super::file::check_path_encoding(globals, &path)?;
-    let enc_obj = entries_enc_obj(globals, enc_val);
+    let enc_obj = entries_enc_obj(vm, globals, enc_val)?;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     names.extend(read_dir_names(globals, &path)?);
     // The block is resolved before the name Strings are made: a `to_proc`
@@ -1021,7 +1028,7 @@ fn exist(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn entries(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let path = lfp.arg(0).coerce_to_path_rstring(vm, globals)?;
     super::file::check_path_encoding(globals, &path)?;
-    let enc_obj = entries_enc_obj(globals, lfp.try_arg(1));
+    let enc_obj = entries_enc_obj(vm, globals, lfp.try_arg(1))?;
     let mut names: Vec<Vec<u8>> = vec![b".".to_vec(), b"..".to_vec()];
     names.extend(read_dir_names(globals, &path)?);
     let result: Vec<Value> = names
@@ -1109,7 +1116,7 @@ fn dir_entries_fd(
     _: BytecodePtr,
 ) -> Result<Value> {
     let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
-    let enc_obj = entries_enc_obj(globals, Some(lfp.arg(1)));
+    let enc_obj = entries_enc_obj(vm, globals, Some(lfp.arg(1)))?;
     let entries = read_entries_via_fd(globals, fd, enc_obj)?;
     Ok(Value::array_from_vec(entries))
 }

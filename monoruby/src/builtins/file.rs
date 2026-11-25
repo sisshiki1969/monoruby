@@ -1358,10 +1358,6 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
     if super::io::kw_opt(vm, globals, &kw, "binmode")?.is_some_and(|v| v.as_bool()) {
         binmode = true;
     }
-    // CRuby rejects newline decorators on a binary-mode stream.
-    if binmode && super::io::newline_decorator_given(vm, globals, kw)? {
-        return Err(MonorubyErr::argumenterr("newline decorator with binary mode"));
-    }
     let access = (oflags as i32) & libc::O_ACCMODE;
     let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
     let writable = access == libc::O_WRONLY || access == libc::O_RDWR;
@@ -1372,6 +1368,19 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
     let kw_perm = super::io::kw_opt(vm, globals, &kw, "perm")?;
     if pos_perm.is_some() && kw_perm.is_some() {
         return Err(MonorubyErr::argumenterr("perm specified twice"));
+    }
+    // The encodings the mode string and the options name, read before
+    // anything is opened: an unknown `external_encoding:` raises without
+    // creating or truncating the file, and an unknown name in the mode
+    // string is warned about even when the open then fails.
+    let (enc_names, _) = super::io::parse_open_encodings(vm, globals, &mode, kw)?;
+    // CRuby rejects newline decorators on a binary-mode stream
+    // (`validate_enc_binmode`, the last thing `rb_io_extract_modeenc`
+    // does).
+    if binmode && super::io::newline_decorator_given(vm, globals, kw)? {
+        return Err(MonorubyErr::argumenterr(
+            "newline decorator with binary mode",
+        ));
     }
     let perm: i64 = match pos_perm.or(kw_perm) {
         Some(p) => p.num2long(vm, globals)?,
@@ -1439,7 +1448,18 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
         .set_capi_fmode(fmode_of_oflags(open_flags));
     // The options are the `**opts` Hash alone: a positional Hash was
     // rejected above as a mode or a `perm`.
-    super::io::init_io_encodings(vm, globals, lfp, obj, &mode, readable, 0..0, kw_hash)
+    super::io::init_io_encodings(
+        vm,
+        globals,
+        lfp,
+        obj,
+        &mode,
+        readable,
+        enc_names,
+        binmode,
+        0..0,
+        kw_hash,
+    )
 }
 
 /// The `FMODE_*` bits `rb_io_oflags_fmode` derives from open(2) flags
@@ -5128,6 +5148,166 @@ mod tests {
               end
               File.unlink(path)
             end
+            "##,
+        );
+    }
+    /// #2209: `external_encoding:` / `internal_encoding:` are
+    /// `rb_to_encoding` — an unknown name raises, before anything is
+    /// opened — while the mode string's suffix and `encoding:` warn and
+    /// keep the default (`parse_mode_enc`).
+    #[test]
+    fn open_unknown_encoding_names() {
+        run_test_once(
+            r##"
+            $w = []
+            def Warning.warn(m, category: nil) = $w << m.sub(/\A.+?:\d+: warning: /, "LOC ").chomp
+            def t
+              $w.clear
+              v = yield
+              [v, $w.dup]
+            rescue Exception => e
+              [e.class, e.message, $w.dup]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            path = "/tmp/mr_unknown_enc_#{Process.pid}.txt"
+            File.binwrite(path, "abc\n")
+            made = path + ".made"
+            ee = ->(f) { [f.external_encoding.to_s, f.internal_encoding.to_s] }
+            fd = -> { IO.sysopen(path) }
+            res = [
+              # The issue's cases.
+              t { File.open(path, external_encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, internal_encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, "r:nosuch") { |f| ee.(f) } },
+              t { IO.new(fd.(), external_encoding: "nosuch") },
+              t { File.open(path, external_encoding: "BOM|UTF-8") { |f| ee.(f) } },
+              # `parse_mode_enc`: the last colon separates, each half is
+              # looked up on its own, and `BOM|` wants a UTF name.
+              t { File.open(path, encoding: "utf-8:nosuch") { |f| ee.(f) } },
+              t { File.open(path, encoding: "nosuch:utf-8") { |f| ee.(f) } },
+              t { File.open(path, encoding: "nosuch:nosuch2") { |f| ee.(f) } },
+              t { File.open(path, encoding: "euc-jp:utf-8:sjis") { |f| ee.(f) } },
+              t { File.open(path, encoding: ":utf-8") { |f| ee.(f) } },
+              t { File.open(path, encoding: "") { |f| ee.(f) } },
+              t { File.open(path, encoding: "x" * 70) { |f| ee.(f) } },
+              t { File.open(path, "r:") { |f| ee.(f) } },
+              t { File.open(path, "r:BOM|nosuch") { |f| ee.(f) } },
+              t { File.open(path, "r:BOM|euc-jp") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-8:-") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-8:utf-8") { |f| ee.(f) } },
+              t { File.open(path, mode: "r:nosuch") { |f| ee.(f) } },
+              # A name that turned out unknown still counts as given:
+              # binary mode does not choose ASCII-8BIT, and a second
+              # spelling is "twice".
+              t { File.open(path, "rb:nosuch") { |f| ee.(f) } },
+              t { File.open(path, "rb", encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, "rb") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-8", encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, "r:nosuch", encoding: "utf-8") { |f| ee.(f) } },
+              t { File.open(path, "r:utf-8", external_encoding: "nosuch") { |f| ee.(f) } },
+              # `rb_to_encoding`: a name or an Encoding, nothing else.
+              t { File.open(path, external_encoding: :utf_8) { |f| ee.(f) } },
+              t { File.open(path, internal_encoding: 1) { |f| ee.(f) } },
+              t { File.open(path, encoding: :utf_8) { |f| ee.(f) } },
+              t { File.open(path, external_encoding: "euc-jp:utf-8") { |f| ee.(f) } },
+              t { File.open(path, external_encoding: nil) { |f| ee.(f) } },
+              t { File.open(path, internal_encoding: nil) { |f| ee.(f) } },
+              t { File.open(path, internal_encoding: "-") { |f| ee.(f) } },
+              t { File.open(path, external_encoding: "utf-8", internal_encoding: "utf-8") { |f| ee.(f) } },
+              t { File.open(path, external_encoding: "euc-jp", internal_encoding: Encoding::UTF_8) { |f| ee.(f) } },
+              # `encoding:` gives way to either of the other two.
+              t { File.open(path, encoding: "nosuch", external_encoding: "utf-8") { |f| ee.(f) } },
+              t { File.open(path, encoding: "sjis", external_encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open(path, encoding: "sjis", internal_encoding: "utf-8") { |f| ee.(f) } },
+              t { File.open(path, encoding: Encoding::EUC_JP, internal_encoding: nil) { |f| ee.(f) } },
+              t { File.open(path, encoding: "sjis", external_encoding: nil) { |f| ee.(f) } },
+              # Nothing is created, and the options are read before the
+              # path or the descriptor is tried.
+              t { File.open(made, "w", external_encoding: "nosuch") { } },
+              t { File.exist?(made) },
+              t { File.open(made, "w", encoding: "nosuch") { |f| ee.(f) } },
+              t { File.open("/nonexistent/x", external_encoding: "nosuch") { } },
+              t { File.open("/nonexistent/x", "r:nosuch") { }.class },
+              t { File.open(path, "r", 0644, external_encoding: "nosuch", perm: 1) { } },
+              t { IO.new(-1, external_encoding: "nosuch") },
+              # IO.new reads them the same way.
+              t { IO.new(fd.(), internal_encoding: "nosuch") },
+              t { ee.(IO.new(fd.(), encoding: "nosuch")) },
+              t { ee.(IO.new(fd.(), "r:utf-8:nosuch")) },
+              t { ee.(IO.new(fd.(), "r:BOM|nosuch")) },
+              t { ee.(IO.new(fd.(), encoding: "nosuch", external_encoding: "utf-8")) },
+              t { IO.new(fd.(), external_encoding: :nosuch) },
+              t { ee.(IO.new(fd.(), internal_encoding: "-")) },
+              t { IO.new(fd.(), "r:utf-8", encoding: "nosuch") },
+            ]
+            File.delete(path)
+            File.delete(made) if File.exist?(made)
+            Encoding.default_external = de
+            res
+            "##,
+        );
+    }
+
+    /// #2209 for the callers that open a file themselves: the class-level
+    /// readers and writers, `IO.popen` (which must not run the command)
+    /// and `Dir`.
+    #[test]
+    fn class_reads_and_popen_unknown_encoding_names() {
+        run_test_once(
+            r##"
+            $w = []
+            def Warning.warn(m, category: nil) = $w << m.sub(/\A.+?:\d+: warning: /, "LOC ").chomp
+            def t
+              $w.clear
+              v = yield
+              [v, $w.dup]
+            rescue Exception => e
+              [e.class, e.message, $w.dup]
+            end
+            de = Encoding.default_external
+            Encoding.default_external = Encoding::ISO_8859_1
+            path = "/tmp/mr_unknown_enc2_#{Process.pid}.txt"
+            File.binwrite(path, "abc\n")
+            mark = path + ".mark"
+            dir = File.dirname(File.expand_path(path))
+            res = [
+              t { File.read(path, encoding: "nosuch").encoding.to_s },
+              t { File.read(path, external_encoding: "nosuch") },
+              t { File.read(path, internal_encoding: "nosuch") },
+              t { File.read(path, mode: "r:utf-8:nosuch").encoding.to_s },
+              t { File.read(path, encoding: "euc-jp:nosuch").encoding.to_s },
+              t { File.read(path, mode: "rb", encoding: "nosuch").encoding.to_s },
+              t { File.read(path, external_encoding: "BOM|UTF-8") },
+              t { File.read(path, open_args: ["r:nosuch"]).encoding.to_s },
+              t { File.read(path, open_args: ["r", { external_encoding: "nosuch" }]) },
+              t { File.readlines(path, encoding: "nosuch").map { _1.encoding.to_s } },
+              t { File.readlines(path, external_encoding: "nosuch") },
+              t { File.foreach(path, encoding: "nosuch").map { _1.encoding.to_s } },
+              t { File.foreach(path, external_encoding: "nosuch") { } },
+              t { File.write(path + ".w", "x", encoding: "nosuch") },
+              t { File.write(path + ".w", "x", external_encoding: "nosuch") },
+              t { open(path, external_encoding: "nosuch") { } },
+              t { open(path, "r:nosuch") { |f| f.external_encoding.to_s } },
+              t { IO.popen("echo x > #{mark}", external_encoding: "nosuch") { |f| f.read } },
+              t { File.exist?(mark) },
+              t { IO.popen("echo x", encoding: "nosuch") { |f| [f.external_encoding.to_s, f.read] } },
+              t { IO.popen("echo x", "r:nosuch") { |f| [f.external_encoding.to_s, f.read] } },
+              t { IO.popen("echo x", "r:utf-8", encoding: "sjis") { |f| f.read } },
+              t { Dir.new(dir, encoding: "nosuch") },
+              t { Dir.new("/nonexistent", encoding: "nosuch") },
+              t { Dir.open(dir, encoding: "nosuch") { } },
+              t { Dir.entries(dir, encoding: "nosuch") },
+              t { Dir.children(dir, encoding: "nosuch") },
+              t { Dir.foreach(dir, encoding: "nosuch") { } },
+              t { Dir.entries(dir, encoding: 1) },
+              t { Dir.open(dir, encoding: "euc-jp") { |d| d.read.encoding.to_s } },
+              t { Dir.entries(dir, encoding: Encoding::EUC_JP).first.encoding.to_s },
+            ]
+            [path, path + ".w", mark].each { |f| File.delete(f) if File.exist?(f) }
+            Encoding.default_external = de
+            res
             "##,
         );
     }

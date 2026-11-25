@@ -13,7 +13,7 @@ class Dir
   include Enumerable
 
   def self.open(path, encoding: nil, &block)
-    dir = new(path)
+    dir = new(path, encoding: encoding)
     if block
       begin
         result = block.call(dir)
@@ -27,6 +27,9 @@ class Dir
   end
 
   def initialize(path, encoding: nil)
+    # `rb_to_encoding`, before the path is looked at: an unknown name is
+    # an ArgumentError and must not leave a descriptor open.
+    encoding = Encoding.find(encoding) unless encoding.nil? || Encoding === encoding
     path = __to_path(path)
     @__path = path
     # Every Dir holds a real O_DIRECTORY|O_CLOEXEC descriptor (like
