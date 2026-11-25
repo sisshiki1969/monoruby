@@ -3609,7 +3609,37 @@ fn require(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
 /// The encoding of the feature String *arg*, which decides that of the
 /// loaded file's path String (#2090, `Globals::expanded_path_encoding`).
 fn feature_encoding(arg: Value) -> Option<crate::value::Encoding> {
-    Some(arg.is_rstring_inner()?.encoding())
+    let name = arg.is_rstring_inner()?;
+    Some(ospath_encoding(
+        name.encoding(),
+        name.as_bytes().is_ascii(),
+        cfg!(target_os = "macos"),
+    ))
+}
+
+/// CRuby's `rb_str_encode_ospath`, which `require`, `load` and an
+/// autoload's `require` run the feature String through before anything
+/// else. Where the OS takes its paths in UTF-8 (*utf8_ospath*: macOS;
+/// Linux has no such step) a name that is neither BINARY nor UTF-8 is
+/// converted to UTF-8, so that is the encoding the file's path String
+/// starts from: `load "x.rb".encode("EUC-JP")` has a UTF-8 `__FILE__`
+/// there and an EUC-JP one on Linux, and a US-ASCII name no longer
+/// stands for `Encoding.default_external` as a BINARY one still does.
+///
+/// Only an ASCII-only name is relabelled. Any other would have to be
+/// transcoded, and a name whose bytes are not UTF-8 is not loadable
+/// here yet in the first place.
+fn ospath_encoding(
+    enc: crate::value::Encoding,
+    ascii_only: bool,
+    utf8_ospath: bool,
+) -> crate::value::Encoding {
+    use crate::value::Encoding;
+    match enc {
+        Encoding::Ascii8 | Encoding::UTF8 => enc,
+        _ if utf8_ospath && ascii_only => Encoding::UTF8,
+        _ => enc,
+    }
 }
 
 /// CRuby's `rb_get_path`: convert a path argument to a String via
@@ -8097,6 +8127,32 @@ fn iv_remove(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[cfg(test)]
 mod tests {
     use crate::tests::*;
+
+    /// macOS only: CRuby's `rb_str_encode_ospath` turns a feature
+    /// String that is neither BINARY nor UTF-8 into a UTF-8 one before
+    /// `require` / `load` look at it. Checked here as a function of the
+    /// platform, since the differential tests can only show the
+    /// platform they run on.
+    #[test]
+    fn feature_string_encoding_goes_through_the_ospath_rule() {
+        use super::ospath_encoding;
+        use crate::value::Encoding;
+        for enc in [Encoding::UsAscii, Encoding::EUC_JP, Encoding::Iso8859(1)] {
+            // Linux: the name's own encoding.
+            assert_eq!(ospath_encoding(enc, true, false), enc);
+            assert_eq!(ospath_encoding(enc, false, false), enc);
+            // macOS: UTF-8, as long as there is nothing to transcode.
+            assert_eq!(ospath_encoding(enc, true, true), Encoding::UTF8);
+            assert_eq!(ospath_encoding(enc, false, true), enc);
+        }
+        for enc in [Encoding::Ascii8, Encoding::UTF8] {
+            for ascii_only in [true, false] {
+                for utf8_ospath in [true, false] {
+                    assert_eq!(ospath_encoding(enc, ascii_only, utf8_ospath), enc);
+                }
+            }
+        }
+    }
 
     #[test]
     fn sprintf_renderings_are_ascii_8bit() {
