@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6214da3e.js";
+            window.path_to_searchindex_js = "searchindex-5bfe8047.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -15614,6 +15614,8 @@ frozen 検査（<code>FrozenError</code>）の後 <code>Array::set_index</code> 
 <tr><td><code>[]</code> / <code>slice</code></td><td><code>array_index</code></td><td><code>AsmInst::ArrayIndex</code></td></tr>
 <tr><td><code>[]=</code></td><td><code>array_index_assign</code> / <code>array_slice_assign</code></td><td><code>AsmInst::ArrayIndexAssign</code> / <code>emit_array_slice_assign</code></td></tr>
 <tr><td><code>rotate!</code></td><td><code>array_rotate_</code></td><td><code>guard_frozen</code> + <code>ary_rotate_</code> への call</td></tr>
+<tr><td><code>__size</code> / <code>__aset</code>（private）</td><td><code>size</code> / <code>[]=</code> と同じ関数・同じ生成器</td><td>同上（§4）</td></tr>
+<tr><td><code>__aref</code>（private）</td><td><code>array_aref</code></td><td><code>AsmInst::ArrayIndex</code>。添字が証明されていなければ Fixnum ガード（外れたら deopt）</td></tr>
 </tbody>
 </table>
 </div>
@@ -15805,8 +15807,27 @@ CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { 
 特殊化された引数束縛を得られ、ブロック形では要素ごとの <code>yield</code> がインライン
 展開される（native 版は要素ごとに native→Ruby のブロック呼び出しを払って
 いた）。<code>each</code> / <code>map</code> の Rust 版は <code>builtins/array.rs</code> に残っているが<strong>登録が
-コメントアウト</strong>されていて、<code>while i &lt; self.size</code> を <code>Array#size</code> / <code>Array#[]</code>
-のインラインで回す Ruby 版が勝つ。</p>
+コメントアウト</strong>されていて、<code>while i &lt; __size</code> / <code>__aref(i)</code> をインラインで
+回す Ruby 版が勝つ。</p>
+<p><strong>レシーバの読み書きは private な primitive で行う</strong>（issue #2178）:
+<code>__size</code>（<code>RARRAY_LEN</code>）、<code>__aref(i)</code>（<code>rb_ary_entry</code>。引数は <code>NUM2LONG</code> 相当の
+変換で、Range は <code>TypeError</code>）、<code>__aref(start, len)</code>（<code>rb_ary_subseq</code>。結果は
+常に素の <code>Array</code>）、<code>__aset(i, v)</code>。<code>self.size</code> / <code>self[i]</code> と書くと通常の
+メソッド呼び出しになり、<code>size</code> / <code>[]</code> を上書きした Array のサブクラス（や
+<code>Array</code> 自体の再定義）が <code>each</code> / <code>map</code> の歩く範囲を変えてしまう。CRuby の C は
+メソッドを呼ばない。<code>__size</code> と <code>__aset</code> は <code>size</code> / <code>[]=</code> と同じ <code>FuncId</code> の
+別名なので生成コードも同じ。<code>__aref</code> は専用の関数と生成器（<code>array_aref</code>）を
+持つ: <code>[]</code> のサイトと違って添字クラスのインラインキャッシュが無いので、
+状態が Integer と証明していない添字には Fixnum ガードを出し、外れたら
+インタプリタに降りて変換または例外を任せる。作業用の複製も <code>self.dup</code>
+（サブクラスのまま）ではなく <code>__aref(0, __size)</code>（素の <code>Array</code>）で取る。</p>
+<p>インタプリタではこの 2 つが汎用のメソッド呼び出しになる（<code>self[i]</code> は
+<code>Index</code> 命令の高速経路だった）ので、<code>--no-jit</code> の <code>each</code> は要素あたり約
+330 命令ぶん遅い。JIT では要素あたりの命令数は変わらない。</p>
+<p>長さは CRuby と同じ箇所で読み直す: <code>each</code> / <code>map</code> / <code>select</code> などは毎周、
+<code>reverse_each</code> は <code>yield</code> の後（縮んだら残りの末尾へ移る）、<code>cycle</code> は
+周回ごとと要素ごと。<code>map</code> は <code>yield</code> した数だけの結果を返す（途中で縮んでも
+nil で埋めない）。</p>
 <p>逆に <strong><code>Array#sum</code> は意図的に Ruby で開き直さない</strong>（Rust の Fixnum 高速
 経路を迂回してしまうため）。<code>sample</code> / <code>shuffle</code> / <code>shuffle!</code> は <code>random:</code>
 の解決と <code>RAND_UPTO</code> を共有するため Rust のまま。</p>
@@ -15815,7 +15836,9 @@ CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { 
 <code>while i &lt; size</code>）が壊れるが、C 実装の CRuby は影響を受けない。
 <code>Array#size</code> を再定義すると <code>Kernel#p</code> の内部が <code>ArgumentError</code> になるのも
 同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
-である。</p>
+である。上の primitive が塞ぐのは <code>builtins/array.rb</code> がレシーバ自身を読む
+箇所で、<code>enumerable.rb</code> などが作業用の素の <code>Array</code> に対して呼ぶ <code>size</code> /
+<code>[]</code> は <code>Array</code> 自体の再定義を受けたままである。</p>
 <hr>
 <h2 id="5-個別メソッドの注記"><a class="header" href="#5-個別メソッドの注記">5. 個別メソッドの注記</a></h2>
 <ul>
@@ -15889,7 +15912,7 @@ ruby/spec どおりに踏む。</li>
 <tbody>
 <tr><td>埋め込み／共有</td><td><code>RARRAY_EMBED</code>（埋め込み）と <code>ary_make_shared</code> による共有配列 + copy-on-write の 2 段</td><td><strong>共有配列は無い</strong>。<code>SmallVec&lt;[Value; 5]&gt;</code> の 1 機構: 5 要素まで 48 バイトのペイロードに直置き、超えたらヒープ。<code>get_elem1</code> / <code>get_elem2</code> の Range 形は毎回新しい配列を確保する。String には隠れ frozen root による共有部分文字列があるので（<a href="#string-の実装と最適化">string.md</a>）、Array に無いのは意図的な選択</td></tr>
 <tr><td>基本演算の追跡</td><td><code>BOP_SIZE</code> / <code>BOP_LENGTH</code> / <code>BOP_AREF</code> / <code>BOP_ASET</code> …</td><td><code>Array#[]</code> / <code>Array#[]=</code> / <code>Hash#[]</code> のみ。<code>size</code> は class-version ガードで守る。<code>Hash#[]=</code> は意図的に外す</td></tr>
-<tr><td>組み込みの実装言語</td><td>C（<code>Integer#&lt;</code> を再定義しても <code>Array#map</code> は無傷）</td><td><code>each</code> / <code>map</code> / <code>initialize</code> などが Ruby。<code>Integer#&lt;</code> や <code>Array#size</code> の再定義が組み込みの内部に及ぶ（意図したトレードオフ、§4）</td></tr>
+<tr><td>組み込みの実装言語</td><td>C（<code>Integer#&lt;</code> を再定義しても <code>Array#map</code> は無傷）</td><td><code>each</code> / <code>map</code> / <code>initialize</code> などが Ruby。<code>Integer#&lt;</code> の再定義は組み込みの内部に及ぶ（意図したトレードオフ、§4）。レシーバの長さと要素は private な <code>__size</code> / <code>__aref</code> / <code>__aset</code> で読むので、サブクラスの <code>size</code> / <code>[]</code> / <code>[]=</code> は及ばない</td></tr>
 <tr><td><code>Array.new</code> と <code>allocate</code></td><td>ユーザー定義の <code>self.allocate</code> を迂回</td><td>同じ。private な <code>__builtin_allocate__</code> 経由で実現</td></tr>
 <tr><td>範囲外の <code>[]</code></td><td>nil</td><td>JIT コード内で nil（deopt 無し）。負添字も生成コードで折り返す。範囲外の<strong>書き込み</strong>は必ず高速経路を抜ける（伸長・<code>IndexError</code> のため）</td></tr>
 <tr><td><code>ArithmeticSequence</code> 添字</td><td><code>rb_ary_aref1</code> 内で処理</td><td><code>aseq.[](self)</code> に委譲（3 箇所とも）。特異クラス付きの AS（<code>Range#%</code> 由来）も <code>ObjTy</code> で判定するので届く</td></tr>
