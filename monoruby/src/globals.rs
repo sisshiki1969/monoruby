@@ -52,7 +52,7 @@ pub(crate) fn cvar_state_inc() {
 }
 pub use gvar::*;
 use prng::*;
-pub(crate) use require::{RequireLoad, foreign_extension_error, lexically_normalize};
+pub(crate) use require::{RequireLoad, foreign_extension_error, lexically_normalize, stub_dirs};
 pub use require::{load_file, read_source_file};
 pub use store::*;
 
@@ -2316,6 +2316,48 @@ impl Globals {
                 true
             }
             None => false,
+        }
+    }
+
+    /// Whether *path* is a file this thread is in the middle of
+    /// `require`ing (directly or for an autoload). A file `load` runs
+    /// does not count: it provides no feature, in CRuby either.
+    pub(crate) fn is_loading_here(&self, path: &std::path::Path) -> bool {
+        self.loading_features
+            .get(path)
+            .is_some_and(|&loader| loader == crate::scheduler::current_thread_id())
+    }
+
+    /// Whether a file named `stem` (extension aside) is among the files
+    /// this thread is `require`ing. A cheap pre-check for
+    /// `autoload_feature_in_flight`: nearly every autoload is asked
+    /// about while no file of its name is running.
+    pub(crate) fn is_loading_stem_here(&self, stem: &std::ffi::OsStr) -> bool {
+        if self.loading_features.is_empty() {
+            return false;
+        }
+        let me = crate::scheduler::current_thread_id();
+        self.loading_features
+            .iter()
+            .any(|(path, &loader)| loader == me && path.file_stem() == Some(stem))
+    }
+
+    /// The encoding of the path String CRuby makes for a file named by
+    /// a String in *enc* once it has expanded the name (#2090): *enc*
+    /// itself, except that `rb_file_expand_path` gives a US-ASCII or
+    /// BINARY name the filesystem encoding, which is
+    /// `Encoding.default_external` on Linux and macOS.
+    pub(crate) fn expanded_path_encoding(
+        &self,
+        enc: crate::value::Encoding,
+    ) -> crate::value::Encoding {
+        use crate::value::Encoding;
+        match enc {
+            Encoding::UsAscii | Encoding::Ascii8 => self
+                .get_gvar(IdentId::GVAR_DEFAULT_EXTERNAL)
+                .and_then(|v| self.encoding_of_object(v))
+                .unwrap_or_else(crate::builtins::encoding::locale_encoding),
+            enc => enc,
         }
     }
 

@@ -159,6 +159,7 @@ mod kwargs_source_order;
 mod language_fixes;
 mod late_direct_call;
 mod literal;
+mod load_autoload_path_encodings;
 mod loop_analysis_outer_widen;
 mod loop_dead_float;
 mod loop_entry_types;

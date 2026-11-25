@@ -852,16 +852,15 @@ fn write_special_check(
         // `$0` requires a String — and actually renames the process
         // (CRuby's setproctitle), so `ps` shows the new title.
         IdentId::GVAR_PROGRAM_NAME0 | IdentId::GVAR_PROGRAM_NAME => {
-            if let Some(inner) = val.is_rstring_inner() {
-                set_process_title(inner.as_bytes());
-                Ok(val)
-            } else {
-                Err(MonorubyErr::no_implicit_conversion(
-                    &globals.store,
-                    val,
-                    STRING_CLASS,
-                ))
-            }
+            // `set_arg0`: `StringValue`, and what is kept is a frozen
+            // copy (`rb_str_new_frozen`) — the program name is frozen
+            // from the start, too.
+            let name = val.coerce_to_rstring(vm, globals)?;
+            let inner: &crate::value::RStringInner = &name;
+            set_process_title(inner.as_bytes());
+            let mut v = Value::string_from_inner(inner.clone());
+            v.set_frozen();
+            Ok(v)
         }
         _ => unreachable!("is_special_gvar admits only the GVAR_* block"),
     }

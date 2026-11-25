@@ -2347,7 +2347,10 @@ pub(crate) fn emit_deprecated_constant_warning(
         return Ok(());
     }
 
-    let msg = format!("warning: constant {qualified_name} is deprecated\n");
+    let at = vm
+        .const_read_location(globals)
+        .map_or(String::new(), |loc| format!("{loc}: "));
+    let msg = format!("{at}warning: constant {qualified_name} is deprecated\n");
     let stderr = globals
         .get_gvar(IdentId::get_id("$stderr"))
         .unwrap_or(Value::nil());

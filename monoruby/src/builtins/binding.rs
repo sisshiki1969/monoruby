@@ -122,7 +122,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     let cfp = vm.cfp();
     let caller_cfp = cfp.prev().unwrap();
     let fname = if let Some(f) = lfp.try_arg(1) {
-        f.coerce_to_str(vm, globals)?
+        crate::builtins::eval_file_name(vm, globals, f)?
     } else {
         let caller_loc = globals.store.get_caller_loc(caller_cfp, Some(pc));
         format!("(eval at {})", caller_loc)
@@ -137,8 +137,9 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     // binding-form. The cast can't fail; `Module#define_builtin_func`
     // guarantees `lfp.self_val()` matches `BINDING_CLASS`.
     let binding = Binding::try_new(lfp.self_val()).expect("self is Binding");
-    globals.compile_script_binding(expr, fname, binding, lineno, src_encoding)?;
+    let compiled = globals.compile_script_binding(expr, fname, binding, lineno, src_encoding);
     vm.flush_compile_warnings(globals);
+    compiled?;
     vm.invoke_binding(globals, binding.binding().unwrap())
 }
 
