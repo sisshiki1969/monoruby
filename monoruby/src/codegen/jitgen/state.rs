@@ -175,6 +175,15 @@ impl AbstractState {
     }
 
     ///
+    /// Keep the innermost frame's float locals deferred to the spill
+    /// homes *entry* holds them in (the no-return-path resume — see
+    /// `specialized_compile`).
+    ///
+    pub(super) fn keep_deferred_homes_innermost(&mut self, entry: &SlotState) {
+        FrameRef::make_mut(self.frames.last_mut().unwrap()).keep_deferred_homes(entry);
+    }
+
+    ///
     /// Position-addressed twin of [`Self::promote_outer_sf`], for the
     /// loop-entry adoption whose owner is found by trace position.
     ///
@@ -509,31 +518,33 @@ impl AbstractState {
     }
 
     ///
-    /// Before a specialized `break`: box every stage-1'' deferred home in
-    /// the frames the break resumes — the iter caller (chain position
-    /// *landing*) and its lexical ancestors, the only frames the block's
-    /// stores can reach — into its slot.
+    /// Before a `break` or a non-local `return` whose landing is the
+    /// frame at chain position *landing*: box every stage-1'' deferred
+    /// home of the frames the exit resumes, that frame and everything
+    /// under it, into its slot.
     ///
-    /// `BlockBreakSpecialized` returns straight into the iter caller's
-    /// call-site continuation, past every return segment, so none of the
-    /// surrender writes a return join emits runs on this path. That
-    /// continuation resumes from the join of the callee's *normal* return
-    /// paths (with none, from the entry chain re-widened by the callee's
-    /// stores), which can say plain `S` for a slot whose current value
+    /// The exit returns straight into the landing frame's call-site
+    /// continuation, past every return segment, so none of the surrender
+    /// writes a return join emits runs on this path. This path is an
+    /// edge of that join all the same (`JitContext::record_exit_edge`),
+    /// and the join can say plain `S` for a slot whose current value
     /// this path wrote only to the home: `y = 1.0; my_once { y += 1.0;
     /// break }; y` read the stale slot. Boxing here makes the slot
     /// current while the home stays current too, so whichever the
     /// continuation reads is right. The modes are left alone: this path
-    /// ends at the break.
+    /// ends at the exit.
     ///
-    pub(super) fn box_deferred_homes_before_break(
+    /// Every frame, not only the landing frame's lexical chain: a frame
+    /// the exiting block cannot reach has its locals stored by the
+    /// blocks that can, on the same path.
+    ///
+    pub(super) fn box_deferred_homes_before_exit(
         &self,
         jitctx: &mut JitContext,
         ir: &mut AsmIr,
         landing: usize,
     ) {
-        let mut level = landing;
-        loop {
+        for level in 0..=landing {
             for i in self.frames[level].locals() {
                 if let LinkMode::F(fpr) = self.frames[level].mode(i)
                     && fpr.0 >= crate::codegen::PHYS_FPR_POOL
@@ -548,10 +559,6 @@ impl AbstractState {
                     });
                     jitctx.note_break_box(level, i, fpr);
                 }
-            }
-            match self.frames[level].lexical_outer() {
-                Some(o) if level >= o && o > 0 => level -= o,
-                _ => break,
             }
         }
     }

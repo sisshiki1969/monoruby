@@ -122,6 +122,20 @@ pub(super) struct MemoChain(pub(super) AbstractState);
 /// One suspended frame's parked view, at the same granularity.
 pub(super) struct MemoFrame(pub(super) Option<AbstractFrame>);
 
+/// A frame's `exit_chains`, at the same granularity.
+pub(super) struct MemoExits(pub(super) HashMap<usize, Vec<FrameRef>>);
+
+impl PartialEq for MemoExits {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(pos, a)| {
+                other.0.get(pos).is_some_and(|b| {
+                    a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| a.memo_eq(b))
+                })
+            })
+    }
+}
+
 impl PartialEq for MemoChain {
     fn eq(&self, other: &Self) -> bool {
         self.0.depth() == other.0.depth()
@@ -175,6 +189,7 @@ pub(super) struct FrameState {
     pub(super) ivar_heap_accessed: bool,
     pub(super) spill_home_ids: std::collections::HashSet<usize>,
     pub(super) return_context: HashMap<usize, ReturnState>,
+    pub(super) exit_chains: MemoExits,
     pub(super) jit_type: JitType,
     /// The frame's parked view of itself, which a nested compile widens
     /// (`widen_outer_at_pos`) and drops the capture invariant on

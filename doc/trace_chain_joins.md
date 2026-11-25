@@ -50,6 +50,24 @@ every resuming path arrives with the slot current. A path that kept the
 claim writes nothing. Before this, keeping a constant required the claim
 to survive *every* path or be given up everywhere.
 
+A `break` and a `return` out of a block are edges of the same kind, of
+the continuation they land in: the call that was handed the block for a
+`break` (`iter_caller_pos`), the call of the method for a `return`
+(`method_caller_pos`). They get no return segment — the exit leaves
+through the specialized teardown or the unwinder — so each records its
+chain up to the landing frame instead (`record_exit_edge`, kept joined in
+`JitStackFrame::exit_chains` and handed up one frame per finished callee,
+as `return_context` is), and `build_return_segments` of the landing call
+joins it with that call's return edges before it emits their bridges. An
+exit edge needs no bridge of its own: it boxes every deferred float home
+of the frames it lands on before it leaves
+(`box_deferred_homes_before_exit`), and a constant a frame keeps
+unwritten across its call is written ahead of that call once the frame
+resumes without the claim (`held` in `specialized_iseq`). Leaving the
+exits out of the join let the frames *above* the resuming one keep what
+an exit path had given up: `t = a * 2.0; c0 { c6 { t = 7; break }; t }`
+went on reading `t` as a Float (#2201).
+
 ## 3. The resume asymmetry
 
 When `specialized_compile` returns, the caller resumes from the join of
@@ -68,13 +86,22 @@ bisection (see §7):
   `Sf(Float)` promotions the subtree made, and the monotone
   `subtree_float_read` mark bits.
 
-If the callee compiled **no** plain `Ret` (every path raises, breaks, or
-returns non-locally), the caller's continuation is unreachable on
-compiled paths. The resume state is then rebuilt from a copy of the
-call's own entry chain, re-widened by the callee-era delta of the
+If the callee compiled **no** plain `Ret` but an exit lands here (§2),
+the exits' join is the resume chain: `loop { t += 1.5; break if … }` has
+no other way out, and resumes with `t` in the home the loop left it in.
+
+If nothing arrives at all (every path raises, or leaves for a frame
+further out), the caller's continuation is unreachable on compiled
+paths. The resume state is then rebuilt from a copy of the call's own
+entry chain, re-widened by the callee-era delta of the
 `widened_outer_log`. Any claim that placeholder still carries is
-vacuous — no execution arrives through it — and a later merge's claims
-are established by its *reachable* entries' bridges.
+vacuous for the continuation — no execution arrives through it — and a
+later merge's claims are established by its *reachable* entries'
+bridges. It is not vacuous for the call itself: the frame's write-back
+for an exit taken *under* the call is built from this state, so a float
+local the call entered with in a deferred home (`F(spill home)`, slot
+stale) stays that, or a deoptimization in the callee reads the stale
+slot (`keep_deferred_homes`).
 
 ## 4. Invariants travel lexically on the live chain
 

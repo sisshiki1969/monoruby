@@ -1428,6 +1428,12 @@ impl<'a> JitContext<'a> {
                         pc,
                     );
                 }
+                // The frame that called the method resumes here as it
+                // does after a plain return: see `BlockBreak` below.
+                if let Some(landing) = self.method_caller_pos() {
+                    state.box_deferred_homes_before_exit(self, ir, landing);
+                    self.record_exit_edge(landing, state);
+                }
                 // A non-local `return` written inside a protected region must
                 // otherwise unwind through `handle_error`, which runs this
                 // frame's `ensure` (and restores `$!` when leaving a rescue
@@ -1472,8 +1478,9 @@ impl<'a> JitContext<'a> {
                 // continuation without passing a return segment's
                 // surrender writes, so the deferred homes of the frames
                 // it resumes are boxed into their slots first.
-                if let Some(landing) = self.iter_caller_pos() {
-                    state.box_deferred_homes_before_break(self, ir, landing);
+                let landing = self.iter_caller_pos();
+                if let Some(landing) = landing {
+                    state.box_deferred_homes_before_exit(self, ir, landing);
                 }
                 // Splice first — see `MethodRet` above (#1185).
                 let claim = state.as_return_or_any(ret);
@@ -1486,6 +1493,12 @@ impl<'a> JitContext<'a> {
                         ret,
                         pc,
                     );
+                }
+                // This path is an edge of the landing's merge
+                // (`JitStackFrame::exit_chains`). A spliced exit is one
+                // where its `EnsureEnd` delivers it.
+                if let Some(landing) = landing {
+                    self.record_exit_edge(landing, state);
                 }
                 // Otherwise: a `break` inside a protected region relies on
                 // `handle_error` to run this frame's `ensure` during the
@@ -1565,8 +1578,8 @@ impl<'a> JitContext<'a> {
                         // was written (a stage-2 splice was requested by a
                         // nested frame, whose `break` home is nothing this
                         // frame could re-derive).
-                        let brk = brk.map(|route| self.spliced_arm(route, state));
-                        let mret = mret.map(|route| self.spliced_arm(route, state));
+                        let brk = brk.map(|route| self.spliced_arm(route, state, ir));
+                        let mret = mret.map(|route| self.spliced_arm(route, state, ir));
                         (brk, mret)
                     }
                     None => (None, None),
