@@ -5,7 +5,7 @@ use jitgen::JitContext;
 use jitgen::{AbstractState, JitContext};
 use num::ToPrimitive;
 use num::Zero;
-use std::{io::Write, mem::transmute};
+use std::mem::transmute;
 
 //
 // Kernel module
@@ -3880,121 +3880,6 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
     }
 }
 
-/// Shell commands that must be run *by* the shell even though the command
-/// string contains no metacharacters (they are builtins/reserved words, not
-/// executables). Mirrors CRuby's `posix_sh_cmds` in proc.c — e.g.
-/// `IO.popen("exit 99")` must yield exit status 99, not ENOENT.
-const POSIX_SH_CMDS: &[&str] = &[
-    "!", ".", ":", "break", "case", "continue", "do", "done", "elif", "else", "esac", "eval",
-    "exec", "exit", "export", "fi", "for", "if", "in", "read", "readonly", "return", "set",
-    "shift", "then", "times", "trap", "umask", "unset", "until", "wait", "while",
-];
-
-/// `$?` for a command that could not be exec'd at all: CRuby forks, the
-/// child's exec fails, and that child leaves with status 127, so `$?` is
-/// an exit-127 Status. Nothing is forked on this path (the failure is the
-/// parent's own, out of `std::process::Command`), so the pid is 0 where
-/// CRuby has the child's.
-fn set_exec_failure_status(vm: &mut Executor, globals: &mut Globals) {
-    if let Ok(status) = crate::builtins::process::new_status(vm, globals, 127 << 8, 0) {
-        crate::scheduler::set_last_status(vm, status);
-    }
-}
-
-/// A raw `poll(2)` / `read(2)` result: `None` where the call is simply to
-/// be made again (`EINTR`, `EAGAIN`).
-fn retriable(ret: isize) -> std::io::Result<Option<usize>> {
-    if ret >= 0 {
-        return Ok(Some(ret as usize));
-    }
-    let e = std::io::Error::last_os_error();
-    match e.kind() {
-        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock => Ok(None),
-        _ => Err(e),
-    }
-}
-
-/// Read a child's two pipes to EOF, taking from whichever has something
-/// next, so that neither fills up while the other is being drained --
-/// which is what `Child::wait_with_output` does with the two of them,
-/// and what reading one and then the other would get wrong. Touches
-/// nothing of the interpreter, so it may run with the GVL released.
-fn drain_child_output(
-    out: Option<std::process::ChildStdout>,
-    err: Option<std::process::ChildStderr>,
-) -> std::io::Result<(Vec<u8>, Vec<u8>)> {
-    use std::os::fd::AsRawFd;
-    let mut bufs = [Vec::new(), Vec::new()];
-    let mut live: Vec<(i32, usize)> = [
-        out.as_ref().map(|o| o.as_raw_fd()),
-        err.as_ref().map(|e| e.as_raw_fd()),
-    ]
-    .into_iter()
-    .enumerate()
-    .filter_map(|(i, fd)| fd.map(|fd| (fd, i)))
-    .collect();
-    let mut chunk = [0u8; 8192];
-    while !live.is_empty() {
-        let mut polls: Vec<libc::pollfd> = live
-            .iter()
-            .map(|&(fd, _)| libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            })
-            .collect();
-        // SAFETY: `polls` is a valid array of its length.
-        let n = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as libc::nfds_t, -1) };
-        retriable(n as isize)?;
-        let mut done = vec![];
-        for (slot, poll) in polls.iter().enumerate() {
-            if poll.revents == 0 {
-                continue;
-            }
-            let (fd, which) = live[slot];
-            // SAFETY: reading a descriptor we own into a local buffer.
-            let got =
-                unsafe { libc::read(fd, chunk.as_mut_ptr() as *mut libc::c_void, chunk.len()) };
-            match retriable(got)? {
-                // End of file: the write end is gone.
-                Some(0) => done.push(slot),
-                Some(got) => bufs[which].extend_from_slice(&chunk[..got]),
-                None => {}
-            }
-        }
-        for slot in done.into_iter().rev() {
-            live.remove(slot);
-        }
-    }
-    let [stdout, stderr] = bufs;
-    Ok((stdout, stderr))
-}
-
-pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
-    let mut args = vec![];
-    let include_meta = input.contains([
-        '*', '?', '{', '}', '[', ']', '<', '>', '(', ')', '~', '&', '|', '\\', '$', ';', '\'',
-        '\"', '`', '\n',
-    ]) || POSIX_SH_CMDS.contains(&input.split_whitespace().next().unwrap_or(""));
-    let program = if include_meta {
-        args.push(if cfg!(windows) { "/C" } else { "-c" }.to_string());
-        args.push(input.to_string());
-        if cfg!(windows) { "cmd" } else { "sh" }
-    } else {
-        // Split on whitespace *runs* (and trim the ends), like a shell's
-        // word splitting: `split(' ')` would turn consecutive/leading
-        // spaces (e.g. mspec's `"#{opts} --disable=x"` with empty opts)
-        // into empty argv entries, which the spawned program then treats
-        // as a real argument (monoruby: LoadError on the "" script).
-        let mut words = input.split_whitespace();
-        let program = words.next().unwrap_or("");
-        words.for_each(|s| args.push(s.to_string()));
-        program
-    }
-    .to_string();
-    (program, args)
-}
-
 ///
 /// ### Kernel.#system
 ///
@@ -4002,17 +3887,15 @@ pub(super) fn prepare_command_arg(input: &str) -> (String, Vec<String>) {
 /// - system(program, *args, options={}) -> bool | nil
 /// - system(env, command..., options={}) -> bool | nil
 ///
-/// A command string or `program, *args` with no env hash and no spawn
-/// option runs through `std::process::Command` here. With an env hash
-/// (`system({"CC" => "gcc"}, "make")`, mkmf's `xsystem`) or spawn options
-/// (`chdir:`, redirects, ...) it is `Process.wait(spawn(...))`:
-/// `builtins::spawn` parses the arguments as `spawn` does, and the child
-/// is reaped with the GVL released.
+/// `Process.wait(spawn(...))`, as in CRuby's `rb_f_system`:
+/// `builtins::spawn` parses the arguments as `spawn` does and starts the
+/// child, and the child is waited for with the GVL released (or by the
+/// fiber scheduler's `#process_wait`). A child that could not exec is
+/// `nil`, with `$?` its exit 127.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/system.html]
 #[monoruby_builtin]
 fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use std::process::Command;
     let mut argv: Vec<Value> = lfp.arg(0).as_array().iter().copied().collect();
     if argv.is_empty() {
         return Err(MonorubyErr::wrong_number_of_arg_min(0, 1));
@@ -4023,9 +3906,9 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
     // so it is taken out before the rest reaches the spawn parser.
     let mut exception = false;
     let spec = vm.with_temp_scope(|vm| {
-        if argv.len() > 1
-            && let Some(h) = argv.last().unwrap().try_hash_ty()
-        {
+        // A lone Hash is the options too, which leaves no command
+        // (`system(exception: true)` is an ArgumentError, as in CRuby).
+        if let Some(h) = argv.last().unwrap().try_hash_ty() {
             let key = Value::symbol(IdentId::get_id("exception"));
             if let Some(v) = h.get(key, vm, globals)? {
                 if !v.is_nil() {
@@ -4055,132 +3938,29 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 }
             }
         }
-        let simple =
-            argv[0].is_rstring().is_some() && argv[1..].iter().all(|v| v.try_hash_ty().is_none());
-        if simple {
-            return Ok(None);
-        }
-        crate::builtins::spawn::parse_spawn_args(vm, globals, &argv).map(Some)
+        crate::builtins::spawn::parse_spawn_args(vm, globals, &argv)
     })?;
     // CRuby's `rb_f_system` forgets `$?` before it spawns anything, so
     // one that never reaches a wait (a command that cannot be run, a
     // fiber scheduler's `#process_wait` raising) leaves no status from
     // whatever ran before it. It does so once the arguments are read
     // (`rb_execarg_new`): one they raise from leaves `$?` as it was.
-    if let Some(spec) = spec {
-        crate::scheduler::clear_last_status(vm);
-        let pid = match crate::builtins::spawn::spawn_reporting_child(vm, globals, &spec)? {
-            Ok(pid) => pid,
-            // The child could not exec (an `Errno`): `nil`, as for the
-            // simple form, unless `exception: true`. What fails in the
-            // parent first (a redirect file that cannot be opened) raises
-            // either way, as in CRuby.
-            Err(err) if !exception && matches!(err.kind(), MonorubyErrKind::Other(_)) => {
-                return Ok(Value::nil());
-            }
-            Err(err) => return Err(err),
-        };
-        let Some((raw, status_obj)) =
-            crate::builtins::process::system_wait(vm, globals, pid as i32)?
-        else {
-            return Ok(Value::nil());
-        };
-        crate::scheduler::set_last_status(vm, status_obj);
-        let success = libc::WIFEXITED(raw) && libc::WEXITSTATUS(raw) == 0;
-        if exception && !success {
-            let detail = if libc::WIFEXITED(raw) {
-                format!("exit {}", libc::WEXITSTATUS(raw))
-            } else if libc::WIFSIGNALED(raw) {
-                // CRuby: "SIGKILL (signal 9)".
-                let signo = libc::WTERMSIG(raw);
-                match crate::builtins::process::signal_number_to_name(signo as i64) {
-                    Some(name) => format!("SIG{name} (signal {signo})"),
-                    None => format!("signal {signo}"),
-                }
-            } else {
-                "unknown status".to_string()
-            };
-            return Err(MonorubyErr::runtimeerr(format!(
-                "Command failed with {detail}: {}",
-                spec.program_display()
-            )));
-        }
-        return Ok(Value::bool(success));
-    }
-    let arg0 = argv[0];
-    let cmd_str = arg0.coerce_to_str(vm, globals)?;
-    // The command and its arguments are C strings to exec(2): CRuby reads
-    // them with `StringValueCStr`, so a NUL is an error of the call, not
-    // a command that could not be run (which is `nil`).
-    let null_byte = || MonorubyErr::argumenterr("string contains null byte");
-    if cmd_str.contains('\0') {
-        return Err(null_byte());
-    }
-    let (program, mut args) = prepare_command_arg(&cmd_str);
-    for v in &argv[1..] {
-        let arg = v.coerce_to_string(vm, globals)?;
-        if arg.contains('\0') {
-            return Err(null_byte());
-        }
-        args.push(arg);
-    }
     crate::scheduler::clear_last_status(vm);
-    // The child inherits our std fds; flush so our own pending output
-    // precedes whatever it writes (CRuby orders them this way).
-    crate::rvalue::io::flush_std_streams();
-    let mut cmd = Command::new(&program);
-    cmd.args(&args);
-    crate::scheduler::command_for_child(&mut cmd);
-    let spawned = match cmd.spawn() {
-        // ENOEXEC (an executable file without a shebang that isn't a
-        // binary): retry through `sh`, like execvp-era shells and CRuby.
-        Err(err) if err.raw_os_error() == Some(libc::ENOEXEC) => {
-            Command::new("/bin/sh").arg(&program).args(&args).spawn()
-        }
-        spawned => spawned,
-    };
-    let mut child = match spawned {
-        Ok(child) => child,
-        Err(err) => {
-            set_exec_failure_status(vm, globals);
-            if exception {
-                // e.g. Errno::ENOENT: "No such file or directory - cmd"
-                return Err(MonorubyErr::from_io_err(
-                    &globals.store,
-                    &err,
-                    format!("{} - {}", errno_description(&err), cmd_str),
-                ));
-            }
+    let pid = match crate::builtins::spawn::spawn_reporting_child(vm, globals, &spec)? {
+        Ok(pid) => pid,
+        // The child could not exec (an `Errno`): `nil`, unless
+        // `exception: true`. What fails in the parent first (a redirect
+        // file that cannot be opened) raises either way, as in CRuby.
+        Err(err) if !exception && matches!(err.kind(), MonorubyErrKind::Other(_)) => {
             return Ok(Value::nil());
         }
+        Err(err) => return Err(err),
     };
-    let pid = child.id();
-    // The scheduler's `#process_wait` takes the wait in a non-blocking
-    // fiber; otherwise this one waits itself, with the GVL released, so
-    // that the other threads of this process keep running for as long as
-    // the child does.
-    let raw = match crate::builtins::process::system_wait(vm, globals, pid as i32)? {
-        Some((raw, status_obj)) => {
-            // The child was reaped by the scheduler, so there is nothing
-            // left for `Child`'s own wait; dropping it reaps nothing.
-            drop(child);
-            crate::scheduler::set_last_status(vm, status_obj);
-            raw
-        }
-        None => {
-            use std::os::unix::process::ExitStatusExt;
-            let status = match crate::scheduler::without_gvl(vm, || child.wait()) {
-                Ok(status) => status,
-                Err(_) => return Ok(Value::nil()),
-            };
-            // Set `$?` / Process.last_status from the raw wait(2) status,
-            // like CRuby does after #system.
-            let raw = status.into_raw();
-            let status_obj = crate::builtins::process::new_status(vm, globals, raw, pid as i32)?;
-            crate::scheduler::set_last_status(vm, status_obj);
-            raw
-        }
+    let Some((raw, status_obj)) = crate::builtins::process::system_wait(vm, globals, pid as i32)?
+    else {
+        return Ok(Value::nil());
     };
+    crate::scheduler::set_last_status(vm, status_obj);
     let success = libc::WIFEXITED(raw) && libc::WEXITSTATUS(raw) == 0;
     if exception && !success {
         let detail = if libc::WIFEXITED(raw) {
@@ -4196,7 +3976,8 @@ fn system(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
             "unknown status".to_string()
         };
         return Err(MonorubyErr::runtimeerr(format!(
-            "Command failed with {detail}: {cmd_str}"
+            "Command failed with {detail}: {}",
+            spec.program_display()
         )));
     }
     Ok(Value::bool(success))
@@ -4299,137 +4080,58 @@ pub(super) fn spawn(
 ///
 /// - `command` -> String
 ///
+/// `IO.popen(command) { |io| io.read }`, as in CRuby's `rb_f_backquote`:
+/// the child's stdout comes through a pipe and its stderr is this
+/// process's own. A command that cannot be run raises (`Errno::ENOENT`),
+/// with `$?` the failed child's exit 127.
+///
 /// [https://docs.ruby-lang.org/ja/latest/method/Kernel/m/=60.html]
 #[monoruby_builtin]
 fn command(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use std::os::unix::process::ExitStatusExt;
-    let arg0 = lfp.arg(0);
-    let rs = arg0.coerce_to_rstring(vm, globals)?;
-    let bytes = rs.as_bytes().to_vec();
-    // CRuby's `rb_f_backquote` forgets `$?` and then opens the pipe, which
-    // reads the command with `StringValueCStr`: a NUL raises with no
-    // status left, rather than reaching exec(2) as a truncated command.
+    // Only a String is a command here (an Array or a Hash would be read
+    // as `spawn`'s `[command, argv0]` and env forms), converted once.
+    let bytes = lfp
+        .arg(0)
+        .coerce_to_rstring(vm, globals)?
+        .as_bytes()
+        .to_vec();
     crate::scheduler::clear_last_status(vm);
-    if bytes.contains(&0) {
-        return Err(MonorubyErr::argumenterr("string contains null byte"));
-    }
-    // A command with invalid UTF-8 bytes still runs: hand the raw bytes to
-    // the shell (CRuby passes the byte string through unmodified).
-    let mut builder = match std::str::from_utf8(&bytes) {
-        Ok(s) => {
-            let (program, args) = prepare_command_arg(s);
-            let mut c = std::process::Command::new(program);
-            c.args(&args);
-            c
-        }
-        Err(_) => {
-            use std::os::unix::ffi::OsStrExt;
-            let mut c = std::process::Command::new("sh");
-            c.arg("-c").arg(std::ffi::OsStr::from_bytes(&bytes));
-            c
-        }
-    };
-    crate::scheduler::command_for_child(&mut builder);
-    let mut child = match builder
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let spec = vm.with_temp_scope(|vm| {
+        let cmd = Value::bytes(bytes);
+        vm.temp_push(cmd);
+        crate::builtins::spawn::parse_spawn_args(vm, globals, &[cmd])
+    })?;
+    let (pid, reader, _) = crate::builtins::spawn::do_popen(vm, globals, &spec, true, false)?;
+    // Reading lasts as long as the child writes, so it runs with the GVL
+    // released, and the other threads of this process keep running.
+    let output = crate::scheduler::without_gvl(vm, move || {
+        use std::io::Read;
+        let mut bytes = vec![];
+        // (`readable` was asked for, so there is a read end.)
+        reader
+            .map_or(Ok(0), |reader| {
+                std::fs::File::from(reader).read_to_end(&mut bytes)
+            })
+            .map(|_| bytes)
+    });
+    // The wait is the close of that pipe's: the fiber scheduler's
+    // `#process_wait` in a non-blocking fiber, read as `rb_waitpid` reads
+    // it, and `waitpid(2)` with the GVL released otherwise.
+    if let Some((_, status_obj)) =
+        crate::builtins::process::wait_popen_child(vm, globals, pid as u32)?
     {
-        Ok(child) => child,
-        // e.g. Errno::ENOENT for a nonexistent command (the direct-exec
-        // path; the shell path reports through the exit status instead).
-        // `$?` is the exit-127 of CRuby's failed child either way.
-        Err(err) => {
-            set_exec_failure_status(vm, globals);
-            return Err(MonorubyErr::from_io_err(
-                &globals.store,
-                &err,
-                format!(
-                    "{} - {}",
-                    errno_description(&err),
-                    String::from_utf8_lossy(&bytes)
-                ),
-            ));
-        }
-    };
-    let pid = child.id();
-    // In a non-blocking fiber with a scheduler, waiting for the child is
-    // the scheduler's `#process_wait` (CRuby reaches it through
-    // `rb_io_close` on the pipe), and its answer is read as `rb_waitpid`
-    // reads it: nil reaped nothing and leaves no `$?`, anything else but
-    // a Status raises. The pipes are drained first, so this cannot be
-    // `wait_with_output`, which waits as well.
-    if !vm.is_fiber_blocking() && globals.fiber_scheduler.is_some() {
-        let out = child.stdout.take();
-        let err = child.stderr.take();
-        let drained = crate::scheduler::without_gvl(vm, move || drain_child_output(out, err));
-        let answer = crate::builtins::process::scheduler_process_wait(vm, globals, pid as i32, 0);
-        // Our own wait, wherever the hook did not take it: a scheduler
-        // without one, and one that raised, so that no child is left
-        // behind.
-        let own = match answer {
-            Ok(Some(_)) => None,
-            _ => Some(crate::scheduler::without_gvl(vm, || {
-                use std::os::unix::process::ExitStatusExt;
-                child.wait().map(|st| st.into_raw()).unwrap_or(0)
-            })),
-        };
-        let (stdout, stderr) = drained
-            .map_err(|e| MonorubyErr::from_io_err(&globals.store, &e, errno_description(&e)))?;
-        let status_obj = match (answer?, own) {
-            (Some(answer), _) => crate::builtins::process::hooked_last_status(vm, globals, answer)?,
-            (None, raw) => Some(crate::builtins::process::new_status(
-                vm,
-                globals,
-                raw.unwrap_or(0),
-                pid as i32,
-            )?),
-        };
-        std::io::stderr().write_all(&stderr).unwrap();
-        if let Some(status_obj) = status_obj {
-            crate::scheduler::set_last_status(vm, status_obj);
-        }
-        let mut s = Value::string_from_vec(stdout);
-        let ext_obj = super::io::enc_default_external_obj(globals);
-        if let Some(enc) = super::io::enc_obj_to_enum(globals, ext_obj) {
-            s.as_rstring_inner_mut().set_encoding(enc);
-        }
-        return Ok(s);
+        crate::scheduler::set_last_status(vm, status_obj);
     }
-    // The whole wait runs with the GVL released: it lasts as long as the
-    // child does, and the other threads of this process keep running.
-    match crate::scheduler::without_gvl(vm, || child.wait_with_output()) {
-        Ok(output) => {
-            std::io::stderr().write_all(&output.stderr).unwrap();
-            // Set `$?` / Process.last_status from the raw wait(2) status so
-            // a signal-terminated child reports `signaled?` / `termsig`
-            // (CRuby sets $? after backticks; we previously left it nil).
-            let raw = output.status.into_raw();
-            if let Ok(status_class) =
-                vm.get_qualified_constant(globals, OBJECT_CLASS, &["Process", "Status"])
-            {
-                if let Ok(status_obj) = vm.invoke_method_inner(
-                    globals,
-                    IdentId::get_id("__new"),
-                    status_class,
-                    &[Value::integer(raw as i64), Value::integer(pid as i64)],
-                    None,
-                    None,
-                ) {
-                    crate::scheduler::set_last_status(vm, status_obj);
-                }
-            }
-            // The captured output is tagged with the default external
-            // encoding (CRuby).
-            let mut s = Value::string_from_vec(output.stdout);
-            let ext_obj = super::io::enc_default_external_obj(globals);
-            if let Some(enc) = super::io::enc_obj_to_enum(globals, ext_obj) {
-                s.as_rstring_inner_mut().set_encoding(enc);
-            }
-            Ok(s)
-        }
-        Err(err) => Err(MonorubyErr::runtimeerr(format!("{}", err))),
+    let output =
+        output.map_err(|e| MonorubyErr::from_io_err(&globals.store, &e, errno_description(&e)))?;
+    // The captured output is tagged with the default external encoding
+    // (CRuby).
+    let mut s = Value::string_from_vec(output);
+    let ext_obj = super::io::enc_default_external_obj(globals);
+    if let Some(enc) = super::io::enc_obj_to_enum(globals, ext_obj) {
+        s.as_rstring_inner_mut().set_encoding(enc);
     }
+    Ok(s)
 }
 
 ///
@@ -10954,32 +10656,47 @@ mod tests {
         ]);
     }
 
-    /// The backtick's drain of the child's pipes ends with the error of
-    /// a read that failed, and makes again one that only had nothing
-    /// yet.
+    /// #2221, #2223: a lone command string is the shell's by CRuby's
+    /// rule (`rb_exec_fillarg`) and a program with its arguments is
+    /// never the shell's, on every way to a child alike: `system` with
+    /// and without options, `spawn`, the backtick and `IO.popen`. A
+    /// command that could not be exec'd leaves the exit 127 of a child
+    /// that was really forked (`$?.pid`), and `exception: true` names
+    /// the command as it was written.
     #[test]
-    fn drain_child_output_reports_a_failed_read() {
-        use std::os::fd::{AsRawFd, OwnedFd};
-        // A regular file always polls ready, and one opened for writing
-        // only cannot be read: `EBADF`.
-        let path = std::env::temp_dir().join(format!("monoruby_drain_{}", std::process::id()));
-        let file = std::fs::File::create(&path).unwrap();
-        let out = std::process::ChildStdout::from(OwnedFd::from(file));
-        let err = super::drain_child_output(Some(out), None).unwrap_err();
-        std::fs::remove_file(&path).unwrap();
-        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
-
-        // An empty non-blocking pipe: `EAGAIN`, which is no error.
-        let (reader, _writer) = std::io::pipe().unwrap();
-        let fd = reader.as_raw_fd();
-        let mut byte = 0u8;
-        // SAFETY: `fd` is the open read end, and `byte` a one-byte buffer.
-        let got = unsafe {
-            libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
-            libc::read(fd, &mut byte as *mut u8 as *mut libc::c_void, 1)
-        };
-        assert_eq!(super::retriable(got).unwrap(), None);
-        assert_eq!(super::retriable(3).unwrap(), Some(3));
+    fn command_string_reaches_the_shell_as_in_cruby() {
+        run_test_once(
+            r##"
+            t = ->(&b) { b.call rescue "#{$!.class}: #{$!.message}" }
+            st = -> { s = $?; s && [s.exitstatus, s.pid > 0] }
+            res = []
+            # One command string, which the shell runs when it looks like shell
+            # syntax: an assignment before the command name, a word that is only
+            # shell syntax, a comment. Otherwise it is split at spaces and tabs.
+            ["FOO=1 true", " FOO=1 true", "A=b/true", "a/b=c", "true A=1", "exit 4", "true # x",
+             "true\ttrue", "true　x", "nonexistent_cmd_xyz arg", "", "exitx", ":"].each do |c|
+              res << [c, t.() { system(c) }, st.()]
+              res << t.() { system(c, exception: true) }
+              res << t.() { system(c, in: :in, exception: true) }
+              res << [t.() { Process.wait(spawn(c)); :pid }, st.()]
+              res << [t.() { `#{c}` }, st.()]
+              res << [t.() { IO.popen(c, &:read) }, st.()]
+            end
+            # Several arguments are a program and its arguments, never the shell's.
+            [["exit", "4"], ["FOO=1", "true"], ["true", "$HOME"], [["true", "argv0"]]].each do |c|
+              res << [c, t.() { system(*c) }, st.()]
+              res << t.() { system(*c, exception: true) }
+              res << [t.() { Process.wait(spawn(*c)); :pid }, st.()]
+            end
+            res << `/bin/echo A=1`
+            # A lone Hash is the options, which leaves no command.
+            res << [t.() { system(exception: true) }, t.() { system({}) }]
+            # The backtick forgets `$?` on entry, and takes a String only.
+            system("exit 3")
+            res << [t.() { `\0` }, $?, t.() { Kernel.send(:`, ["true"]) }]
+            res
+            "##,
+        );
     }
 
     #[test]
@@ -11033,7 +10750,7 @@ mod tests {
         // An executable text file without a shebang fails `execve` with
         // ENOEXEC and runs through /bin/sh instead (execvp's fallback).
         // From a thread, so the child's signal mask is reset on that
-        // path too (`scheduler::command_for_child`).
+        // path too (`scheduler::reset_child_sigmask`).
         run_test_once(
             r#"
             require 'tmpdir'

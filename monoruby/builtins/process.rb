@@ -41,9 +41,13 @@ module Process
       @__pid || 0
     end
 
-    def initialize(raw_status, pid)
+    # `errno` is that of a `waitpid(2)` that failed: such a Status has a
+    # pid of -1, and whoever asked for it reads the errno off it (CRuby's
+    # `rb_process_status_new(pid, status, error)`).
+    def initialize(raw_status, pid, errno = 0)
       @__status = raw_status
       @__pid = pid
+      @__errno = errno
       # CRuby freezes the status it stores in `$?`; nothing here writes
       # an ordinary instance variable.
       freeze
@@ -52,6 +56,7 @@ module Process
     def initialize_copy(other)
       @__status = nil
       @__pid = nil
+      @__errno = nil
     end
     private :initialize_copy
 

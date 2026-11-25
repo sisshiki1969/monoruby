@@ -283,7 +283,7 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   (`ThreadInner::fiber_joiners`)。
 - 子プロセスの待ちも同じプロトコルに乗る(#2211)。non-blocking fiber でスケジューラが
   `#process_wait(pid, flags)` を持つなら、`Process.wait` / `wait2` / `waitpid` / `waitpid2` /
-  `waitall`、`Process::Status.wait`、`Kernel#system`(自前経路と spawn 経路の両方)、
+  `waitall`、`Process::Status.wait`、`Kernel#system`、
   バッククォート、popen した IO の `close` は、`waitpid(2)` を自分で呼ばずにこのフックに
   渡す(CRuby の `rb_process_status_wait` → `rb_fiber_scheduler_process_wait`)。
   フックは任意(`rb_check_funcall` 相当)で、`WNOHANG` 付き・blocking fiber・スケジューラ
@@ -292,10 +292,13 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   (`nil` も)なら TypeError(`rb_check_typeddata`)。`Process.wait` 系・`close`・
   バッククォートは `rb_waitpid` の読み方で、`nil` は「何も回収しなかった」(`$?` は消えた
   まま、`Process.wait` は nil を返す)、それ以外の非 Status だけが TypeError。pid が -1 の
-  Status は子ではなく errno(= `ECHILD`)を運ぶ。`IO.popen { }` の close でフックが
+  Status は子ではなく、失敗した `waitpid(2)` の errno を運ぶ(子がいなければ `ECHILD`、
+  フラグが不正なら `EINVAL`。`Process::Status.wait` 自身は raise せずこれを返し、
+  `Process.wait` 系がその errno を raise する — #2222)。`IO.popen { }` の close でフックが
   raise すると、ブロックが raise していてもフックの例外が残る(CRuby は `rb_ensure` から
-  閉じる)。バッククォートはフックに渡す前に stdout / stderr を両方
-  `poll(2)` で読み切る(片方が詰まって子が止まらないように)。
+  閉じる)。`system` は `Process.wait(spawn(...))`、バッククォートは
+  `IO.popen(cmd) { |io| io.read }` と同じ経路(`builtins::spawn`)で子を作る(#2221)ので、
+  バッククォートは stdout のパイプを読み切ってからフックに渡す(stderr は子がそのまま継承)。
   待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
   (M:1 グリーンモデルでは `without_gvl` が素通しなので、そこは従来どおり止まる)。
 - **Monitor**(`builtins/monitor.rb`)は CRuby の `ext/monitor/monitor.c` を Ruby で書いたもので、
@@ -819,9 +822,8 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   `block_async_signals` でほぼ全シグナルをブロックしており、そのスレッドから
   fork した子はそのマスクを継承する(`SIGTERM` が永遠に保留 — ruby/spec の
   `Process.kill` fixture がまさにこれ)。`system` / バッククォート /
-  `IO.popen`(`std::process::Command`)は `scheduler::command_for_child` の
-  `pre_exec` で、`Process.spawn` / `exec`(`spawn::child_exec`)は
-  `reset_child_sigmask` で、子のマスクを空にしてから `execve` する。
+  `IO.popen` / `Process.spawn` / `exec` はどれも `spawn::child_exec` を通り、
+  そこで `reset_child_sigmask` が子のマスクを空にしてから `execve` する。
   `Process.fork` の子は fork 直後に forker が main になる際に全解除する(§12.5)。
 - **割り込み(ubf)**: `Thread#kill` / `#raise` の相手が park 中でなく
   `blocking_tid` を持っていれば、`native::interrupt_blocking` が
