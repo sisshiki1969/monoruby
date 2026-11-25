@@ -439,12 +439,20 @@ rest 引数 `Array` の遅延実体化（D1）は
   `rb_cmpint` に従い、Bignum は符号を直接読み、非 Integer は `<=> 0` でなく
   `> 0` と `< 0` を尋ねる。`min(n)` / `max(n)` は部分選択ではなく rooted な
   コピーの 1 回ソートを使う。
-- **`hash` / `eql?`**: 外側再帰は `exec_recursive_outer_unregistered` で
+- **`hash` / `eql?`**: 外側再帰は `exec_recursive_outer` で
   畳み、循環構造はすべて同じ番兵にハッシュする（`rec.hash == [{x: rec}].hash`
   が `eql?` と整合する）。`Store::has_builtin_container_hash` が「この
   Array / Hash はまだ builtin の `:hash` に解決するか」を class version で
-  キャッシュしていて、真なら `Value::ruby_hash` が構造ダイジェストを
-  **native で**計算する。singleton / mock / monkey-patch があれば dispatch。
+  キャッシュしていて、真なら `Value::hash_value`（`array_hash_value`）が
+  構造ハッシュを**native で**計算する。singleton / mock / monkey-patch が
+  あれば dispatch。要素が葉（immediate / Bignum / Float / String）だけの
+  Array は再帰ガードも通らない。要素の `#hash` / `eql?` / `==` は Ruby で、
+  歩いている Array 自身を縮めうるので、`hash`・`eql?`（`Value::array_elements_eql`、
+  Hash の probe が Array キーを比べるのもこれ）・`==` は呼び出しのたびに長さと
+  要素を読み直す（`rb_ary_hash` / `recursive_eql` / `recursive_equal` と同じ）。
+  1 本の `&ArrayInner` を呼び出しをまたいで持つと、コンパイラが長さを 1 回しか
+  読まず、pop 済みの要素を歩くことがある。呼び出しの要らない先頭部分
+  （immediate、同一オブジェクト）だけはスライスのまま比べる。
 - **`include?` / `index` / `count` / `delete`**（`EqSearch`、`executor/op.rs`）:
   needle を 1 回準備してから走査する。Integer / Symbol / nil / true / false
   の needle なら同クラスでビットが違う要素は `==` 無しで不一致、String は

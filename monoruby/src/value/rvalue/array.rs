@@ -409,26 +409,6 @@ impl ArrayInner {
     }
 }
 
-impl RubyHash<Executor, Globals, MonorubyErr> for ArrayInner {
-    fn ruby_hash<H: std::hash::Hasher>(
-        &self,
-        state: &mut H,
-        e: &mut Executor,
-        g: &mut Globals,
-    ) -> Result<()> {
-        // `rb_ary_hash`: an element's `#hash` is Ruby and may change the
-        // receiver, so the length is read and the element taken afresh
-        // each round rather than through a slice borrowed up front, whose
-        // buffer such a change could free (#2172).
-        let mut i = 0;
-        while let Some(v) = self.get(i).copied() {
-            v.ruby_hash(state, e, g)?;
-            i += 1;
-        }
-        Ok(())
-    }
-}
-
 impl ArrayInner {
     pub fn new() -> Self {
         ArrayInner::from(smallvec!())

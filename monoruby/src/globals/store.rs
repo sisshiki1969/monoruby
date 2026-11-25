@@ -119,6 +119,8 @@ pub struct Store {
     /// one?" and compute the digest inline instead of dispatching. See
     /// `doc/bop_redefinition.md`.
     kernel_hash_fid: Option<FuncId>,
+    /// `Kernel#eql?`, for [`Store::is_identity_key`].
+    kernel_eql_fid: Option<FuncId>,
     /// The builtin `Kernel#binding`, which refuses a caller that is not a
     /// Ruby frame (#1665). See `method_call_inline_bails`.
     kernel_binding_fid: Option<FuncId>,
@@ -932,6 +934,7 @@ impl Store {
             functions: function::Funcs::default(),
             basic_ops: basic_op::BasicOpTable::new(),
             kernel_hash_fid: None,
+            kernel_eql_fid: None,
             errno_classes: 0..0,
             errno_numbers: vec![],
             errno_ivar: None,
@@ -1189,6 +1192,10 @@ impl Store {
         self.kernel_hash_fid = Some(fid);
     }
 
+    pub(crate) fn set_kernel_eql_fid(&mut self, fid: FuncId) {
+        self.kernel_eql_fid = Some(fid);
+    }
+
     /// Record the builtin `Kernel#binding`. Called once, at bootstrap.
     pub(crate) fn set_kernel_binding_fid(&mut self, fid: FuncId) {
         self.kernel_binding_fid = Some(fid);
@@ -1413,6 +1420,44 @@ impl Store {
             (Some(builtin), Some(found)) => builtin == found,
             _ => false,
         }
+    }
+
+    ///
+    /// Whether an object of `class_id` is a Hash key by its identity alone: it inherits
+    /// both `Kernel#hash` and `Kernel#eql?`, so it is `eql?` to nothing
+    /// but itself and a Hash can file and find it without a call.
+    ///
+    /// With `Kernel#hash` and an `eql?` of its own it is still hashed by
+    /// its identity, but a key filed under that number — one whose own
+    /// `#hash` answers it — has to be shown to the method.
+    ///
+    /// Memoized per class_version, as `hash_method` is. `class_id` is the
+    /// object's own class (`Value::class`), a singleton class included.
+    ///
+    #[inline]
+    pub(crate) fn is_identity_key_class(&self, class_id: ClassId) -> bool {
+        let version = Globals::class_version();
+        if let Some((v, answer)) = self[class_id].identity_key_at()
+            && v == version
+        {
+            return answer;
+        }
+        self.resolve_identity_key(class_id, version)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resolve_identity_key(&self, class_id: ClassId, version: u32) -> bool {
+        let resolves_to = |name: IdentId, builtin: Option<FuncId>| {
+            let found = self
+                .check_method_for_class_with_version(class_id, name, version)
+                .and_then(|e| e.func_id());
+            matches!((builtin, found), (Some(builtin), Some(found)) if builtin == found)
+        };
+        let answer = resolves_to(IdentId::HASH, self.kernel_hash_fid)
+            && resolves_to(IdentId::EQL_, self.kernel_eql_fid);
+        self[class_id].set_identity_key_at(version, answer);
+        answer
     }
 
     pub(crate) fn basic_op_redefined(&self) -> bool {

@@ -1775,3 +1775,95 @@ fn eql_consulted_only_on_full_hash_match() {
     );
     assert_eq!(map.len(), 10);
 }
+
+/// The probes taken apart for a key whose `eql?` is Ruby code: the keys
+/// filed under one digest are handed out, compared with nothing, in both
+/// the linear and the indexed mode; a position is found by a predicate;
+/// and an entry is removed by one.
+#[test]
+fn candidates_under_a_digest_and_removal_by_predicate() {
+    let mut e = E;
+    let mut g = G;
+    for n in [4u64, 20] {
+        let mut map: RubyMap<Collider, i32, E, G, (), IdentityState> =
+            RubyMap::with_hasher(IdentityState);
+        // Every key answers `eql` with true, so the generic insert would
+        // merge them: file each under a digest of its own instead, and
+        // three under one.
+        for i in 0..n {
+            map.insert_prehashed_with((i + 1) as usize, Collider(i), i as i32, |_| false);
+        }
+        for i in 100..103u64 {
+            map.insert_prehashed_with(77 << 20, Collider(i), i as i32, |_| false);
+        }
+        assert_eq!(map.len() as u64, n + 3);
+
+        let mut seen = vec![];
+        map.each_filed_under(77 << 20, |i, k, v| seen.push((i, k.0, *v)), &mut e, &mut g);
+        seen.sort();
+        let base = n as usize;
+        assert_eq!(
+            seen,
+            vec![(base, 100, 100), (base + 1, 101, 101), (base + 2, 102, 102)]
+        );
+        let mut none = vec![];
+        map.each_filed_under(12345 << 20, |i, _, _| none.push(i), &mut e, &mut g);
+        assert!(none.is_empty());
+
+        assert_eq!(
+            map.get_index_of_prehashed_with(77 << 20, |k| k.0 == 101, &mut e, &mut g),
+            Ok(Some(base + 1))
+        );
+        assert_eq!(
+            map.get_index_of_prehashed_with(77 << 20, |k| k.0 == 999, &mut e, &mut g),
+            Ok(None)
+        );
+
+        assert_eq!(
+            map.shift_remove_prehashed_with(77 << 20, |k| k.0 == 101, &mut e, &mut g),
+            Ok(Some(101))
+        );
+        assert_eq!(
+            map.shift_remove_prehashed_with(77 << 20, |k| k.0 == 101, &mut e, &mut g),
+            Ok(None)
+        );
+        assert_eq!(map.len() as u64, n + 2);
+        // The entry after the removed one moved down, and is still found.
+        assert_eq!(
+            map.get_index_of_prehashed_with(77 << 20, |k| k.0 == 102, &mut e, &mut g),
+            Ok(Some(base + 1))
+        );
+        assert_eq!(
+            map.shift_remove_prehashed_with(1, |k| k.0 == 0, &mut e, &mut g),
+            Ok(Some(0))
+        );
+        assert_eq!(
+            map.get_index_of_prehashed_with(77 << 20, |k| k.0 == 100, &mut e, &mut g),
+            Ok(Some(base - 1))
+        );
+    }
+}
+
+/// `ruby_digest` is what the map files a key under: by default the
+/// builder's hasher over `ruby_hash`, for an `Option` key its payload's.
+#[test]
+fn ruby_digest_default_and_option() {
+    let mut e = E;
+    let mut g = G;
+    let state = IdentityState;
+    assert_eq!(Collider(42).ruby_digest(&state, &mut e, &mut g), Ok(42));
+    assert_eq!(
+        Some(Collider(42)).ruby_digest(&state, &mut e, &mut g),
+        Ok(42)
+    );
+    assert_eq!(None::<Collider>.ruby_digest(&state, &mut e, &mut g), Ok(0));
+    assert_eq!(RubySymHash::ruby_digest(&Symbol(7), &state), 7);
+    assert_eq!(
+        crate::digest_of_hash_value(1),
+        crate::digest_of_hash_value(1)
+    );
+    assert_ne!(
+        crate::digest_of_hash_value(1),
+        crate::digest_of_hash_value(2)
+    );
+}

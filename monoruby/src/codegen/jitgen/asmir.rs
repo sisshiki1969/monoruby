@@ -3213,11 +3213,10 @@ pub(super) enum AsmInst {
     /// exit on every lookup.
     ///
     /// The key must already be class-guarded to what `digest` / `key_eq`
-    /// expect: one of the bits-hashed immediates (`Symbol`, `nil`, `true`,
-    /// `false`; a fixnum's digest reduces through SipHash first) with
-    /// `key_eq: None` — the key is then compared by its bits — or `String`
-    /// itself (not a subclass, whose `eql?` is dispatched) with `key_eq`
-    /// naming the byte-equality leaf.
+    /// expect: one of the immediates the inliner admits (`Symbol`, `nil`,
+    /// `true`, `false`) with `key_eq: None` — the key is then compared by
+    /// its bits — or `String` itself (not a subclass, whose `eql?` is
+    /// dispatched) with `key_eq` naming the byte-equality leaf.
     ///
     HashProbe {
         layout: rubymap::EntriesLayout,

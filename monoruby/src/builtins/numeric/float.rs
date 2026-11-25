@@ -411,17 +411,16 @@ fn float_toi(
 /// hashed by address.
 #[monoruby_builtin]
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use std::hash::{Hash, Hasher};
-    let mut f = match lfp.self_val().unpack() {
-        RV::Float(f) => f,
-        _ => unreachable!(),
-    };
-    if f == 0.0 {
-        f = 0.0;
-    }
-    let mut s = crate::value::seeded_hasher();
-    f.to_bits().hash(&mut s);
-    Ok(Value::from_hash_digest(s.finish()))
+    let self_val = lfp.self_val();
+    Ok(Value::integer(if self_val.is_packed_value() {
+        // A flonum is an immediate; `0.0` answers as `-0.0` does.
+        self_val.identity_hash_value()
+    } else {
+        match self_val.unpack() {
+            RV::Float(f) => Value::float_hash_value(f),
+            _ => unreachable!(),
+        }
+    }))
 }
 
 /// [https://docs.ruby-lang.org/ja/latest/method/Float/i/to_i.html]

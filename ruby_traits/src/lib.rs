@@ -45,6 +45,21 @@ where
             None => Ok(()),
         }
     }
+
+    /// An `Option` key digests as its payload.
+    #[inline]
+    fn ruby_digest<S: std::hash::BuildHasher>(
+        &self,
+        hash_builder: &S,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<u64, R> {
+        use std::hash::Hasher;
+        match self {
+            Some(v) => v.ruby_digest(hash_builder, e, g),
+            None => Ok(hash_builder.build_hasher().finish()),
+        }
+    }
 }
 
 impl<T, E, G, R> RubyEql<E, G, R> for Vec<T>
@@ -99,6 +114,25 @@ pub trait RubySymEql {
 pub trait RubyHash<E, G, R> {
     fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H, e: &mut E, g: &mut G)
         -> Result<(), R>;
+
+    /// The digest a map files the key under: by default the key's
+    /// [`ruby_hash`](Self::ruby_hash) stream through the map's hasher.
+    ///
+    /// A key type whose digest has to be a function of some number of its
+    /// own — a Ruby value's `#hash` — answers that function here instead,
+    /// and must then answer it for every map it is a key of.
+    #[inline]
+    fn ruby_digest<S: std::hash::BuildHasher>(
+        &self,
+        hash_builder: &S,
+        e: &mut E,
+        g: &mut G,
+    ) -> Result<u64, R> {
+        use std::hash::Hasher;
+        let mut h = hash_builder.build_hasher();
+        self.ruby_hash(&mut h, e, g)?;
+        Ok(h.finish())
+    }
 }
 
 impl<T, E, G, R> RubyHash<E, G, R> for Vec<T>
@@ -186,6 +220,17 @@ impl_ruby!(
 ///
 pub trait RubySymHash {
     fn ruby_hash<H: std::hash::Hasher>(&self, state: &mut H);
+
+    /// The digest a map files the key under; see
+    /// [`RubyHash::ruby_digest`], with which it has to agree for a key
+    /// both traits can put into one map.
+    #[inline]
+    fn ruby_digest<S: std::hash::BuildHasher>(&self, hash_builder: &S) -> u64 {
+        use std::hash::Hasher;
+        let mut h = hash_builder.build_hasher();
+        self.ruby_hash(&mut h);
+        h.finish()
+    }
 }
 
 /// Key equivalence trait.

@@ -196,14 +196,12 @@ pub(super) fn init(globals: &mut Globals, numeric: Module) {
 /// Bignums disagreed.
 #[monoruby_builtin]
 fn hash(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    use std::hash::{Hash, Hasher};
-    let mut s = crate::value::seeded_hasher();
-    match lfp.self_val().unpack() {
-        RV::Fixnum(i) => i.hash(&mut s),
-        RV::BigInt(b) => b.hash(&mut s),
+    let self_val = lfp.self_val();
+    Ok(Value::integer(match self_val.unpack() {
+        RV::Fixnum(_) => self_val.identity_hash_value(),
+        RV::BigInt(b) => Value::bignum_hash_value(b),
         _ => unreachable!(),
-    }
-    Ok(Value::from_hash_digest(s.finish()))
+    }))
 }
 
 /// [https://docs.ruby-lang.org/ja/latest/method/Integer/i/chr.html]

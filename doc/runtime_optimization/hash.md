@@ -147,15 +147,23 @@ Hash にして temp stack に置いたうえで、残りのペアを `Hashmap::a
 書かれている（`builtins/hash.rb`）ので、ホットな呼び出しサイトではメソッドと
 ブロックの両方がインライン展開される（§1.6）。
 
-### 1.5 2 つのハッシュ関数
+### 1.5 ハッシュ値とダイジェスト
 
-Hash には**用途の違う 2 つのハッシュ関数**が共存していて、これが §4.1 の前提に
-なる。
+Hash がキーについて知っているのは**ハッシュ値**（`#hash` が返す整数）と `eql?`
+だけで、マップはどのキーも「ハッシュ値をもう 1 回 fold した**ダイジェスト**」の
+下に置く。
 
-| 用途 | 実装 | 場所 |
+| 段 | 実装 | 場所 |
 |---|---|---|
-| バケッティング（マップ内部のダイジェスト） | seeded な wyhash 系 multiply-fold（`RubyHasher`、施策 5） | `rubymap/src/hasher.rs` |
-| Ruby から見える `Object#hash` の**値** | std の `RandomState` = SipHash-1-3（`HASH_STATE`、`seeded_hasher()`） | `value.rs` |
+| ハッシュ値（Ruby から見える `#hash` の値そのもの） | `Value::hash_value`。組み込みの型は seeded な wyhash 系 multiply-fold（`RubyHasher`、施策 5）で native に計算、それ以外は `#hash` を dispatch | `value.rs` |
+| ダイジェスト（バケッティング） | `rubymap::digest_of_hash_value(hv) = fold(hv, P2)`。全キー共通で、マップごとのハッシャは通らない（`RubyHash::ruby_digest`） | `rubymap/src/hasher.rs` |
+
+以前は 2 つが別の関数だった（`#hash` の値は std の SipHash-1-3、バケッティングは
+ミキサーにキーのビットやバイト列を直接流す）。そのため「`#hash` が別のオブジェクトの
+ハッシュ値を返すキー」— delegator や String / Integer のラッパー — が、相手と
+同じバケットに入らず、`eql?` が呼ばれる前に外れていた（#2204）。CRuby の
+`any_hash` は両方に同じ関数を使うので、そこに揃えた。Fixnum / Float キーが
+内側で SipHash を 1 回回していた二重ハッシュ（旧 §4.1）もこれで消えている。
 
 `RubyHasher` は長さを最初に混ぜ、16 バイト単位のループの後に重なりを許した
 4 / 8 バイトの末尾読みをして最後にもう 1 回 fold する。シードはプロセスで 1 回
@@ -164,15 +172,38 @@ Hash には**用途の違う 2 つのハッシュ関数**が共存していて�
 長さごとの分離、1 ビットの変化が**上位 7 ビット**（hashbrown の control byte）
 まで拡散すること、等間隔の整数キーが散ること。
 
-Ruby 側の `#hash` は `Value::ruby_hash` / `ruby_hash_packed` が作る。nil /
-true / false / Symbol はビットそのもの、String は `RStringInner::hash`（生
-バイト列、エンコーディング非依存、再定義された `String#hash` は見ない）、
-Array / Hash は組み込みの `hash` が再定義されていない限り native の構造
-ハッシュ、それ以外は `#hash` を dispatch して `#to_int` で整数化する。
-**Fixnum / Float だけは内側で SipHash を丸ごと 1 回回して** `Integer#hash` /
-`Float#hash` の値を作り、その結果をマップ側のハッシャに流す。これは
-`Array#hash` が要素を混ぜるときに Ruby レベルの `#hash` と一致させるためで、
-バケッティングには要らない二重ハッシュである（§4.1）。
+`Value::hash_value` の内訳: immediate は tagged bits を 1 回 fold
+（`packed_hash_value`。`0.0` だけは heap の `-0.0` と `eql?` なので Float の
+値ハッシュ）、Bignum / Float は値、String は生バイト列（クラスによらず、
+エンコーディング非依存、再定義された `String#hash` は見ない）、Array / Hash は
+組み込みの `hash` が再定義されていない限り native の構造ハッシュ（葉だけの
+Array — `[id, :name]` のような複合キー — は再帰ガード無し）、`Kernel#hash` を
+継ぐオブジェクトは identity、それ以外は `#hash` を dispatch して `#to_int` で
+整数化する。`Integer#hash` / `Float#hash` / `String#hash` / `Array#hash` /
+`Hash#hash` / `Kernel#hash` はこの同じ関数の値を返す。Struct / Set / Time /
+Regexp などの `#hash` は部品を自分で混ぜるメソッドで（`seeded_hasher()` =
+SipHash）、Hash からは dispatch される側。
+
+#### キーを尋ねる probe と尋ねない probe
+
+`#hash` / `eql?` は Ruby のコードでありうるので、Hash を書き換えるかも
+しれない（#2199: 格納の途中で `eql?` が `clear` すると、probe が解放済みの
+領域に残って落ちていた）。probe は 2 通りある（`rvalue/hash.rs`）:
+
+- **尋ねない**（呼び出しゼロ）: immediate（`packed_digest`）、クラスが `String`
+  ちょうどの String（`string_digest` / `string_key_eq`）、Bignum・0 以外の
+  Float・`Kernel#hash` と `Kernel#eql?` の両方を継ぐオブジェクト
+  （`unasked_digest` / `unasked_key_eq`、後者の判定は
+  `Store::is_identity_key_class` が class version でキャッシュ）。prehashed な
+  probe 1 回で済む。
+- **尋ねる**（`is_observed_key`）: String のサブクラス、Array、Hash、Struct、
+  `hash` か `eql?` を自前で持つオブジェクト、`-0.0`。`HashRef::pos_with_hash`
+  が probe を分解する。先に `#hash` を呼び（テーブルには何も触れていない）、
+  そのダイジェストの下にあるペアを比較なしで集め（`RubyMap::each_filed_under`）、
+  temp stack に root してから probe 順に `eql?` を尋ね、受理されたキーの位置を
+  その時点のテーブルから読み直す。格納（`store_observed`）と削除は、こうして
+  得た「以後 Ruby が走っていない位置」に対して位置指定で行う。CRuby の st.c は
+  同じ問題を `rebuilds_num` を見たやり直しで解いている。
 
 異なるプロセスで `#hash` が変わること（CVE-2011-4815 対策）は
 `tests/hash_seed.rs` が本物のバイナリを 2 回起動して確認している。
@@ -244,8 +275,9 @@ Rust の builtin が要素ごとにブロックを起動すると 1 要素ごと
 `packed_digest` 24.6 % + 11.7 %）。CRuby の `st_hash` は seeded な非暗号ミキサー
 なので、同じトレードを取った。プロセス単位の乱数シード（`RandomState` から
 1 度引くので新規依存なし）+ wyhash 系の multiply-fold。シードを秘匿することが
-hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。Ruby から見える
-`Object#hash` は従来どおり `HASH_STATE` 側なので変わらない。
+hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。この時点では Ruby から
+見える `Object#hash` は `HASH_STATE`（SipHash）側のままだった。#2204 の修正で
+`#hash` の値も同じミキサーから作るようになっている（§1.5）。
 
 ### 純ルックアップのコスト（1 回、ns。18 エントリの Hash）
 
@@ -282,17 +314,24 @@ hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。Ruby か�
 
 ## 4. 今後のアイデア（効果の見込み順）
 
-### 4.1 Integer / Float キーの二重ハッシュを外す（小・確度高）
+### 4.1 Integer / Float キーの二重ハッシュを外す（**実装済み**、#2204 の修正と同時）
 
 `Value::ruby_hash_packed` の Fixnum / Float アームは、`Integer#hash` /
 `Float#hash` が返す**値**を作るために内側で `seeded_hasher()`（std の
 `DefaultHasher` = SipHash）を丸ごと 1 回回し、その結果を外側のマップハッシャに
-流している。これは `Array#hash` / `Hash#hash` が要素を混ぜるときに Ruby レベルの
-`#hash` 結果と一致させるための要請で、**バケッティングには要らない**。上表で
-Integer キーだけ Symbol キーより 14 ns 遅い（39.5 vs 25.7）のがそのコスト。
+流していた。#2204 の修正で `#hash` の値そのものをミキサーから作るようにした
+（§1.5）ので、SipHash は通らなくなった。1 回あたりの命令数（cachegrind、
+20 エントリの Hash、JIT 済みのループ）:
 
-構造ハッシュ用（Ruby から見える `#hash` 値）とバケッティング用を分ければ、
-Integer キーの参照が Symbol キーと同じところまで来るはず。
+| 操作 | 修正前 | 修正後 |
+|---|---:|---:|
+| `h[int]` | 335 | 160 |
+| `h[int] = v` | 447 | 251 |
+| `h[obj]`（`Kernel#hash` のオブジェクト） | 600 | 365 |
+| `h[sym]`（変数キー） | 166 | 105 |
+| `1.hash` | 249 | 122 |
+| `"str".hash` | 414 | 152 |
+| `[1, :a, "s"].hash` | 1152 | 311 |
 
 ### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1〜3 実装済み**、2026-09-04/05）
 
@@ -320,9 +359,9 @@ Integer キーの参照が Symbol キーと同じところまで来るはず。
 | 2 | 同上 | 索引（> 8）— hashbrown の group probe | **実装済み**（段階 3 と同時） |
 | 3 | String — バイト列ダイジェスト + memcmp + `plain_string` 判定 | 両方 | **実装済み**（erubi の 18 エントリ・String キーはここ） |
 
-Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）が解けるまで
-対象外。葉ヘルパで正しく計算はできるが、ヘルパ自体が現状のルックアップの
-大半のコストになる。
+Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）のあいだは対象外
+だった（葉ヘルパ自体がルックアップの大半のコストになる）。4.1 が解けたので、
+Fixnum も `packed_digest_c` 1 回で段階 1 / 2 に載せられる（未着手）。
 
 #### 段階 1 の設計判断（2026-09-04）
 
@@ -530,7 +569,7 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
 | `compare_by_identity` | `st_table` の型を `identhash` に切り替えて再ハッシュ | inline は `IDENT_BIT` を立てるだけ（packed キーは `eql?` と同一性が一致するので inline のまま）。boxed は**別型**の `RubyMap<Option<IdentKey>, Value>` に作り直す。空マップ限定で双方向に切り替える `set_compare_by_identity_empty` があり、`Hash#replace` / `Set` が使う |
 | デフォルト値／proc | `ifnone` スロット | `Option<Box<HashDefault>>`。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（`Hash.new(7)` は確保する）。`clear` はデフォルトを保つ（CRuby と同じ） |
 | ミス時の `default` | `rb_funcall(id_default)` | builtin の `Hash#[]` は同じく dispatch。`hashindex_pure` / `runtime::get_index` は格納値を直接読むので、対象を `Hash` ちょうどに限定 |
-| Ruby から見える `#hash` | `rb_hash_start` 系（SipHash-1-3、seeded） | `HASH_STATE`（std `RandomState` = SipHash-1-3、seeded）。バケッティングは別の seeded ミキサー（§1.5） |
+| Ruby から見える `#hash` | `rb_hash_start` 系（SipHash-1-3、seeded）。`any_hash` がバケッティングにも同じ値を使う | Hash が native に計算する型は seeded ミキサー（`Value::hash_value`）で、バケッティングはその値の fold（§1.5）。Struct / Set / Time などのメソッドは `HASH_STATE`（SipHash-1-3、seeded） |
 | String ハッシュのキャッシュ | 無し | 無し（§4.5 に候補として残す） |
 | GC | `rb_gc_mark` | `HashRef::mark` がデフォルトと生きたエントリを mark。`young_child_exists` が世代別の remember 判定、mutator と JIT の `emit_hash_default_assign` が write barrier を出す（[`../gc.md`](../gc.md)） |
 
