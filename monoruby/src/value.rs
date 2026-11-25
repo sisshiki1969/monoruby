@@ -3843,9 +3843,20 @@ impl Value {
 }
 
 impl Value {
+    /// The value a literal stands for — how the test harness reads back
+    /// the answer CRuby printed.
+    ///
+    /// The tree is built in Rust locals, which the collector does not
+    /// scan, and storing a Hash key may dispatch its `#hash` (a Range, a
+    /// Rational): a collection there would take the values built so far.
+    /// None runs until the whole value is there.
     pub(crate) fn from_ast(node: &Node, globals: &mut Globals) -> Value {
         let mut vm = Executor::default();
-        Self::from_ast_inner(node, &mut vm, globals, Encoding::UTF8)
+        let gc_was_enabled = crate::alloc::ALLOC
+            .with(|alloc| std::mem::replace(&mut alloc.borrow_mut().gc_enabled, false));
+        let res = Self::from_ast_inner(node, &mut vm, globals, Encoding::UTF8);
+        crate::alloc::ALLOC.with(|alloc| alloc.borrow_mut().gc_enabled = gc_was_enabled);
+        res
     }
 
     fn from_ast_inner(
