@@ -527,6 +527,9 @@ pub struct Globals {
     pub no_jit: bool,
     /// suppress loading gem.
     pub no_gems: bool,
+    /// `--disable-error_highlight`: `ErrorHighlight` is not registered
+    /// as an autoload at boot (`builtins/gem_prelude.rb`).
+    pub no_error_highlight: bool,
     /// The `Warning[]` switches, one [`WarningCategory`] bit each.
     warning_categories: u8,
     /// The `Encoding` each `Encoding::<NAME>` constant object stands
@@ -1251,6 +1254,7 @@ impl Globals {
             special_gvars: SpecialGvars::default(),
             no_jit,
             no_gems,
+            no_error_highlight: false,
             warning_categories: WarningCategory::DEFAULT,
             encoding_of_object: HashMap::default(),
             encoding_object_roots: vec![],

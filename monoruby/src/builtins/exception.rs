@@ -172,6 +172,12 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(EXCEPTION_CLASS, "to_s", to_s, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "backtrace", backtrace, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "__raise_backtrace", raise_backtrace, 0);
+    globals.define_builtin_func(
+        EXCEPTION_CLASS,
+        "__raise_backtrace_sites",
+        raise_backtrace_sites,
+        0,
+    );
     globals.define_private_builtin_func(EXCEPTION_CLASS, "__mesg", mesg, 0);
     globals.define_builtin_func(EXCEPTION_CLASS, "set_backtrace", set_backtrace, 1);
     // Internal alias: `startup.rb` redefines `set_backtrace` with a Ruby
@@ -920,6 +926,53 @@ fn raise_backtrace(
         return Ok(Value::nil());
     }
     Ok(Value::array_from_vec(traces))
+}
+
+///
+/// ### Exception#__raise_backtrace_sites (monoruby intrinsic)
+///
+/// What the raise-time capture knows of each frame beyond its
+/// backtrace line, in the order of `#__raise_backtrace`: nil for a
+/// frame without a source position, else `[absolute_path, extent]` —
+/// the canonical path the source was loaded from (nil for eval'd code
+/// and `-e`), and the extent of the node the frame was executing
+/// (`kernel::node_extent_value`). `#backtrace_locations` hands them to
+/// its Locations, for `#absolute_path` and `#__node_id`.
+///
+#[monoruby_builtin]
+fn raise_backtrace_sites(
+    _vm: &mut Executor,
+    _globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let self_ = lfp.self_val();
+    let sites = self_
+        .is_exception()
+        .unwrap()
+        .trace()
+        .iter()
+        .map(|entry| match &entry.0 {
+            Some((loc, source)) => {
+                // As `Kernel.__caller_frames` has it: a builtin's
+                // `<internal:...>` source has no path of its own.
+                let absolute = match &source.absolute_path {
+                    Some(p) if !crate::globals::display_path(source).starts_with('<') => {
+                        let mut v = Value::string_from_source_bytes(
+                            p.as_os_str().as_encoded_bytes(),
+                            source.realpath_encoding(),
+                        );
+                        v.set_frozen();
+                        v
+                    }
+                    _ => Value::nil(),
+                };
+                Value::array2(absolute, super::kernel::node_extent_value(loc))
+            }
+            None => Value::nil(),
+        })
+        .collect();
+    Ok(Value::array_from_vec(sites))
 }
 
 ///

@@ -2884,6 +2884,32 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         require_module_argument(globals, v, "prepend")?;
     }
     let self_ = lfp.self_val();
+    // error_highlight is loaded on first use rather than at boot
+    // (`builtins/gem_prelude.rb`), and CRuby has its `CoreExt` underneath
+    // every other module prepended to the three classes it decorates. So
+    // the first prepend to one of them brings the library in first. (The
+    // library's own prepends come through here too, with the autoload
+    // running, which the Ruby side reads as nothing pending.)
+    if let Some(class) = self_.is_class_or_module()
+        && matches!(
+            class.id(),
+            NAME_ERROR_CLASS | TYPE_ERROR_CLASS | ARGUMENTS_ERROR_CLASS
+        )
+        && globals
+            .store
+            .get_constant(OBJECT_CLASS, IdentId::get_id("ErrorHighlight"))
+            .is_some_and(|state| state.is_autoload())
+    {
+        let exception = globals.store[EXCEPTION_CLASS].get_module().as_val();
+        vm.invoke_method_inner(
+            globals,
+            IdentId::get_id("__load_error_highlight"),
+            exception,
+            &[],
+            None,
+            None,
+        )?;
+    }
     for v in args.iter().cloned().rev() {
         vm.invoke_method_inner(
             globals,

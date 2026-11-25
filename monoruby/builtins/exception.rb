@@ -64,7 +64,15 @@ class Exception
     return @__backtrace_locations if defined?(@__backtrace_locations) && @__backtrace_locations
     frames = __raise_backtrace
     return nil if frames.nil?
-    @__backtrace_locations = frames.map { |f| Thread::Backtrace::Location.new(f) }
+    sites = __raise_backtrace_sites
+    locs = []
+    i = 0
+    n = frames.size
+    while i < n
+      locs << Thread::Backtrace::Location.new(frames[i], sites[i])
+      i += 1
+    end
+    @__backtrace_locations = locs
   end
 
   # CRuby 3.4+: `set_backtrace` (and thus `$@ =`) also accepts an Array
@@ -182,8 +190,45 @@ class Exception
   # decorate the message with the class name; empty-message and
   # anonymous-class cases have special forms. The result is US-ASCII
   # while it is all ASCII, whatever the message's encoding (#2090).
-  def detailed_message(highlight: false, **)
+  def detailed_message(highlight: false, **opts)
+    if (::NameError === self || ::TypeError === self || ::ArgumentError === self) &&
+       ::Object.autoload?(:ErrorHighlight)
+      m = __error_highlight_message(highlight, opts)
+      return m if m
+    end
     __usascii_repr(__detailed_message(highlight))
+  end
+
+  # error_highlight is loaded here, by the first message it would have
+  # decorated, rather than at boot (builtins/gem_prelude.rb). Loading it
+  # prepends `ErrorHighlight::CoreExt` to the receiver's class — too late
+  # for the call that is already under way, which was dispatched past
+  # where the module now sits. So this once the module's method is
+  # called directly; its `super` comes back to `#detailed_message`
+  # above, which by then finds nothing left to load.
+  private def __error_highlight_message(highlight, opts)
+    return nil unless ::Exception.__load_error_highlight
+    return nil unless defined?(::ErrorHighlight::CoreExt) && ::ErrorHighlight::CoreExt === self
+    ::ErrorHighlight::CoreExt.instance_method(:detailed_message)
+      .bind_call(self, highlight: highlight, **opts)
+  end
+
+  # Run the pending autoload of `ErrorHighlight`, if there is one, and
+  # say whether it ran. Called for the first message the library would
+  # decorate (above) and by `Module#prepend` on one of the three classes
+  # it prepends its module to, so that the module ends up underneath the
+  # others, where a library loaded at boot has it.
+  def self.__load_error_highlight
+    return false unless ::Object.autoload?(:ErrorHighlight)
+    begin
+      ::ErrorHighlight
+    rescue ::LoadError
+      # CRuby's gem_prelude says so once and goes on without it.
+      ::Object.__send__(:remove_const, :ErrorHighlight) if ::Object.autoload?(:ErrorHighlight)
+      warn "`error_highlight' was not loaded."
+      return false
+    end
+    true
   end
 
   private def __detailed_message(highlight)

@@ -703,6 +703,15 @@ reproducible build. It performs two jobs:
    written at run time by `ruby_probe.rs`) and the human-facing breadcrumbs
    stay at the top level of `~/.monoruby/`.
 
+   `error_highlight` is in the vendored snapshot unmodified, but is not
+   required at boot as in CRuby: `builtins/gem_prelude.rb` registers
+   `ErrorHighlight` as an autoload and `Exception#detailed_message` loads
+   it for the first NameError / TypeError / ArgumentError it is asked
+   about. The `RubyVM::AbstractSyntaxTree` the gem calls is a private
+   constant of `ErrorHighlight` (`stdlib/monoruby_hooks/error_highlight.rb`),
+   answered from the node extent a `Thread::Backtrace::Location` carries.
+   See `doc/error_highlight.md`.
+
 > **Note**: `build.rs` declares `cargo:rerun-if-changed` for each source tree
 > (and the `.ruby-version` pin and the install root's `.build-stamp` self-heal
 > file), so edits to `builtins/`, `stdlib/`, `gem/`, or the vendored snapshot
