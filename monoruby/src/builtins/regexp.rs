@@ -1120,7 +1120,7 @@ fn regexp_last_match(
     // Integer / `to_int`-coercible arg: treat as an Nth-capture
     // index. CRuby silently returns `nil` when the index is out of
     // range; `get_special_matches` already does that.
-    let nth = arg0.coerce_to_int_i64(vm, globals)?;
+    let nth = arg0.num2long(vm, globals)?;
     Ok(vm.get_special_matches(nth).unwrap_or_default())
 }
 
@@ -1615,7 +1615,7 @@ pub(crate) fn reg_match_p(
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
     {
         let byte_pos = if let Some(pos) = pos {
-            match conv_index(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+            match conv_index(pos.num2long(vm, globals)?, rs.char_length()) {
                 Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
                 None => return Ok(false),
             }
@@ -1649,7 +1649,7 @@ pub(crate) fn reg_match_p(
         }
     };
     let char_pos = if let Some(pos) = pos {
-        match conv_index(pos.coerce_to_int_i64(vm, globals)?, given.chars().count()) {
+        match conv_index(pos.num2long(vm, globals)?, given.chars().count()) {
             Some(pos) => pos,
             None => return Ok(false),
         }
@@ -1749,7 +1749,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         && let Some(native_enc) = RegexpInner::onigmo_encoding_for(rs.encoding())
     {
         let byte_pos = if let Some(pos) = lfp.try_arg(1) {
-            match match_start_char(pos.coerce_to_int_i64(vm, globals)?, rs.char_length()) {
+            match match_start_char(pos.num2long(vm, globals)?, rs.char_length()) {
                 // Convert char index -> byte offset by walking char
                 // boundaries under the native encoding.
                 Some(cp) => rs.iter_char_bytes().take(cp).map(|c| c.len()).sum(),
@@ -1798,10 +1798,7 @@ fn rmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         }
     };
     let char_pos = if let Some(pos) = lfp.try_arg(1) {
-        match match_start_char(
-            pos.coerce_to_int_i64(vm, globals)?,
-            heystack.chars().count(),
-        ) {
+        match match_start_char(pos.num2long(vm, globals)?, heystack.chars().count()) {
             Some(pos) => pos,
             // Out-of-range position ⇒ no match. CRuby returns
             // `nil` here (we used to return `false`, which mixed

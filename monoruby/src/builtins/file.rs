@@ -210,9 +210,11 @@ fn file_binread(
     let length = if let Some(arg1) = lfp.try_arg(1)
         && !arg1.is_nil()
     {
-        let n = arg1.coerce_to_int_i64(vm, globals)?;
+        let n = arg1.num2long(vm, globals)?;
         if n < 0 {
-            return Err(MonorubyErr::argumenterr(format!("negative length {}", n)));
+            return Err(MonorubyErr::argumenterr(format!(
+                "negative length {n} given"
+            )));
         }
         Some(n)
     } else {
@@ -221,7 +223,7 @@ fn file_binread(
     let offset = if let Some(arg2) = lfp.try_arg(2)
         && !arg2.is_nil()
     {
-        let n = arg2.coerce_to_int_i64(vm, globals)?;
+        let n = arg2.num2long(vm, globals)?;
         if n < 0 {
             // CRuby: the lseek(2) failure surfaces as Errno::EINVAL.
             let err = std::io::Error::from_raw_os_error(libc::EINVAL);
@@ -257,8 +259,11 @@ fn file_binread(
         };
     }
     if let Some(length) = length {
-        let mut contents = vec![0; length as usize];
-        if let Err(err) = std::io::Read::read_exact(&mut file, &mut contents) {
+        // Up to `length` bytes: a file that ends sooner gives what it
+        // has, and nil when that is nothing (`IO#read(length)`).
+        let mut contents = vec![];
+        let mut limited = std::io::Read::take(&mut file, length as u64);
+        if let Err(err) = std::io::Read::read_to_end(&mut limited, &mut contents) {
             return Err(MonorubyErr::errno_with_path(
                 &globals.store,
                 &err,
@@ -266,6 +271,9 @@ fn file_binread(
                 &filename_str,
             ));
         };
+        if contents.is_empty() && length > 0 {
+            return Ok(Value::nil());
+        }
         Ok(Value::bytes(contents))
     } else {
         let mut contents = vec![];
@@ -899,7 +907,7 @@ fn writable_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/File/i/flock.html]
 #[monoruby_builtin]
 fn flock_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let op = lfp.arg(0).coerce_to_i64(&globals.store)? as i32;
+    let op = lfp.arg(0).num2long(vm, globals)? as i32;
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
     let (r, errno) = if (op & libc::LOCK_NB) != 0 || (op & libc::LOCK_UN) != 0 {
@@ -1578,7 +1586,7 @@ fn fnmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
     let pattern = lfp.arg(0).coerce_to_string(vm, globals)?;
     let path_str = to_path_str(vm, globals, lfp.arg(1))?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
-        arg2.coerce_to_int_i64(vm, globals)? as u32
+        arg2.num2long(vm, globals)? as u32
     } else {
         0
     };
@@ -2361,7 +2369,7 @@ fn file_truncate(
 ) -> Result<Value> {
     let path = to_path(vm, globals, lfp.arg(0))?;
     let path_str = path.to_string_lossy().to_string();
-    let length = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    let length = lfp.arg(1).num2long(vm, globals)?;
     if length < 0 {
         // CRuby surfaces the truncate(2) failure: Errno::EINVAL.
         let err = std::io::Error::from_raw_os_error(libc::EINVAL);
@@ -2403,7 +2411,7 @@ fn file_truncate_instance(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let length = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let length = lfp.arg(0).num2long(vm, globals)?;
     lfp.self_val().as_io_inner().ensure_writable()?;
     if length < 0 {
         // CRuby surfaces the ftruncate(2) failure: Errno::EINVAL.

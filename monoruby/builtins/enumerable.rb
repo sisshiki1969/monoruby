@@ -123,10 +123,28 @@ module Enumerable
   end
   alias reduce inject
 
+  # The receiver's `size` when it answers one, else nil (CRuby's
+  # `rb_check_funcall(obj, id_size, 0, 0)`). An Array or a Hash always
+  # does, and calling it outright keeps `each_slice` on a small Array
+  # cheap: the general probe costs several hundred instructions.
+  private def __enum_size
+    if Array === self || Hash === self
+      size
+    else
+      __check_funcall(self, :size, nil)
+    end
+  end
+
   def each_slice(n)
     n = __num2long(n)
     raise ArgumentError, "invalid slice size" if n <= 0
     return to_enum(:each_slice, n) { sz = __check_funcall(self, :size, nil); sz.nil? ? nil : (sz.to_f / n).ceil } unless block_given?
+    # CRuby's `limit_by_enum_size`: a slice is no longer than the
+    # receiver's `size` says the whole is (an allocation bound there,
+    # visible when `size` and `each` disagree). Only a Fixnum counts,
+    # read as unsigned, so a negative one bounds nothing.
+    sz = __enum_size
+    n = sz if Integer === sz && sz >= 0 && sz < n
     slice = []
     __gather_each do |x|
       slice << x
@@ -784,6 +802,10 @@ module Enumerable
     n = __num2long(n)
     raise ArgumentError, "invalid size" if n <= 0
     return to_enum(:each_cons, n) { sz = __check_funcall(self, :size, nil); sz.nil? ? nil : [sz - n + 1, 0].max } unless block_given?
+    # CRuby's `enum_size_over_p`: nothing to yield when the receiver's
+    # `size` (a Fixnum, read as unsigned) is below the window.
+    sz = __enum_size
+    return self if Integer === sz && sz >= 0 && sz < n
     buf = []
     __gather_each do |x|
       buf << x

@@ -1366,9 +1366,9 @@ fn caller(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
                 });
                 (start + 1, length)
             } else {
-                let start = arg0.coerce_to_int_i64(vm, globals)?.max(0) as usize;
+                let start = arg0.num2long(vm, globals)?.max(0) as usize;
                 let length = match lfp.try_arg(1) {
-                    Some(arg1) => Some(arg1.coerce_to_int_i64(vm, globals)?.max(0) as usize),
+                    Some(arg1) => Some(arg1.num2long(vm, globals)?.max(0) as usize),
                     None => None,
                 };
                 (start + 1, length)
@@ -1402,7 +1402,7 @@ fn caller_frames(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let level = lfp.arg(0).coerce_to_int_i64(vm, globals)?.max(0) as usize + 1;
+    let level = lfp.arg(0).num2long(vm, globals)?.max(0) as usize + 1;
     let mut cfp = vm.cfp();
     let mut v = Vec::new();
     let mut inner_cfp: Option<crate::executor::Cfp> = None;
@@ -2048,13 +2048,17 @@ fn instance_ty(
 fn rand(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     // Drawn from the seeded global PRNG, so `srand(n)` makes the
     // sequence repeatable (CRuby: Kernel#rand shares Random::DEFAULT).
-    let Some(arg0) = lfp.try_arg(0) else {
+    // `rand(nil)` is `rand`.
+    let Some(arg0) = lfp.try_arg(0).filter(|v| !v.is_nil()) else {
         return Ok(Value::float(globals.random_float()));
     };
     if let Some(range) = arg0.is_range() {
         let start = range.start();
         let end = range.end();
         let excl = range.exclude_end();
+        if start.is_nil() || end.is_nil() {
+            return Err(super::random::range_domain_error(globals));
+        }
         // Both endpoints Integer (Fixnum or Bignum): an Integer in the
         // range (nil when empty).
         if let Some(span) = super::random::IntSpan::new(start, end, excl) {
@@ -2353,7 +2357,7 @@ fn kernel_integer_inner(
     // optional — `Integer("0x42", 16)` is ok but `("0x42", 10)` errors).
     let base = if let Some(b) = lfp.try_arg(1) {
         *hard = true;
-        let b = b.coerce_to_int_i64(vm, globals)?;
+        let b = b.num2long(vm, globals)?;
         if b < 0 || b > 36 || b == 1 {
             return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
         }
@@ -3893,7 +3897,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         format!("(eval at {})", caller_loc)
     };
     let lineno: i64 = if let Some(l) = lfp.try_arg(3) {
-        l.coerce_to_int_i64(vm, globals)?
+        l.num2long(vm, globals)?
     } else {
         1
     };

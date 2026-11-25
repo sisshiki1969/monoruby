@@ -354,6 +354,9 @@ impl Value {
                     _ => unreachable!("parse_kernel_integer returns Fixnum or BigInt"),
                 });
             }
+            // `nil.to_i` exists, but `rb_Integer` refuses nil before it
+            // looks for a conversion.
+            RV::Nil => return Err(MonorubyErr::typeerr("can't convert nil into Integer")),
             _ => {}
         };
         // Try to_int first, then to_i as fallback (matching CRuby sprintf behavior).
@@ -394,6 +397,8 @@ impl Value {
                 }
                 unreachable!("parse_kernel_float returns Float");
             }
+            // As above: `rb_Float` refuses nil although `nil.to_f` exists.
+            RV::Nil => return Err(MonorubyErr::typeerr("can't convert nil into Float")),
             _ => {}
         };
         if let Ok(f) = self.coerce_to_f64(vm, globals) {

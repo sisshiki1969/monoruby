@@ -1548,7 +1548,7 @@ fn pow10(n: u32) -> BigInt {
 #[monoruby_builtin]
 fn int_floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int_i64(vm, globals)?
+        d.num2long(vm, globals)?
     } else {
         return Ok(lfp.self_val());
     };
@@ -1572,7 +1572,7 @@ fn int_floor(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn int_ceil(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int_i64(vm, globals)?
+        d.num2long(vm, globals)?
     } else {
         return Ok(lfp.self_val());
     };
@@ -1600,7 +1600,7 @@ fn int_truncate(
     _: BytecodePtr,
 ) -> Result<Value> {
     let ndigits = if let Some(d) = lfp.try_arg(0) {
-        d.coerce_to_int_i64(vm, globals)?
+        d.num2long(vm, globals)?
     } else {
         return Ok(lfp.self_val());
     };
@@ -1760,7 +1760,7 @@ fn bit_length(
 #[monoruby_builtin]
 fn to_s(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let base = if let Some(b) = lfp.try_arg(0) {
-        let b = b.coerce_to_int_i64(vm, globals)?;
+        let b = b.num2long(vm, globals)?;
         if !(2..=36).contains(&b) {
             return Err(MonorubyErr::argumenterr(format!("invalid radix {}", b)));
         }

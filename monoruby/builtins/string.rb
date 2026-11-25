@@ -26,7 +26,7 @@ class String
   alias to_str to_s
 
   def insert(index, other)
-    index = index.is_a?(Integer) ? index : __to_int(index)
+    index = __num2long(index)
     # `rb_str_update` converts the replacement before it range-checks
     # the index, so an unconvertible `other` is a TypeError even when
     # the index is out of range.

@@ -719,7 +719,7 @@ fn instance_eval_inner(
             format!("(eval at {})", caller_loc)
         };
         let lineno: i64 = if argc >= 3 {
-            args[2].coerce_to_int_i64(vm, globals)?
+            args[2].num2long(vm, globals)?
         } else {
             1
         };

@@ -757,6 +757,8 @@ pub(crate) fn pack(
     template: &str,
     buffer: Option<Value>,
 ) -> Result<Value> {
+    // `buffer: nil` is the keyword's default.
+    let buffer = buffer.filter(|b| !b.is_nil());
     if buffer.is_none()
         && let Some(result) = pack_single_numeric(vm, globals, ary, template)
     {
@@ -791,7 +793,10 @@ pub(crate) fn pack(
     // directive can allocate before the association is attached.
     let mut associates: Vec<Value> = vec![];
     if let Some(buf_val) = buffer {
-        buf_val.ensure_not_frozen(&globals.store)?;
+        // The type check comes first: a frozen non-String is a TypeError.
+        if buf_val.is_rstring_inner().is_some() {
+            buf_val.ensure_not_frozen(&globals.store)?;
+        }
         match buf_val.is_rstring_inner() {
             Some(inner) => {
                 if seed_buffer {

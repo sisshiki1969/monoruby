@@ -277,17 +277,7 @@ fn random_seed_value() -> Value {
 fn coerce_seed(vm: &mut Executor, globals: &mut Globals, arg: Value) -> Result<Value> {
     match arg.unpack() {
         RV::Fixnum(_) | RV::BigInt(_) => Ok(arg),
-        _ => {
-            let v = vm.invoke_method_inner(
-                globals,
-                IdentId::get_id("to_int"),
-                arg,
-                &[],
-                None,
-                None,
-            )?;
-            Ok(v)
-        }
+        _ => arg.coerce_to_int(vm, globals),
     }
 }
 
@@ -502,6 +492,15 @@ enum RandReq {
     FloatRange { start: f64, end: f64, excl: bool },
 }
 
+/// CRuby's `domain_error` for a Range without one of its ends
+/// (`rand(1..)`, `rand(..1)`): `Errno::EDOM`.
+pub(super) fn range_domain_error(globals: &Globals) -> MonorubyErr {
+    MonorubyErr::errno_plain(
+        &globals.store,
+        &std::io::Error::from_raw_os_error(libc::EDOM),
+    )
+}
+
 fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) -> Result<RandReq> {
     let arg = match arg {
         Some(v) => v,
@@ -512,22 +511,36 @@ fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
         let start = r.start();
         let end = r.end();
         let excl = r.exclude_end();
+        if start.is_nil() || end.is_nil() {
+            return Err(range_domain_error(globals));
+        }
+        // `Random#rand` rejects an empty range (`Kernel#rand` is the one
+        // that answers nil).
+        let empty = |globals: &Globals| {
+            MonorubyErr::argumenterr(format!(
+                "invalid argument - {}",
+                arg.inspect(&globals.store)
+            ))
+        };
         if let Some(span) = IntSpan::new(start, end, excl) {
             if span.is_empty() {
-                // `Random#rand` rejects an empty range (`Kernel#rand`
-                // is the one that answers nil).
-                return Err(MonorubyErr::argumenterr(format!(
-                    "invalid argument - {}",
-                    arg.inspect(&globals.store)
-                )));
+                return Err(empty(globals));
             }
             return Ok(RandReq::IntRange(span));
         }
         // If either end point is a Float, both are treated as Floats.
         if let (Some(s), Some(e)) = (num_to_f(start), num_to_f(end)) {
+            if e < s || (excl && e <= s) {
+                return Err(empty(globals));
+            }
             return Ok(RandReq::FloatRange { start: s, end: e, excl });
         }
         return Err(MonorubyErr::argumenterr("bad value for range"));
+    }
+    // `rand(nil)` is not `rand`: CRuby's `check_random_number` names the
+    // argument, which reads as nothing.
+    if arg.is_nil() {
+        return Err(MonorubyErr::argumenterr("invalid argument - "));
     }
     // Float maximum.
     if arg.is_float() {
@@ -540,14 +553,8 @@ fn prepare_rand(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
     // Integer maximum (Fixnum or Bignum), or anything #to_int-coercible.
     let max = match arg.unpack() {
         RV::Fixnum(_) | RV::BigInt(_) => arg,
-        _ => vm.invoke_method_inner(
-            globals,
-            IdentId::get_id("to_int"),
-            arg,
-            &[],
-            None,
-            None,
-        )?,
+        // A TypeError for what has no `to_int`, not a NoMethodError.
+        _ => arg.coerce_to_int(vm, globals)?,
     };
     let big = to_bigint(max);
     if big.is_negative() || big.is_zero() {

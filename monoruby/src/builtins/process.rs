@@ -294,7 +294,7 @@ fn coerce_rlimit_resource(val: Value, vm: &mut Executor, globals: &mut Globals) 
     {
         return rlim_resource_from_name(s);
     }
-    val.coerce_to_int_i64(vm, globals)
+    val.num2long(vm, globals)
 }
 
 fn rlim_resource_from_name(name: &str) -> Result<i64> {
@@ -378,8 +378,8 @@ fn process_setrlimit(
 ) -> Result<Value> {
     let resource = coerce_rlimit_resource(lfp.arg(0), vm, globals)?;
     let cur = lfp.arg(1).coerce_to_int_i64(vm, globals)? as libc::rlim_t;
-    let max = if let Some(v) = lfp.try_arg(2) {
-        v.coerce_to_int_i64(vm, globals)? as libc::rlim_t
+    let max = if let Some(v) = lfp.try_arg(2).filter(|v| !v.is_nil()) {
+        v.num2long(vm, globals)? as libc::rlim_t
     } else {
         cur
     };
@@ -456,7 +456,7 @@ fn clock_gettime(
         None => IdentId::FLOAT_SECOND,
     };
     let mut tp = TimeSpec::default();
-    let clk_id = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let clk_id = lfp.arg(0).num2long(vm, globals)? as i32;
     if let Err(errno) = clock_gettime::clock_gettime(clk_id, &mut tp) {
         return Err(MonorubyErr::runtimeerr(format!(
             "clock_gettime failed: errno {}",
@@ -560,7 +560,7 @@ fn process_getpgid(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let pid = lfp.arg(0).num2long(vm, globals)?;
     // SAFETY: getpgid is a POSIX syscall; only failure mode is ESRCH.
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
     if pgid < 0 {
@@ -601,8 +601,8 @@ fn process_setpgid(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-    let pgid = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    let pid = lfp.arg(0).num2long(vm, globals)?;
+    let pgid = lfp.arg(1).num2long(vm, globals)?;
     let rc = unsafe { libc::setpgid(pid as libc::pid_t, pgid as libc::pid_t) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
@@ -622,8 +622,8 @@ fn process_getsid(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let pid = if let Some(arg) = lfp.try_arg(0) {
-        arg.coerce_to_int_i64(vm, globals)?
+    let pid = if let Some(arg) = lfp.try_arg(0).filter(|v| !v.is_nil()) {
+        arg.num2long(vm, globals)?
     } else {
         0
     };
@@ -671,8 +671,8 @@ fn process_getpriority(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
-    let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
+    let which = lfp.arg(0).num2long(vm, globals)? as i32;
+    let who = lfp.arg(1).num2long(vm, globals)? as u32;
     // getpriority may legitimately return -1, so we must clear errno
     // first and re-read it to distinguish that from an error. `as _` for
     // the `which` arg defers to the libc signature (`__priority_which_t`
@@ -727,9 +727,9 @@ fn process_setpriority(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let which = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
-    let who = lfp.arg(1).coerce_to_int_i64(vm, globals)? as u32;
-    let prio = lfp.arg(2).coerce_to_int_i64(vm, globals)? as i32;
+    let which = lfp.arg(0).num2long(vm, globals)? as i32;
+    let who = lfp.arg(1).num2long(vm, globals)? as u32;
+    let prio = lfp.arg(2).num2long(vm, globals)? as i32;
     let res = unsafe { libc::setpriority(which as _, who, prio) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
@@ -820,7 +820,7 @@ fn process_maxgroups_set(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let n = lfp.arg(0).num2long(vm, globals)?;
     if n <= 0 {
         return Err(MonorubyErr::argumenterr(format!(
             "maxgroups {n} should be positive"
@@ -925,12 +925,12 @@ fn process_wait2(
 
 fn do_waitpid(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Option<(i32, Value)>> {
     let pid = if let Some(arg) = lfp.try_arg(0) {
-        arg.coerce_to_int_i64(vm, globals)? as i32
+        arg.num2long(vm, globals)? as i32
     } else {
         -1
     };
-    let flags = if let Some(arg) = lfp.try_arg(1) {
-        arg.coerce_to_int_i64(vm, globals)? as i32
+    let flags = if let Some(arg) = lfp.try_arg(1).filter(|v| !v.is_nil()) {
+        arg.num2long(vm, globals)? as i32
     } else {
         0
     };
@@ -1176,11 +1176,11 @@ fn process_status_wait(
     _: BytecodePtr,
 ) -> Result<Value> {
     let pid = match lfp.try_arg(0) {
-        Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
+        Some(v) => v.num2long(vm, globals)? as i32,
         None => -1,
     };
     let flags = match lfp.try_arg(1) {
-        Some(v) => v.coerce_to_int_i64(vm, globals)? as i32,
+        Some(v) => v.num2long(vm, globals)? as i32,
         None => 0,
     };
     // Whatever the scheduler's hook answers is this method's answer:
@@ -1257,7 +1257,7 @@ fn process_pidfd_open(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let _pid = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let _pid = lfp.arg(0).num2long(vm, globals)?;
     #[cfg(target_os = "linux")]
     {
         // SAFETY: raw syscall with plain integer args.
@@ -1418,7 +1418,7 @@ fn process_kill(
     let mut signaled_self = false;
     let self_pid = std::process::id() as i32;
     for pid_val in args.iter().skip(1) {
-        let mut pid = pid_val.coerce_to_int_i64(vm, globals)? as i32;
+        let mut pid = pid_val.num2long(vm, globals)? as i32;
         if to_group {
             pid = -pid;
         }
@@ -1497,7 +1497,7 @@ fn signal_signame(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let num = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let num = lfp.arg(0).num2long(vm, globals)?;
     Ok(match signal_number_to_name(num) {
         Some(name) => Value::string_from_str(name),
         None => Value::nil(),
@@ -1978,7 +1978,7 @@ fn process_clock_getres(
             }
         }
     } else {
-        let clk_id = clock.coerce_to_int_i64(vm, globals)?;
+        let clk_id = clock.num2long(vm, globals)?;
         let mut tp: libc::timespec = unsafe { std::mem::zeroed() };
         // SAFETY: clock_getres fills the timespec on success. `as _`:
         // clockid_t is i32 on Linux but u32 on macOS.

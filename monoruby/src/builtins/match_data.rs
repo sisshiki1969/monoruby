@@ -250,7 +250,7 @@ fn resolve_capture_index(
         }
         return Err(undefined_group_name(&group_name));
     }
-    let idx = arg.coerce_to_int_i64(vm, globals)?;
+    let idx = arg.num2long(vm, globals)?;
     let len = m.len() as i64;
     // `begin`/`end`/`offset`/`byte*` reject negative indexes outright
     // (no wrap-around), matching CRuby's `match_array_subseq` rules.
@@ -620,7 +620,7 @@ fn values_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
                 );
                 continue;
             }
-            let idx = a.coerce_to_int_i64(vm, globals)?;
+            let idx = a.num2long(vm, globals)?;
             let idx = if idx >= 0 {
                 idx as usize
             } else {
@@ -798,25 +798,16 @@ fn to_a(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<V
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/MatchData/i/=5b=5d.html]
 #[monoruby_builtin]
-fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
-    let m = self_.as_match_data();
-    // `[start, length]` two-argument form returns a slice as Array.
+    // `[start, length]` two-argument form returns a slice as Array
+    // (`rb_ary_aref2` over the captures: both read with `NUM2LONG`).
     if let Some(arg1) = lfp.try_arg(1) {
-        let start = lfp.arg(0).try_fixnum().ok_or_else(|| {
-            MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into Integer",
-                lfp.arg(0).builtin_class_name(globals)
-            ))
-        })?;
-        let len = arg1.try_fixnum().ok_or_else(|| {
-            MonorubyErr::typeerr(format!(
-                "no implicit conversion of {} into Integer",
-                arg1.builtin_class_name(globals)
-            ))
-        })?;
-        return Ok(slice_match_data(&m, start, len));
+        let start = lfp.arg(0).num2long(vm, globals)?;
+        let len = arg1.num2long(vm, globals)?;
+        return Ok(slice_match_data(&self_.as_match_data(), start, len));
     }
+    let m = self_.as_match_data();
     if let Some(idx) = lfp.arg(0).try_fixnum() {
         let idx = if idx >= 0 {
             idx as usize
@@ -859,10 +850,15 @@ fn index(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
         }
         Ok(last_matched_member(&m, members))
     } else {
-        Err(MonorubyErr::typeerr(format!(
-            "no implicit conversion of {} into Integer",
-            lfp.arg(0).builtin_class_name(globals)
-        )))
+        // Anything else is an index, read as `Array#[]` reads one.
+        let idx = lfp.arg(0).num2long(vm, globals)?;
+        let m = self_.as_match_data();
+        let len = m.len() as i64;
+        let idx = if idx < 0 { idx + len } else { idx };
+        if idx < 0 || idx >= len {
+            return Ok(Value::nil());
+        }
+        Ok(m.at_value(idx as usize).unwrap_or_default())
     }
 }
 

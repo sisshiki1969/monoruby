@@ -128,7 +128,7 @@ fn eval(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> 
         format!("(eval at {})", caller_loc)
     };
     let lineno: i64 = if let Some(l) = lfp.try_arg(2) {
-        l.coerce_to_int_i64(vm, globals)?
+        l.num2long(vm, globals)?
     } else {
         1
     };

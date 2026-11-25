@@ -388,9 +388,12 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     let flags = if let Some(f) = lfp.try_arg(4)
         && !f.is_nil()
     {
-        f.coerce_to_int_i64(vm, globals)?
+        f.num2long(vm, globals)?
     } else {
-        lfp.try_arg(1).and_then(|v| v.try_fixnum()).unwrap_or(0)
+        match lfp.try_arg(1) {
+            Some(f) => f.num2long(vm, globals)?,
+            None => 0,
+        }
     };
     let base = if let Some(base) = lfp.try_arg(2)
         && !base.is_nil()
@@ -1089,7 +1092,7 @@ fn dir_close_fd(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let fd = lfp.arg(0).num2long(vm, globals)? as i32;
     // SAFETY: close(2); an invalid fd is reported via errno, not UB.
     let rc = unsafe { libc::close(fd) };
     if rc != 0 {
@@ -1115,7 +1118,7 @@ fn dir_entries_fd(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let fd = lfp.arg(0).num2long(vm, globals)? as i32;
     let enc_obj = entries_enc_obj(vm, globals, Some(lfp.arg(1)))?;
     let entries = read_entries_via_fd(globals, fd, enc_obj)?;
     Ok(Value::array_from_vec(entries))
@@ -1185,7 +1188,7 @@ fn dir_inst_chdir(
 /// [https://docs.ruby-lang.org/ja/latest/method/Dir/s/fchdir.html]
 #[monoruby_builtin]
 fn fchdir(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let fd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let fd = lfp.arg(0).num2long(vm, globals)? as i32;
     let saved = if lfp.block().is_some() {
         Some(
             std::env::current_dir()

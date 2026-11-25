@@ -313,7 +313,7 @@ pub(super) fn io_init_from_fd(
     kw: Option<crate::value::Hashmap>,
 ) -> Result<()> {
     // fd: implicit #to_int conversion (TypeError for nil/String/IO).
-    let fd = fd.coerce_to_int_i64(vm, globals)?;
+    let fd = fd.num2long(vm, globals)?;
     let fd_i32 = fd as i32;
 
     // `invalid:` / `undef:` / `replace:` for what the stream reads.
@@ -334,7 +334,7 @@ pub(super) fn io_init_from_fd(
             if let Some(s) = v.is_str() {
                 Some(s.to_string())
             } else if let Some(flags) = v.check_to_int(vm, globals)? {
-                let flags = flags.coerce_to_int_i64(vm, globals)?;
+                let flags = flags.num2long(vm, globals)?;
                 let m = super::file::mode_string_from_flags(flags);
                 // The internal no-truncate spellings ("w-"/"-w") only
                 // affect File-open truncation; wrapping an existing fd
@@ -2982,7 +2982,7 @@ fn assign_sync(
 #[monoruby_builtin]
 fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
-    let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let offset = lfp.arg(0).num2long(vm, globals)?;
     let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
     self_.as_io_inner_mut().clear_pushback();
@@ -3035,7 +3035,7 @@ fn read(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
             if v.is_nil() {
                 None
             } else {
-                let length = v.coerce_to_int_i64(vm, globals)?;
+                let length = v.num2long(vm, globals)?;
                 if length < 0 {
                     return Err(MonorubyErr::argumenterr(format!(
                         "negative length {length} given"
@@ -4145,7 +4145,7 @@ fn popen_fork(
         None,
         None,
     )?;
-    let pid = pid_val.coerce_to_int_i64(vm, globals)?;
+    let pid = pid_val.num2long(vm, globals)?;
     if pid != 0 {
         return Ok(Some((
             pid as u32,
@@ -4240,7 +4240,7 @@ fn io_fileno(
 fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let self_ = lfp.self_val();
     let fd = self_.as_io_inner().fileno()?;
-    let cmd = lfp.arg(0).coerce_to_int_i64(vm, globals)? as i32;
+    let cmd = lfp.arg(0).num2long(vm, globals)? as i32;
     let arg = lfp.try_arg(1).filter(|v| !v.is_nil());
     if let Some(v) = arg
         && let Some(mut s) = v.is_rstring()
@@ -4277,7 +4277,7 @@ fn io_fcntl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         return Ok(Value::integer(ret as i64));
     }
     let arg = match arg {
-        Some(v) => v.coerce_to_int_i64(vm, globals)?,
+        Some(v) => v.num2long(vm, globals)?,
         None => 0,
     };
     // SAFETY: fcntl(2) with an integer third argument; no memory is
@@ -4359,7 +4359,7 @@ fn io_ioctl(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
     let arg = match lfp.try_arg(1) {
         Some(v) if v.is_nil() || v == Value::bool(false) => 0,
         Some(v) if v == Value::bool(true) => 1,
-        Some(v) => v.coerce_to_int_i64(vm, globals)?,
+        Some(v) => v.num2long(vm, globals)?,
         None => 0,
     };
     // SAFETY: ioctl(2) with an integer third argument; no memory is
@@ -4624,7 +4624,7 @@ fn reopen_extract(
             if v.is_str().is_none()
                 && let Some(n) = v.check_to_int(vm, globals)?
             {
-                (n.coerce_to_int_i64(vm, globals)?, false, false, None)
+                (n.num2long(vm, globals)?, false, false, None)
             } else {
                 let s = v.coerce_to_string(vm, globals)?;
                 let (flags, _) = super::file::oflags_from_mode_string(&s)?;
@@ -4635,7 +4635,7 @@ fn reopen_extract(
     };
     // `flags:` ORs extra open(2) bits onto whatever the mode asked for.
     if let Some(f) = kw_opt(vm, globals, &kw, "flags")? {
-        oflags |= f.coerce_to_int_i64(vm, globals)?;
+        oflags |= f.num2long(vm, globals)?;
     }
     let access = (oflags as i32) & libc::O_ACCMODE;
     let readable = access == libc::O_RDONLY || access == libc::O_RDWR;
@@ -5109,11 +5109,11 @@ fn io_advise(
             ));
         }
     }
-    if let Some(arg1) = lfp.try_arg(1) {
-        let _ = arg1.coerce_to_int_i64(vm, globals)?;
-    }
-    if let Some(arg2) = lfp.try_arg(2) {
-        let _ = arg2.coerce_to_int_i64(vm, globals)?;
+    // `offset` and `len` default to 0, and nil is the default.
+    for arg in [lfp.try_arg(1), lfp.try_arg(2)].into_iter().flatten() {
+        if !arg.is_nil() {
+            arg.num2long(vm, globals)?;
+        }
     }
     Ok(Value::nil())
 }
@@ -5151,7 +5151,7 @@ fn io_pos_set(
     _: BytecodePtr,
 ) -> Result<Value> {
     ensure_io_open(lfp.self_val())?;
-    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let n = lfp.arg(0).num2long(vm, globals)?;
     let mut self_ = lfp.self_val();
     self_.as_io_inner_mut().clear_pushback();
     self_
@@ -5530,7 +5530,7 @@ fn io_sysseek(
     if lfp.self_val().as_io_inner().read_data_buffered() {
         return Err(MonorubyErr::ioerr("sysseek for buffered IO"));
     }
-    let offset = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let offset = lfp.arg(0).num2long(vm, globals)?;
     let whence = parse_whence(vm, globals, lfp.try_arg(1))?;
     let mut self_ = lfp.self_val();
     let pos = self_
@@ -5546,7 +5546,6 @@ fn io_sysseek(
 fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) -> Result<i32> {
     match arg {
         None => Ok(0),
-        Some(v) if v.is_nil() => Ok(0),
         Some(v) => {
             if let Some(sym) = v.try_symbol() {
                 let name = sym.get_name();
@@ -5560,7 +5559,7 @@ fn parse_whence(vm: &mut Executor, globals: &mut Globals, arg: Option<Value>) ->
                     )),
                 }
             } else {
-                Ok(v.coerce_to_int_i64(vm, globals)? as i32)
+                Ok(v.num2long(vm, globals)? as i32)
             }
         }
     }
@@ -5601,7 +5600,7 @@ fn io_lineno_set(
     _: BytecodePtr,
 ) -> Result<Value> {
     lfp.self_val().as_io_inner().ensure_readable()?;
-    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let n = lfp.arg(0).num2long(vm, globals)?;
     if n > i32::MAX as i64 || n < i32::MIN as i64 {
         return Err(MonorubyErr::rangeerr(format!(
             "integer {n} too big to convert to `int'"
@@ -5810,7 +5809,7 @@ fn io_pread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
             "negative string size (or size too big)",
         ));
     }
-    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    let offset = lfp.arg(1).num2long(vm, globals)?;
     // Coerce the optional output buffer to a String up front (via
     // #to_str) so a non-String buffer raises before any I/O. CRuby
     // fills and returns the coerced String, not the original arg.
@@ -5885,7 +5884,7 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     } else {
         vm.to_s(globals, lfp.arg(0))?.into_bytes()
     };
-    let offset = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+    let offset = lfp.arg(1).num2long(vm, globals)?;
     // CRuby's `rb_io_pwrite` leaves the write buffer alone: the
     // positional write goes straight to the fd, and buffered bytes land
     // at the stream's own offset when they are flushed.
@@ -5921,7 +5920,7 @@ fn io_pwrite(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/sysread.html]
 #[monoruby_builtin]
 fn io_sysread(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let maxlen = lfp.arg(0).num2long(vm, globals)?;
     if maxlen < 0 {
         // `rb_io_sysread` has no check of its own: the message is the
         // buffer's (`io_setstrbuf` → `rb_str_new`).
@@ -5995,7 +5994,7 @@ fn io_readpartial(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let maxlen = lfp.arg(0).num2long(vm, globals)?;
     if maxlen < 0 {
         return Err(MonorubyErr::argumenterr(format!(
             "negative length {maxlen} given"
@@ -6099,7 +6098,7 @@ fn io_read_nonblock(
     lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
-    let maxlen = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let maxlen = lfp.arg(0).num2long(vm, globals)?;
     if maxlen < 0 {
         return Err(MonorubyErr::argumenterr(format!(
             "negative length {} given",
@@ -7626,7 +7625,7 @@ fn io_wait(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
                 args.len()
             )));
         }
-        events = args[0].coerce_to_int_i64(vm, globals)?;
+        events = args[0].num2long(vm, globals)?;
         if events <= 0 {
             return Err(MonorubyErr::argumenterr(
                 "Events must be positive integer!",
@@ -7839,7 +7838,7 @@ fn copy_stream_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
 
     let copy_length: Option<u64> = match lfp.try_arg(2) {
         Some(v) if !v.is_nil() => {
-            let l = v.coerce_to_int_i64(vm, globals)?;
+            let l = v.num2long(vm, globals)?;
             if l < 0 {
                 return Err(MonorubyErr::argumenterr(format!("negative length {l} given")));
             }
@@ -7849,7 +7848,7 @@ fn copy_stream_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
     };
     let src_offset: Option<u64> = match lfp.try_arg(3) {
         Some(v) if !v.is_nil() => {
-            let o = v.coerce_to_int_i64(vm, globals)?;
+            let o = v.num2long(vm, globals)?;
             if o < 0 {
                 return Err(MonorubyErr::argumenterr(format!("negative offset {o} given")));
             }
@@ -8041,7 +8040,7 @@ fn copy_stream_body(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Resul
                                 None,
                                 None,
                             )?
-                            .coerce_to_int_i64(vm, globals)?;
+                            .num2long(vm, globals)?;
                         let n = (n.max(0) as usize).min(rest.len());
                         if n == 0 {
                             return Err(MonorubyErr::ioerr("write failed"));

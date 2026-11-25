@@ -825,7 +825,7 @@ fn write_special_check(
             }
         }
         // `$.` (last input line number) coerces via `#to_int`.
-        IdentId::GVAR_LINENO => Ok(Value::integer(val.coerce_to_int_i64(vm, globals)?)),
+        IdentId::GVAR_LINENO => Ok(Value::integer(val.num2long(vm, globals)?)),
         // `$stdout` / `$stderr` accept any object with a `write`
         // method.
         IdentId::GVAR_STDOUT | IdentId::GVAR_STDOUT_ALIAS | IdentId::GVAR_STDERR => {

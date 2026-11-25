@@ -351,7 +351,7 @@ fn init_fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
     // A Bignum size must reach the size checks, not raise TypeError:
     // CRuby gives fixnum_max+1 (fits in `long`) ArgumentError "array size
     // too big" and only raises RangeError past the `long` range.
-    let size = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let size = lfp.arg(0).num2long(vm, globals)?;
     if size < 0 {
         return Err(MonorubyErr::negative_array_size());
     }
@@ -408,7 +408,7 @@ fn init_from(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// ("no implicit conversion of X into Integer").
 #[monoruby_builtin]
 fn size_to_int(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let n = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let n = lfp.arg(0).num2long(vm, globals)?;
     Ok(Value::integer(n))
 }
 
@@ -1124,7 +1124,7 @@ fn mul(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
         )))
     } else {
         // Try to_int coercion for repeat
-        let v = arg.coerce_to_int_i64(vm, globals)?;
+        let v = arg.num2long(vm, globals)?;
         if v < 0 {
             return Err(MonorubyErr::negative_argument());
         }
@@ -1656,7 +1656,7 @@ fn index(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
                     None,
                 );
             }
-            let i = idx.coerce_to_int_i64(vm, globals)?;
+            let i = idx.num2long(vm, globals)?;
             return ary.get_elem1(vm, globals, Value::integer(i));
         }
         ary.get_elem1(vm, globals, idx)
@@ -1673,12 +1673,12 @@ fn subseq(
     len: Value,
 ) -> Result<Value> {
     let start = if start.try_fixnum().is_none() {
-        Value::integer(start.coerce_to_int_i64(vm, globals)?)
+        Value::integer(start.num2long(vm, globals)?)
     } else {
         start
     };
     let len = if len.try_fixnum().is_none() {
-        Value::integer(len.coerce_to_int_i64(vm, globals)?)
+        Value::integer(len.num2long(vm, globals)?)
     } else {
         len
     };
@@ -1787,7 +1787,7 @@ fn index_assign(
             let start = if range.start().is_nil() {
                 0
             } else {
-                let s = range.start().coerce_to_int_i64(vm, globals)?;
+                let s = range.start().num2long(vm, globals)?;
                 let s = if s < 0 { s + ary.len() as i64 } else { s };
                 if s < 0 {
                     return Err(MonorubyErr::rangeerr(format!(
@@ -1804,7 +1804,7 @@ fn index_assign(
                 // endless range: length is from start to end of array
                 ary.len().checked_sub(start)
             } else {
-                let e = range.end().coerce_to_int_i64(vm, globals)?;
+                let e = range.end().num2long(vm, globals)?;
                 let e = if e < 0 { e + ary.len() as i64 } else { e };
                 let e = if range.exclude_end() { e } else { e + 1 };
                 usize::try_from(e - start as i64).ok()
@@ -1816,12 +1816,12 @@ fn index_assign(
                 ary.set_index2(start, 0, val)
             }
         } else {
-            let idx = i.coerce_to_int_i64(vm, globals)?;
+            let idx = i.num2long(vm, globals)?;
             ary.set_index(idx, val)
         }
     } else {
-        let start = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
-        let l = lfp.arg(1).coerce_to_int_i64(vm, globals)?;
+        let start = lfp.arg(0).num2long(vm, globals)?;
+        let l = lfp.arg(1).num2long(vm, globals)?;
         if l < 0 {
             return Err(MonorubyErr::indexerr(format!("negative length ({})", l)));
         }
@@ -2047,7 +2047,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 fill_range_indices(vm, globals, &ary, range)?
             } else {
                 // fill(start, length = nil) {|index| ... } -> self
-                let start = arg0.coerce_to_int_i64(vm, globals)?;
+                let start = arg0.num2long(vm, globals)?;
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
                     if s < 0 { 0i64 } else { s }
@@ -2059,7 +2059,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                         // nil length means fill to end
                         (start, ary.len())
                     } else {
-                        let len = len_val.coerce_to_int_i64(vm, globals)?;
+                        let len = len_val.num2long(vm, globals)?;
                         if len <= 0 {
                             return Ok(ary.into());
                         }
@@ -2110,7 +2110,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 let start = if arg1.is_nil() {
                     0i64
                 } else {
-                    arg1.coerce_to_int_i64(vm, globals)?
+                    arg1.num2long(vm, globals)?
                 };
                 let start = if start < 0 {
                     let s = ary.len() as i64 + start;
@@ -2126,7 +2126,7 @@ fn fill(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
                 if let Some(len_val) = lfp.try_arg(2)
                     && !len_val.is_nil()
                 {
-                    let len = len_val.coerce_to_int_i64(vm, globals)?;
+                    let len = len_val.num2long(vm, globals)?;
                     if len <= 0 {
                         return Ok(ary.into());
                     }
@@ -2180,18 +2180,18 @@ fn fill_range_indices(
     let mut start = if range.start().is_nil() {
         0i64
     } else {
-        range.start().coerce_to_int_i64(vm, globals)?
+        range.start().num2long(vm, globals)?
     };
     if start < 0 {
         start += len;
         if start < 0 {
             return Err(MonorubyErr::rangeerr(format!(
                 "{}..{} out of range",
-                range.start().coerce_to_int_i64(vm, globals)?,
+                range.start().num2long(vm, globals)?,
                 if range.end().is_nil() {
                     String::new()
                 } else {
-                    range.end().coerce_to_int_i64(vm, globals)?.to_string()
+                    range.end().num2long(vm, globals)?.to_string()
                 }
             )));
         }
@@ -2200,7 +2200,7 @@ fn fill_range_indices(
     let end_idx = if range.end().is_nil() {
         len
     } else {
-        let mut end_val = range.end().coerce_to_int_i64(vm, globals)?;
+        let mut end_val = range.end().num2long(vm, globals)?;
         if end_val < 0 {
             end_val += len;
         }
@@ -2802,7 +2802,7 @@ fn last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 #[monoruby_builtin]
 fn fetch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array();
-    let index = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let index = lfp.arg(0).num2long(vm, globals)?;
     let resolved = ary.get_array_index(index);
     if let Some(idx) = resolved {
         if let Some(val) = ary.get(idx) {
@@ -4335,7 +4335,7 @@ fn coerce_to_array_for_transpose(
 fn rotate_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     lfp.self_val().ensure_not_frozen(&globals.store)?;
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int_i64(vm, globals)?
+        arg0.num2long(vm, globals)?
     } else {
         1
     };
@@ -4384,7 +4384,7 @@ fn wrap_rotate_count(cnt: i64, ary_len: i64) -> usize {
 #[monoruby_builtin]
 fn rotate(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let i = if let Some(arg0) = lfp.try_arg(0) {
-        arg0.coerce_to_int_i64(vm, globals)?
+        arg0.num2long(vm, globals)?
     } else {
         1
     };
@@ -4664,11 +4664,11 @@ fn uniq_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let ary = lfp.self_val().as_array_mut(&globals.store)?;
     if let Some(arg1) = lfp.try_arg(1) {
-        let start = match ary.get_array_index(lfp.arg(0).coerce_to_int_i64(vm, globals)?) {
+        let start = match ary.get_array_index(lfp.arg(0).num2long(vm, globals)?) {
             Some(i) => i,
             None => return Ok(Value::nil()),
         };
-        let len = arg1.coerce_to_int_i64(vm, globals)?;
+        let len = arg1.num2long(vm, globals)?;
         if len < 0 {
             return Ok(Value::nil());
         };
@@ -4679,7 +4679,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let start = if range.start().is_nil() {
             0
         } else {
-            match ary.get_array_index(range.start().coerce_to_int_i64(vm, globals)?) {
+            match ary.get_array_index(range.start().num2long(vm, globals)?) {
                 Some(i) => i,
                 None => return Ok(Value::nil()),
             }
@@ -4688,7 +4688,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         let end = if range.end().is_nil() {
             ary.len().saturating_sub(1)
         } else {
-            match ary.get_array_index(range.end().coerce_to_int_i64(vm, globals)?) {
+            match ary.get_array_index(range.end().num2long(vm, globals)?) {
                 Some(i) => i,
                 None => return Ok(Value::array_empty()),
             }
@@ -4703,7 +4703,7 @@ fn slice_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         };
         Ok(slice_inner(ary, start, len))
     } else {
-        let index = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+        let index = lfp.arg(0).num2long(vm, globals)?;
         let index = match ary.get_array_index(index) {
             Some(i) if i < ary.len() => i,
             _ => return Ok(Value::nil()),
@@ -4848,7 +4848,7 @@ fn flatten(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
         if arg0.is_nil() {
             None
         } else {
-            match arg0.coerce_to_int_i64(vm, globals)? {
+            match arg0.num2long(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -4888,7 +4888,7 @@ fn flatten_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) 
         if arg0.is_nil() {
             None
         } else {
-            match arg0.coerce_to_int_i64(vm, globals)? {
+            match arg0.num2long(vm, globals)? {
                 i if i >= 0 => Some(i as usize),
                 _ => None,
             }
@@ -5040,7 +5040,7 @@ fn duck_rand_upto(
         None,
         None,
     )?;
-    let r = v.coerce_to_int_i64(vm, globals)?;
+    let r = v.num2long(vm, globals)?;
     if r < 0 {
         return Err(MonorubyErr::rangeerr(format!(
             "random number too small {r}"
@@ -5166,7 +5166,7 @@ fn sample_inner(
         return Ok(ary.get(i).copied().unwrap_or_default());
     };
 
-    let n = count.coerce_to_int_i64(vm, globals)?;
+    let n = count.num2long(vm, globals)?;
     if n < 0 {
         return Err(MonorubyErr::argumenterr("negative sample number"));
     }
@@ -5337,7 +5337,7 @@ fn delete(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
 #[monoruby_builtin]
 fn delete_at(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let mut ary = lfp.self_val().as_array_mut(&globals.store)?;
-    let pos = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let pos = lfp.arg(0).num2long(vm, globals)?;
     let pos = if pos < 0 {
         let pos = pos + ary.len() as i64;
         if pos < 0 {
@@ -5424,7 +5424,7 @@ fn insert(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         return Ok(lfp.self_val());
     }
     let mut ary = lfp.self_val().as_array();
-    let nth = lfp.arg(0).coerce_to_int_i64(vm, globals)?;
+    let nth = lfp.arg(0).num2long(vm, globals)?;
     let nth = if nth < 0 {
         let nth = nth + ary.len() as i64 + 1;
         if nth < 0 {

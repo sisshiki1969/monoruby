@@ -601,7 +601,9 @@ fn ldexp(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     }
     let exp_val = lfp.arg(1);
     let exp = if exp_val.is_nil() {
-        return Err(MonorubyErr::typeerr("can't convert nil into Integer"));
+        return Err(MonorubyErr::typeerr(
+            "no implicit conversion from nil to integer",
+        ));
     } else {
         match exp_val.unpack() {
             RV::Fixnum(i) => i as i32,

@@ -2830,7 +2830,7 @@ pub(super) extern "C" fn get_index(
                         }
                     };
                 }
-                match index.coerce_to_int_i64(vm, globals) {
+                match index.num2long(vm, globals) {
                     Ok(i) => Value::integer(i),
                     Err(err) => {
                         vm.set_error(err);
