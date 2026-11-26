@@ -437,6 +437,9 @@ fn feature_switch() {
         &["--disable-syntax_suggest", "--enable-syntax_suggest"],
         &["--enable=all"],
         &["--disable-did_you_mean", "--disable-error_highlight"],
+        // The JIT switches are accepted and leave syntax_suggest alone.
+        &["--disable=jit"],
+        &["--disable=yjit,syntax_suggest"],
     ] {
         let mut args = flags.to_vec();
         args.push("bad.rb");
