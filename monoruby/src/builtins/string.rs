@@ -5463,7 +5463,7 @@ fn gsub_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) ->
 /// The characters of `bytes` under `enc`, as `(start, len, valid)`.
 /// A run of bytes that starts no character is reported as invalid, one
 /// ill-formed piece at a time, the way `#inspect` cuts them.
-fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
+pub(crate) fn pattern_pieces(enc: crate::value::Encoding, bytes: &[u8]) -> Vec<(usize, usize, bool)> {
     let mut pieces = vec![];
     if let Some((max_len, precise)) = crate::value::mbc_walker(enc) {
         let base = bytes.as_ptr() as usize;
@@ -5621,6 +5621,63 @@ pub(crate) fn regexp_source_desc_bytes(
         );
     }
     out
+}
+
+/// Append the source as `Regexp#to_s` writes it to `out`: `rb_reg_expr_str` with no
+/// result encoding. A character is copied as its own bytes, so the
+/// answer stays in the pattern's encoding, but a bare `/` takes a
+/// backslash, a control character that is not whitespace is `\xHH`,
+/// and so is each byte that starts no character (#2255).
+pub(crate) fn regexp_to_s_source_bytes(
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+    enc: crate::value::Encoding,
+) {
+    let printable = |b: u8| (0x09..=0x0d).contains(&b) || (0x20..=0x7e).contains(&b);
+    // Every byte is a character of BINARY, the high ones included.
+    let binary = enc == crate::value::Encoding::Ascii8;
+    // One pass: is there an ASCII byte to escape, and a non-ASCII one?
+    let (mut escape, mut high) = (false, false);
+    for &b in bytes {
+        if b >= 0x80 {
+            high = true;
+        } else if b == b'/' || !printable(b) {
+            escape = true;
+            break;
+        }
+    }
+    // With nothing to escape among the ASCII bytes, what remains to look
+    // at is whether every multibyte character is whole.
+    if !escape
+        && (!high || binary || pattern_pieces(enc, bytes).iter().all(|&(_, _, valid)| valid))
+    {
+        out.extend_from_slice(bytes);
+        return;
+    }
+    let mut pieces = pattern_pieces(enc, bytes).into_iter();
+    while let Some((start, len, valid)) = pieces.next() {
+        if !valid && !(binary && len == 1) {
+            for b in &bytes[start..start + len] {
+                out.extend_from_slice(format!("\\x{b:02X}").as_bytes());
+            }
+            continue;
+        }
+        if len == 1 && bytes[start] < 0x80 {
+            match bytes[start] {
+                b'\\' => {
+                    out.push(b'\\');
+                    if let Some((s2, l2, _)) = pieces.next() {
+                        out.extend_from_slice(&bytes[s2..s2 + l2]);
+                    }
+                }
+                b'/' => out.extend_from_slice(b"\\/"),
+                b if printable(b) => out.push(b),
+                b => out.extend_from_slice(format!("\\x{b:02X}").as_bytes()),
+            }
+            continue;
+        }
+        out.extend_from_slice(&bytes[start..start + len]);
+    }
 }
 
 /// [`regexp_source_desc_bytes`] for a UTF-16 / UTF-32 pattern, as

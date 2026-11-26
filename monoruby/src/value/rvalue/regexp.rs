@@ -730,22 +730,77 @@ fn pre_validate_regex(src: &str) -> Result<()> {
                 )));
             }
         }
-        if (next == b'p' || next == b'P') && bytes.get(i + 2) == Some(&b'{') {
-            // `\p{name}` / `\P{name}` (Unicode property) must be closed
-            // with `}`. Onigmo accepts an unterminated `\p{` silently;
-            // CRuby raises RegexpError. Flag the no-closing-brace case
-            // (a valid property always has one).
-            if !bytes[i + 3..].contains(&b'}') {
-                return Err(MonorubyErr::regexerr(format!(
-                    "invalid character property name: /{}/",
-                    message_source(src)
-                )));
-            }
-        }
         // Skip the `\` plus the escaped char.
         i += 2;
     }
     Ok(())
+}
+
+/// The name CRuby's error quotes for a `\p{` / `\P{` property that
+/// does not close, or `None` when every one does.
+///
+/// Onigmo leaves such a property to its caller; CRuby's copy
+/// (`fetch_char_property_to_ctype`) reads characters after the `{` (and
+/// an optional `^`) until a `}`, and refuses the property when it meets
+/// `(`, `)`, `{` or `|` first, or the end of the pattern. Its message
+/// then quotes what lies between the start of the name and the last
+/// character it fetched, that one excluded: `\p{Foo` is `{Fo}`, `\p{`
+/// and `\p{L` are `{}` (#2254).
+fn unclosed_property_name(bytes: &[u8], enc: crate::value::Encoding) -> Option<Vec<u8>> {
+    // Most patterns have no property at all: no need to cut them up.
+    if !bytes
+        .windows(3)
+        .any(|w| w[0] == b'\\' && (w[1] | 0x20) == b'p' && w[2] == b'{')
+    {
+        return None;
+    }
+    let pieces = crate::builtins::string::pattern_pieces(enc, bytes);
+    let ascii = |k: usize| match pieces.get(k) {
+        Some(&(s, 1, true)) => Some(bytes[s]),
+        _ => None,
+    };
+    let mut k = 0;
+    while k < pieces.len() {
+        if ascii(k) != Some(b'\\') {
+            k += 1;
+            continue;
+        }
+        if !matches!(ascii(k + 1), Some(b'p' | b'P')) || ascii(k + 2) != Some(b'{') {
+            // A backslash makes the next character literal.
+            k += 2;
+            continue;
+        }
+        let mut j = k + 3;
+        if ascii(j) == Some(b'^') {
+            j += 1;
+        }
+        let start = pieces.get(j).map_or(bytes.len(), |p| p.0);
+        let mut prev = start;
+        loop {
+            let Some(&(s, _, _)) = pieces.get(j) else {
+                return Some(bytes[start..prev].to_vec());
+            };
+            prev = s;
+            match ascii(j) {
+                Some(b'}') => break,
+                Some(b'(' | b')' | b'{' | b'|') => return Some(bytes[start..s].to_vec()),
+                _ => j += 1,
+            }
+        }
+        k = j + 1;
+    }
+    None
+}
+
+/// The RegexpError for a property [`unclosed_property_name`] refuses,
+/// with the source as `desc` renders it.
+fn unclosed_property_error(name: &[u8], desc: &[u8], option: u32) -> MonorubyErr {
+    MonorubyErr::regexerr(format!(
+        "invalid character property name {{{}}}: /{}/{}",
+        String::from_utf8_lossy(name),
+        String::from_utf8_lossy(desc),
+        option_letters(option)
+    ))
 }
 
 /// What CRuby's `rb_reg_preprocess` makes of a regexp source: the
@@ -1758,6 +1813,16 @@ impl RegexpInner {
         // `\uXXXX`, the original source isn't recoverable for the
         // error message.
         pre_validate_regex(&reg_str)?;
+        if let Some(name) = unclosed_property_name(
+            &source,
+            source_encoding.unwrap_or(crate::value::Encoding::UTF8),
+        ) {
+            return Err(unclosed_property_error(
+                &name,
+                message_source(&reg_str).as_bytes(),
+                option,
+            ));
+        }
         // The UTF-8 engine gets the preprocessed source when it is UTF-8
         // text, as CRuby hands it over: a character spelled by byte
         // escapes (`\xE3\201\202`, `\M-c\x81\x82`) is then read as one
@@ -1889,6 +1954,10 @@ impl RegexpInner {
                 option_letters(option)
             ))
         })?;
+        if let Some(name) = unclosed_property_name(&source, source_enc) {
+            let desc = crate::builtins::string::regexp_source_desc_bytes(&source, source_enc, None);
+            return Err(unclosed_property_error(&name, &desc, option));
+        }
         let content_fixed = if noencoding { None } else { pre.fixed };
         let (declared_encoding, fixed_encoding) =
             resolve_declared_encoding(&source, option, kcode, source_encoding, content_fixed);
@@ -2522,21 +2591,27 @@ impl RegexpInner {
             }
             src = &src[p + 1..src.len() - 1];
         }
+        // `(?on-off:`, written byte by byte: `format!` would be most of
+        // the cost of a short pattern's `to_s`.
         let mut out = Vec::with_capacity(src.len() + 10);
-        out.extend_from_slice(
-            format!(
-                "(?{}{}{}{}{}{}{}:",
-                if m { "m" } else { "" },
-                if i { "i" } else { "" },
-                if x { "x" } else { "" },
-                if m && i && x { "" } else { "-" },
-                if !m { "m" } else { "" },
-                if !i { "i" } else { "" },
-                if !x { "x" } else { "" },
-            )
-            .as_bytes(),
-        );
-        out.extend_from_slice(src);
+        out.extend_from_slice(b"(?");
+        for (on, c) in [(m, b'm'), (i, b'i'), (x, b'x')] {
+            if on {
+                out.push(c);
+            }
+        }
+        if !(m && i && x) {
+            out.push(b'-');
+        }
+        for (on, c) in [(m, b'm'), (i, b'i'), (x, b'x')] {
+            if !on {
+                out.push(c);
+            }
+        }
+        out.push(b':');
+        // `rb_reg_expr_str` with no result encoding: a bare `/` and a
+        // control character are escaped, every character copied (#2255).
+        crate::builtins::string::regexp_to_s_source_bytes(&mut out, src, self.declared_encoding());
         out.push(b')');
         out
     }

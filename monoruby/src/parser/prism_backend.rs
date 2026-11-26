@@ -686,15 +686,35 @@ fn try_prism_inner(
     // character". `rb_reg_preprocess`, which monoruby ports as
     // `reg_preprocess` and runs where the literal is compiled, is the
     // authority: prism's diagnostic stands only when it agrees.
+    let mut escaped_regexps: Option<EscapedRegexpLiterals> = None;
     let errors: Vec<super::parse_error::Diagnostic> = result
         .errors()
         .filter(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
         .map(|d| {
             let loc = d.location();
+            let (mut start, mut end) = (loc.start() as usize, loc.end() as usize);
+            // prism 2.x points a regexp-syntax error into the literal's
+            // source; CRuby's prism 1.x could only do so while the
+            // literal's content had no backslash, and marked the whole
+            // literal otherwise (#2256).
+            if REGEXP_PARSE_MESSAGES.contains(&d.message())
+                && let Some(&span) = escaped_regexps
+                    .get_or_insert_with(|| {
+                        let mut found = EscapedRegexpLiterals::default();
+                        found.visit(&tree.root());
+                        found
+                    })
+                    .spans
+                    .iter()
+                    .filter(|(s, e)| *s <= start && end <= *e)
+                    .min_by_key(|(s, e)| e - s)
+            {
+                (start, end) = span;
+            }
             super::parse_error::Diagnostic {
                 message: d.message().to_vec(),
-                start: (loc.start() as usize).saturating_sub(cli_encoding_line),
-                end: (loc.end() as usize).saturating_sub(cli_encoding_line),
+                start: start.saturating_sub(cli_encoding_line),
+                end: end.saturating_sub(cli_encoding_line),
             }
         })
         .collect();
@@ -5874,6 +5894,51 @@ impl<'pr> prism::Visit<'pr> for InterpolatedRegexpConditions {
     ) {
         self.offsets.insert(node.location().start() as usize);
         prism::visit_interpolated_match_last_line_node(self, node);
+    }
+}
+
+/// The messages of prism's regexp parser about the syntax of a regexp
+/// literal (`pm_regexp_parse_error`), the ones CRuby 4.0's prism gives
+/// too. See [`EscapedRegexpLiterals`].
+const REGEXP_PARSE_MESSAGES: &[&[u8]] = &[
+    b"empty char-class",
+    b"end pattern in group",
+    b"end pattern with unmatched parenthesis",
+    b"group name is empty",
+    b"parse depth limit over",
+    b"target of repeat operator is not specified",
+    b"undefined group option",
+    b"unmatched close parenthesis",
+];
+
+/// The regexp literals (`/…/flags`, `%r…`, one used as a condition)
+/// whose content has a backslash, as `(start, end)` of the whole
+/// literal. CRuby's prism 1.x parsed a regexp's unescaped content, so
+/// it could point an error at the source only when that content was
+/// the source itself; for any other it marked the whole literal (#2256).
+#[derive(Default)]
+struct EscapedRegexpLiterals {
+    spans: Vec<(usize, usize)>,
+}
+
+impl EscapedRegexpLiterals {
+    fn note(&mut self, location: Location<'_>, content: Location<'_>) {
+        if content.as_slice().contains(&b'\\') {
+            self.spans
+                .push((location.start() as usize, location.end() as usize));
+        }
+    }
+}
+
+impl<'pr> prism::Visit<'pr> for EscapedRegexpLiterals {
+    fn visit_regular_expression_node(&mut self, node: &prism::RegularExpressionNode<'pr>) {
+        self.note(node.location(), node.content_loc());
+        prism::visit_regular_expression_node(self, node);
+    }
+
+    fn visit_match_last_line_node(&mut self, node: &prism::MatchLastLineNode<'pr>) {
+        self.note(node.location(), node.content_loc());
+        prism::visit_match_last_line_node(self, node);
     }
 }
 

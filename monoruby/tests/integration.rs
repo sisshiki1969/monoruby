@@ -233,6 +233,7 @@ mod regexp_once;
 mod relocatable_install;
 mod replayed_ensure_raise;
 mod replica_encoding_regexp;
+mod report_stderr_regexp_messages;
 mod require;
 mod require_option;
 mod rescue;

@@ -1657,6 +1657,54 @@ impl Globals {
         self.run_with_prelude(requires, "", code, path)
     }
 
+    /// Write the report of the uncaught `err` through `$stderr` when the
+    /// program replaced it, as CRuby's `rb_write_error_str` does (only
+    /// the original `STDERR` is written to fd 2 directly, #2253). Answers
+    /// whether it did; the caller then reports nothing itself. An
+    /// uncaught signal exception keeps its own path.
+    pub(crate) fn report_through_replaced_stderr(
+        &mut self,
+        executor: &mut Executor,
+        err: &MonorubyErr,
+    ) -> bool {
+        if matches!(
+            err.kind(),
+            MonorubyErrKind::SystemExit(_)
+                | MonorubyErrKind::MethodReturn(..)
+                | MonorubyErrKind::BlockBreak(..)
+        ) || err.signal_exception_signo(&self.store).is_some()
+        {
+            return false;
+        }
+        let Some(stderr) = self.get_gvar(IdentId::get_id("$stderr")) else {
+            return false;
+        };
+        if stderr
+            .try_rvalue()
+            .is_some_and(|rv| rv.ty() == ObjTy::IO)
+            && matches!(stderr.as_io_inner().kind(), crate::rvalue::io::IoKind::Stderr)
+        {
+            return false;
+        }
+        let report = err.render_report(&self.store);
+        let report = match String::from_utf8(report) {
+            Ok(s) => Value::string(s),
+            Err(e) => Value::bytes(e.into_bytes()),
+        };
+        executor.temp_push(report);
+        let _ = executor.invoke_method_inner(
+            self,
+            IdentId::get_id("write"),
+            stderr,
+            &[report],
+            None,
+            None,
+        );
+        crate::rvalue::io::flush_open_files();
+        crate::rvalue::io::flush_std_streams();
+        true
+    }
+
     /// End a `fork { ... }` child once its block has returned or raised.
     /// The block's end is the end of the child's main thread, so the
     /// child goes through the process exit sequence — the `at_exit`
@@ -1695,7 +1743,9 @@ impl Globals {
                     if let Some(obj) = err.original {
                         MonorubyErr::render_report_messages(executor, self, obj);
                     }
-                    err.show_error_message_and_all_loc(&self.store);
+                    if !self.report_through_replaced_stderr(executor, err) {
+                        err.show_error_message_and_all_loc(&self.store);
+                    }
                     1
                 }
             },
@@ -1863,6 +1913,14 @@ impl Globals {
                     MonorubyErr::new_from_exception(obj.is_exception().unwrap()).with_original(obj);
                 Err(err)
             }
+            other => other,
+        };
+        // A replaced `$stderr` gets the report now, while Ruby can still
+        // run; the process then just exits with 1 (#2253).
+        let res = match res {
+            Err(err) if self.report_through_replaced_stderr(&mut executor, &err) => Err(
+                MonorubyErr::new(MonorubyErrKind::SystemExit(1), "exit"),
+            ),
             other => other,
         };
         // Nothing Ruby-level runs past this point, so the roots taken

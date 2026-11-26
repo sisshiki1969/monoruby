@@ -64,10 +64,27 @@ fn report_message(store: &Store, obj: Value) -> Option<Vec<u8>> {
     Some(msg.is_rstring()?.as_bytes().to_vec())
 }
 
-/// Write `bytes` to the process's stderr as they are.
+thread_local! {
+    /// Where the report of an uncaught exception goes while
+    /// [`MonorubyErr::render_report`] collects it, rather than to fd 2.
+    static REPORT_SINK: std::cell::RefCell<Option<Vec<u8>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Write `bytes` to the process's stderr as they are (or to the report
+/// being collected).
 fn write_stderr(bytes: &[u8]) {
     use std::io::Write;
-    let _ = std::io::stderr().lock().write_all(bytes);
+    let collected = REPORT_SINK.with(|sink| match &mut *sink.borrow_mut() {
+        Some(buf) => {
+            buf.extend_from_slice(bytes);
+            true
+        }
+        None => false,
+    });
+    if !collected {
+        let _ = std::io::stderr().lock().write_all(bytes);
+    }
 }
 
 /// `prefix: message\n`, written as bytes.
@@ -103,10 +120,10 @@ fn show_string_backtrace(bt: &[String], error_message: &[u8]) {
     let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
     for (i, line) in rest.iter().enumerate() {
         if i >= limit {
-            eprintln!("\t ... {} levels...", rest.len() - i);
+            write_stderr(format!("\t ... {} levels...\n", rest.len() - i).as_bytes());
             break;
         }
-        eprintln!("\tfrom {line}");
+        write_stderr(format!("\tfrom {line}\n").as_bytes());
     }
 }
 
@@ -121,10 +138,10 @@ fn show_trace_rest(store: &Store, trace: &[TraceEntry]) {
     let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
     for (i, entry) in rest.iter().enumerate() {
         if i >= limit {
-            eprintln!("\t ... {} levels...", rest.len() - i);
+            write_stderr(format!("\t ... {} levels...\n", rest.len() - i).as_bytes());
             break;
         }
-        eprintln!("\tfrom {}", store.trace_entry_location(entry));
+        write_stderr(format!("\tfrom {}\n", store.trace_entry_location(entry)).as_bytes());
     }
 }
 
@@ -677,6 +694,16 @@ impl MonorubyErr {
                 None => break,
             }
         }
+    }
+
+    /// The text [`show_error_message_and_all_loc`](Self::show_error_message_and_all_loc)
+    /// writes, collected rather than written.
+    pub(crate) fn render_report(&self, store: &Store) -> Vec<u8> {
+        let saved = REPORT_SINK.with(|sink| sink.replace(Some(vec![])));
+        self.show_error_message_and_all_loc(store);
+        REPORT_SINK
+            .with(|sink| sink.replace(saved))
+            .unwrap_or_default()
     }
 
     pub fn show_error_message_and_all_loc(&self, store: &Store) {
