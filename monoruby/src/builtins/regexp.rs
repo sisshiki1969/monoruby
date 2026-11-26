@@ -291,14 +291,16 @@ pub(super) fn check_regexp_source_bytes_valid(
     check_regexp_source_valid(&RStringInner::from_encoding(bytes, encoding), option)
 }
 
-/// A regexp source as an error message renders it: the message is
-/// UTF-8, so a UTF-8 source's characters show as themselves and any
-/// other encoding's are escaped by value (`/é/`, `/\x{A4A2}/`).
+/// A regexp source as an error message renders it: a character the
+/// default internal / external encoding shows stands for itself, and
+/// any other is escaped by value (`/é/` in UTF-8 under a UTF-8 locale,
+/// `/\u00E9/` under `C`, `/\x{A4A2}/` in EUC-JP). The message is
+/// UTF-8, so only a UTF-8 source is ever shown raw.
 fn regexp_source_desc_in_message(bytes: &[u8], enc: crate::value::Encoding) -> String {
     String::from_utf8_lossy(&super::string::regexp_source_desc_bytes(
         bytes,
         enc,
-        Some(crate::value::Encoding::UTF8),
+        Some(crate::value::rvalue::regexp::message_resenc()),
     ))
     .into_owned()
 }

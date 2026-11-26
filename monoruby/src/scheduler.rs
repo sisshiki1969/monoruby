@@ -111,7 +111,7 @@ pub(crate) struct Scheduler {
     /// finalization (machinery context, where invoking Ruby is
     /// forbidden), delivered through the Ruby-level `$stderr` at the next
     /// safepoint in a normal context (`flush_pending_reports`).
-    pending_reports: Vec<String>,
+    pending_reports: Vec<Vec<u8>>,
     /// Scheduler joiners (`ThreadInner::fiber_joiners`) of dead threads
     /// that the exit hook did not answer, as (joining thread, fiber);
     /// answered with the scheduler's `unblock` at the next safepoint in a
@@ -1996,7 +1996,8 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
                 // follow as `\tfrom` lines.
                 // The message line is `#detailed_message`'s, rendered by
                 // the thread's exit hook (`render_exception_report`).
-                let head = err.get_error_message(&globals.store);
+                // Its bytes as they are, whatever its encoding (#2246).
+                let head = err.get_error_message_bytes(&globals.store);
                 let frames: Vec<String> = err
                     .trace
                     .iter()
@@ -2005,10 +2006,11 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
                 match frames.split_first() {
                     None => head,
                     Some((first, rest)) => {
-                        let mut text = format!("{first}: {head}");
+                        let mut text = format!("{first}: ").into_bytes();
+                        text.extend_from_slice(&head);
                         for f in rest {
-                            text.push_str("\n\tfrom ");
-                            text.push_str(f);
+                            text.extend_from_slice(b"\n\tfrom ");
+                            text.extend_from_slice(f.as_bytes());
                         }
                         text
                     }
@@ -2036,13 +2038,15 @@ fn queue_exception_report(globals: &mut Globals, thread: Value) {
         .unwrap_or_default();
     // `object_id << 1`, exactly as the Ruby-side `Thread#to_s` prints
     // the address.
-    let text = format!(
-        "#<Thread:0x{:016x}{}{} run> terminated with exception (report_on_exception is true):\n{}\n",
+    let mut text = format!(
+        "#<Thread:0x{:016x}{}{} run> terminated with exception (report_on_exception is true):\n",
         thread.id() << 1,
         name,
         location,
-        exc
-    );
+    )
+    .into_bytes();
+    text.extend_from_slice(&exc);
+    text.push(b'\n');
     SCHEDULER.with(|s| s.borrow_mut().pending_reports.push(text));
 }
 
@@ -2071,7 +2075,7 @@ pub(crate) fn flush_pending_reports(vm: &mut Executor, globals: &mut Globals) {
         }) else {
             return;
         };
-        let _ = crate::builtins::write_error_str(vm, globals, Value::string(text));
+        let _ = crate::builtins::write_error_str(vm, globals, Value::string_from_vec(text));
         SCHEDULER.with(|s| s.borrow_mut().flushing_reports = false);
     }
 }

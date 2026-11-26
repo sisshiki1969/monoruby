@@ -150,6 +150,10 @@ class Exception
       loc = loc[0] if loc
       bt = loc ? ["#{loc.path}:#{loc.lineno}:in '#{__callee__}'"] : nil
     end
+    # `rb_str_new` grown by appends (`rb_error_write`): BINARY while it
+    # is all ASCII (#2090), and otherwise the encoding of what made it
+    # not, the message's included when that is broken there (#2246).
+    out = String.new
     if bt && !bt.empty?
       rest = bt[1..]
       limit = Kernel.__backtrace_limit
@@ -158,32 +162,30 @@ class Exception
         trailer = "\t ... #{rest.size - limit} levels...\n"
         rest = rest[0, limit]
       end
-      out = if order == :bottom
-        header = highlight ? "\e[1mTraceback\e[m (most recent call last):\n"
-                           : "Traceback (most recent call last):\n"
+      if order == :bottom
+        out << (highlight ? "\e[1mTraceback\e[m (most recent call last):\n"
+                          : "Traceback (most recent call last):\n")
+        out << trailer if trailer
         # CRuby numbers the reversed frames by their distance from the
         # error line: `\tN: from <frame>` counting down to 1.
-        numbered = []
-        i = rest.size
-        rest.each do |l|
-          numbered << "\t#{i}: from #{l}\n"
-          i -= 1
+        i = 1
+        rest.reverse_each do |l|
+          out << "\t#{i}: from " << l << "\n"
+          i += 1
         end
-        numbered << trailer if trailer
-        header + numbered.reverse.join + "#{bt[0]}: #{msg}\n"
+        out << bt[0] << ": " << msg << "\n"
       else
-        lines = rest.map { |l| "\tfrom #{l}\n" }
-        lines << trailer if trailer
-        "#{bt[0]}: #{msg}\n" + lines.join
+        out << bt[0] << ": " << msg << "\n"
+        rest.each { |l| out << "\tfrom " << l << "\n" }
+        out << trailer if trailer
       end
     else
-      out = msg + "\n"
+      out << msg << "\n"
     end
     # Chain the cause's report so every exception in the chain appears.
     c = cause
-    out += c.full_message(highlight: highlight, order: :top) if c
-    # `rb_str_new` grown by appends: BINARY while it is all ASCII (#2090).
-    __sprintf_repr(out)
+    out << c.full_message(highlight: highlight, order: :top) if c
+    out
   end
 
   # CRuby `Exception#detailed_message(highlight: false, **)`:
@@ -289,23 +291,32 @@ class Exception
     first, *rest = msg.b.split("\n".b, -1).map { |l| l.force_encoding(enc) }
     # With :highlight every line of a multi-line message is bolded
     # individually (`\e[1m…\e[m` per line).
-    if cls.name.nil?
-      head = highlight ? "\e[1m#{first}\e[m" : first
-    elsif highlight
-      head = "\e[1m#{first} (\e[1;4m#{cls}\e[m\e[1m)\e[m"
-    else
-      head = "#{first} (#{cls})"
+    # Appended to a US-ASCII String, as `rb_decorate_message` builds it:
+    # the result takes the message's encoding when that is not ASCII,
+    # valid there or not (#2246).
+    out = String.new(encoding: Encoding::US_ASCII)
+    out << "\e[1m" if highlight
+    out << first
+    unless cls.name.nil?
+      out << (highlight ? " (\e[1;4m#{cls}\e[m\e[1m)" : " (#{cls})")
     end
-    if highlight
-      rest = rest.map { |l| l.empty? ? l : "\e[1m#{l}\e[m" }
+    out << "\e[m" if highlight
+    rest.each do |l|
+      out << "\n"
+      if highlight && !l.empty?
+        out << "\e[1m" << l << "\e[m"
+      else
+        out << l
+      end
     end
-    ([head] + rest).join("\n")
+    out
   end
 
   # What the report of an uncaught exception prints for this one
-  # (`rb_error_write`): its #detailed_message, when that is a String.
-  def __report_message
-    m = detailed_message(highlight: false)
+  # (`rb_error_write`): its #detailed_message, when that is a String,
+  # highlighted when stderr is a terminal (`Exception.to_tty?`).
+  def __report_message(highlight)
+    m = detailed_message(highlight: highlight)
     m if ::String === m
   end
   private :__report_message

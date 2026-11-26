@@ -56,9 +56,28 @@ use super::*;
 
 /// The report text [`MonorubyErr::render_report_messages`] left on
 /// *obj*, if it rendered one.
-fn report_message(store: &Store, obj: Value) -> Option<String> {
+///
+/// The bytes as they are: CRuby writes the message to stderr whatever
+/// its encoding and whether or not it is valid there (#2246).
+fn report_message(store: &Store, obj: Value) -> Option<Vec<u8>> {
     let msg = store.get_ivar(obj, IdentId::get_id("/__report"))?;
-    Some(msg.is_rstring()?.to_str().ok()?.to_string())
+    Some(msg.is_rstring()?.as_bytes().to_vec())
+}
+
+/// Write `bytes` to the process's stderr as they are.
+fn write_stderr(bytes: &[u8]) {
+    use std::io::Write;
+    let _ = std::io::stderr().lock().write_all(bytes);
+}
+
+/// `prefix: message\n`, written as bytes.
+fn write_report_line(prefix: &str, message: &[u8]) {
+    let mut line = Vec::with_capacity(prefix.len() + message.len() + 3);
+    line.extend_from_slice(prefix.as_bytes());
+    line.extend_from_slice(b": ");
+    line.extend_from_slice(message);
+    line.push(b'\n');
+    write_stderr(&line);
 }
 
 /// The string backtrace stored on an exception object (`/backtrace`
@@ -78,8 +97,8 @@ fn backtrace_strings(store: &Store, obj: Value) -> Option<Vec<String>> {
 /// Print a report from pre-rendered backtrace strings: the first entry
 /// is the header location, the rest `\tfrom` lines (honouring
 /// `--backtrace-limit=N`).
-fn show_string_backtrace(bt: &[String], error_message: &str) {
-    eprintln!("{}: {error_message}", bt[0]);
+fn show_string_backtrace(bt: &[String], error_message: &[u8]) {
+    write_report_line(&bt[0], error_message);
     let rest = &bt[1..];
     let limit = crate::globals::backtrace_limit().unwrap_or(usize::MAX);
     for (i, line) in rest.iter().enumerate() {
@@ -591,6 +610,20 @@ impl MonorubyErr {
     ///
     pub(crate) fn render_report_messages(vm: &mut Executor, globals: &mut Globals, obj: Value) {
         let cause_id = IdentId::get_id("/cause");
+        // CRuby asks for a highlighted message when stderr is a terminal
+        // (`rb_ec_error_print_detailed`: `highlight = rb_stderr_tty_p()`,
+        // #2250).
+        let exception_class = globals.store.get_module(EXCEPTION_CLASS).as_val();
+        let highlight = vm
+            .invoke_method_inner(
+                globals,
+                IdentId::get_id("to_tty?"),
+                exception_class,
+                &[],
+                None,
+                None,
+            )
+            .is_ok_and(|v| v.as_bool());
         let mut seen = vec![];
         let mut cur = obj;
         while cur.is_exception().is_some() && !seen.contains(&cur.id()) {
@@ -599,7 +632,7 @@ impl MonorubyErr {
                 globals,
                 IdentId::get_id("__report_message"),
                 cur,
-                &[],
+                &[Value::bool(highlight)],
                 None,
                 None,
             ) {
@@ -609,12 +642,24 @@ impl MonorubyErr {
                         .set_ivar(cur, IdentId::get_id("/__report"), msg);
                 }
                 // `rb_error_write` with no usable message: the class
-                // name alone.
+                // name alone, or "unhandled exception" for a
+                // RuntimeError, underlined when highlighting.
                 res if res.is_ok() || seen.len() == 1 => {
-                    let name = Value::string(cur.get_real_class_name(&globals.store));
-                    let _ = globals
-                        .store
-                        .set_ivar(cur, IdentId::get_id("/__report"), name);
+                    let name = if cur.class() == RUNTIME_ERROR_CLASS {
+                        "unhandled exception".to_string()
+                    } else {
+                        cur.get_real_class_name(&globals.store)
+                    };
+                    let name = if highlight {
+                        format!("\x1b[1;4m{name}\x1b[m")
+                    } else {
+                        name
+                    };
+                    let _ = globals.store.set_ivar(
+                        cur,
+                        IdentId::get_id("/__report"),
+                        Value::string(name),
+                    );
                 }
                 // A cause whose `detailed_message` raises ends the
                 // report: neither it nor its own causes are shown.
@@ -641,7 +686,7 @@ impl MonorubyErr {
         if let Some(obj) = self.original
             && let Some(bt) = backtrace_strings(store, obj)
         {
-            show_string_backtrace(&bt, &self.get_error_message(store));
+            show_string_backtrace(&bt, &self.get_error_message_bytes(store));
         } else {
             self.show_error_message_and_loc(store);
             show_trace_rest(store, &self.trace);
@@ -674,7 +719,7 @@ impl MonorubyErr {
                 break;
             }
             let msg = report_message(store, cause).unwrap_or_else(|| {
-                format!("{} ({})", inner.message(), cause.get_real_class_name(store))
+                format!("{} ({})", inner.message(), cause.get_real_class_name(store)).into_bytes()
             });
             if let Some(bt) = backtrace_strings(store, cause) {
                 show_string_backtrace(&bt, &msg);
@@ -682,9 +727,9 @@ impl MonorubyErr {
                 let trace = inner.trace();
                 match trace.first() {
                     Some(entry @ ((Some(_), _, _) | (None, Some(_), _))) => {
-                        eprintln!("{}: {msg}", store.trace_entry_location(entry));
+                        write_report_line(&store.trace_entry_location(entry), &msg);
                     }
-                    _ => eprintln!("{msg}"),
+                    _ => write_stderr(&[msg.as_slice(), b"\n"].concat()),
                 }
                 show_trace_rest(store, trace);
             }
@@ -694,27 +739,28 @@ impl MonorubyErr {
 
     fn show_error_message_and_loc(&self, store: &Store) {
         if let Some(entry @ (source_loc, func_id, _)) = self.trace.first() {
-            let error_message = self.get_error_message(store);
+            let error_message = self.get_error_message_bytes(store);
             // CRuby's report is the compact `file:line:in 'method':
             // message` form for every class, SyntaxError included (the
             // source around a syntax error is part of its message).
             if source_loc.is_some() || func_id.is_some() {
-                eprintln!("{}: {error_message}", store.trace_entry_location(entry));
+                write_report_line(&store.trace_entry_location(entry), &error_message);
             } else {
-                eprintln!("<internal>: {error_message}");
+                write_report_line("<internal>", &error_message);
             }
         } else if let Some(path) = self.unparsed_script(store) {
             // The script itself does not parse: no frame ran, and CRuby
             // names the file alone (`error_pos` with no line).
             let mut line = path;
-            line.extend_from_slice(format!(": {}\n", self.get_error_message(store)).as_bytes());
-            use std::io::Write;
-            let _ = std::io::stderr().write_all(&line);
+            line.extend_from_slice(b": ");
+            line.extend_from_slice(&self.get_error_message_bytes(store));
+            line.push(b'\n');
+            write_stderr(&line);
         } else {
             // An error constructed outside any VM frame has no trace to
             // point into, but its message must still surface (an error
             // should never reach the user as a bare placeholder).
-            eprintln!("monoruby: {}", self.get_error_message(store));
+            write_report_line("monoruby", &self.get_error_message_bytes(store));
         };
     }
 
@@ -733,6 +779,12 @@ impl MonorubyErr {
     }
 
     pub fn get_error_message(&self, store: &Store) -> String {
+        String::from_utf8_lossy(&self.get_error_message_bytes(store)).into_owned()
+    }
+
+    /// [`get_error_message`](Self::get_error_message) as the bytes the
+    /// report writes.
+    pub fn get_error_message_bytes(&self, store: &Store) -> Vec<u8> {
         // The top-level report prints what `#detailed_message` answered
         // (`rb_error_write`), rendered while the executor was alive.
         if let Some(obj) = self.original
@@ -740,6 +792,10 @@ impl MonorubyErr {
         {
             return report;
         }
+        self.plain_error_message(store).into_bytes()
+    }
+
+    fn plain_error_message(&self, store: &Store) -> String {
         // The class goes after the first line of the message
         // (`rb_error_write`).
         let class = self.class_name(store);
@@ -2025,6 +2081,43 @@ impl MonorubyErr {
             raw.push(b')');
             e.raw_message = Some((raw, crate::value::Encoding::Ascii8));
         }
+        e
+    }
+
+    /// `rb_syserr_fail_str(e, str)`: `"<description> - <str>"`, `str`
+    /// given as its bytes and encoding and appended to the strerror text
+    /// (a string in the locale encoding) the way `rb_str_catf` appends a
+    /// `%PRIsVALUE` argument — kept as it is when the two encodings are
+    /// compatible, the result taking the one they share, and otherwise
+    /// converted into the locale encoding with `?` / U+FFFD for what does
+    /// not map (`IO.popen` of a UTF-16 command, #2248).
+    pub(crate) fn errno_with_str(
+        store: &Store,
+        err: &std::io::Error,
+        bytes: &[u8],
+        enc: crate::value::Encoding,
+    ) -> MonorubyErr {
+        let locale = crate::builtins::encoding::locale_encoding();
+        let mut raw = format!("{} - ", errno_description(err)).into_bytes();
+        let result_enc = if bytes.is_empty() {
+            locale
+        } else if enc.is_ascii_compatible() && locale.is_ascii_compatible() {
+            raw.extend_from_slice(bytes);
+            if bytes.is_ascii() { locale } else { enc }
+        } else {
+            let opts = crate::value::transcode::TranscodeOpts {
+                invalid_replace: true,
+                undef_replace: true,
+                ..Default::default()
+            };
+            match crate::value::transcode_bytes_with_opts(bytes, enc, locale, &opts, store) {
+                Ok(converted) => raw.extend_from_slice(&converted),
+                Err(_) => raw.extend_from_slice(bytes),
+            }
+            locale
+        };
+        let mut e = Self::from_io_err(store, err, String::from_utf8_lossy(&raw).into_owned());
+        e.raw_message = Some((raw, result_enc));
         e
     }
 

@@ -341,6 +341,7 @@ impl Store {
 
     pub(crate) fn set_inspect_escape(&mut self, enc: Option<crate::value::Encoding>) {
         self.inspect_escape = enc;
+        crate::vm::REGEXP_MESSAGE_RESENC.with(|c| c.set(enc));
     }
 }
 

@@ -284,6 +284,7 @@ mod to_c_enum_size_integer_complex_pow_stdout_lazy;
 mod to_hash_conversion;
 mod tr_wide_replacement;
 mod type_error_names;
+mod uncaught_report_bytes_tty_locale;
 mod unnamed_class_layout_instance_exec;
 mod usascii_8bit_symbol;
 mod var_site_cache;

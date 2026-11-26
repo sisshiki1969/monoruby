@@ -75,6 +75,11 @@ pub(crate) struct Vm {
     const_epoch_names: OnceCell<RefCell<HashMap<IdentId, u64>>>,
     /// The global `Regexp.timeout`, in nanoseconds (0 = unset).
     regexp_global_timeout: Cell<u64>,
+    /// The encoding a regexp source quoted in an error message is
+    /// measured against (`rb_enc_reg_error_desc`'s `resenc`): `None`
+    /// for UTF-8. A mirror of `Store::inspect_escape`, which the regexp
+    /// compiler, handed no `Store`, cannot read.
+    regexp_message_resenc: Cell<Option<crate::value::Encoding>>,
     /// File descriptors owned by a live autoclosing `FileDescriptor`
     /// (`rvalue::io::OWNED_FDS`).
     owned_fds: RefCell<crate::HashSet<i32>>,
@@ -110,6 +115,7 @@ impl Vm {
             const_epoch_wildcard: Cell::new(0),
             const_epoch_names: OnceCell::new(),
             regexp_global_timeout: Cell::new(0),
+            regexp_message_resenc: Cell::new(None),
             owned_fds: RefCell::new(crate::HashSet::default()),
             ivar_tys: RefCell::new(Default::default()),
             ancestry: RefCell::new(Default::default()),
@@ -363,6 +369,9 @@ pub(crate) static CONST_EPOCH_NAMES: VmField<RefCell<HashMap<IdentId, u64>>> =
 
 pub(crate) static REGEXP_GLOBAL_TIMEOUT: VmField<Cell<u64>> =
     VmField::new(|vm| &vm.regexp_global_timeout);
+
+pub(crate) static REGEXP_MESSAGE_RESENC: VmField<Cell<Option<crate::value::Encoding>>> =
+    VmField::new(|vm| &vm.regexp_message_resenc);
 
 pub(crate) static OWNED_FDS: VmField<RefCell<crate::HashSet<i32>>> = VmField::new(|vm| &vm.owned_fds);
 
