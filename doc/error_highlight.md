@@ -91,6 +91,58 @@ that is not there.
 `monoruby/tests/syntax_report_did_you_mean_source_names.rs` compares the
 corrections, the reports and `local_variables` with the host CRuby.
 
+## syntax_suggest
+
+The last thing CRuby's `gem_prelude` requires is
+`syntax_suggest/core_ext`. It defines `SyntaxSuggest` and prepends an
+anonymous module to SyntaxError whose `detailed_message` puts the
+library's own diagnosis in front of the message of a SyntaxError whose
+`#path` is a file that can be read:
+
+```
+c.rb: --> c.rb
+
+Unmatched keyword, missing `end' ?
+
+> 1  def foo
+> 2    if x
+> 4  end
+
+c.rb:4: syntax errors found (SyntaxError)
+> 1 | def foo
+    | ^~~ expected an `end` to close the `def` statement
+...
+```
+
+The library is vendored unmodified (`vendor/ruby-stdlib/syntax_suggest/`,
+2.0.3) and needs nothing of its own here: it lexes with
+`Prism.lex_compat` and tests candidate blocks with `Prism.parse`, both of
+which the prism stand-in answers, and its `Ripper::EXPR_*` constants come
+from `stdlib/ripper.rb` (prism's Ripper translation).
+
+`core_ext.rb` is small, and already defers the library proper
+(`syntax_suggest/api`, which requires prism, ripper, optparse, ...) to
+the first message. Reading it at boot would still cost 1.7M
+instructions, 0.7% of monoruby's startup (the autoload and the code
+below cost 1.0M of their own), so
+`builtins/gem_prelude.rb` registers `SyntaxSuggest` as an autoload of
+`syntax_suggest/core_ext`, and `Exception#detailed_message` runs it for
+the first SyntaxError it is asked about (`Exception.__load_syntax_suggest`).
+The module the load prepends comes too late for the call under way, so
+that once its method is called directly, as with the two libraries
+above. `Module#prepend` on SyntaxError runs a pending load first, which
+keeps the library's module underneath a program's own.
+`--disable-syntax_suggest` and `--disable-gems` leave the constant
+undefined (`Globals::no_syntax_suggest`).
+
+What differs from CRuby before the first SyntaxError message:
+`SyntaxError.ancestors` lacks the anonymous module, and a
+`detailed_message` a program defines on SyntaxError itself (rather than
+in a subclass or a prepended module) is not wrapped by the library.
+
+`monoruby/tests/syntax_suggest.rs` compares the reports and the messages
+with the host CRuby.
+
 ## Which node a frame was executing
 
 The gem calls, in this order:

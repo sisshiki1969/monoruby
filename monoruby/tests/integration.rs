@@ -277,6 +277,7 @@ mod symbol_name_methods;
 mod symbol_proc_cache;
 mod symbol_proc_no_receiver;
 mod syntax_report_did_you_mean_source_names;
+mod syntax_suggest;
 mod system_exit_status;
 mod time_interval;
 mod time_timezone;

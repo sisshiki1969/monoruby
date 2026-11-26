@@ -131,11 +131,11 @@ impl Drop for Fixtures {
 // #2230: the SyntaxError of a source that does not parse
 // ---------------------------------------------------------------------
 
-/// CRuby's `syntax_suggest` adds a block of its own in front of the
-/// report of a *file* that does not parse; monoruby does not ship it.
-/// (`--disable=gems` keeps rubygems, and with it did_you_mean and
-/// error_highlight, out of both.)
-const SYNTAX_CRUBY: &[&str] = &["--disable=gems,syntax_suggest"];
+/// `syntax_suggest` adds a block of its own in front of the report of
+/// a *file* that does not parse; `tests/syntax_suggest.rs` has that.
+/// (`--disable=gems` keeps rubygems, and with it syntax_suggest,
+/// did_you_mean and error_highlight, out of both.)
+const SYNTAX_CRUBY: &[&str] = &["--disable=gems"];
 const SYNTAX_MONO: &[&str] = &["--disable=gems"];
 
 /// Sources whose diagnostics prism 2.x (monoruby) and prism 1.8

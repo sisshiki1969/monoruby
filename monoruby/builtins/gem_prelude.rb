@@ -44,3 +44,24 @@ end
 # `--disable-error_highlight` (and `--disable-gems`, as in CRuby) leaves
 # the constant undefined.
 autoload :ErrorHighlight, "error_highlight"
+
+# syntax_suggest, deferred as well.
+#
+# The last thing CRuby's gem_prelude requires is
+# `syntax_suggest/core_ext`, which defines `SyntaxSuggest` and prepends
+# an anonymous module to SyntaxError: its `detailed_message` puts the
+# library's own diagnosis ("Unmatched keyword, missing `end' ?" and the
+# lines concerned) in front of the report of a file that does not
+# parse. That file is small -- it loads the library proper only when it
+# is asked for such a message -- but reading it at boot is still 0.7%
+# of monoruby's startup (1.7M instructions), for something only a
+# source with a syntax error shows. So the constant is an autoload, as
+# `ErrorHighlight` is: `defined?` and `Object.constants` report it, any
+# reference loads it, and `Exception#detailed_message` loads it the
+# first time it is asked for the message of a SyntaxError
+# (builtins/exception.rb). Until then SyntaxError's ancestors lack the
+# module, which is the one visible difference.
+#
+# `--disable-syntax_suggest` (and `--disable-gems`, as in CRuby) leaves
+# the constant undefined.
+autoload :SyntaxSuggest, "syntax_suggest/core_ext"

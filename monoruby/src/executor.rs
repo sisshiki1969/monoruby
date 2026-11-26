@@ -765,7 +765,8 @@ impl Executor {
             // it), so the vendored rubygems is read only by the first
             // program that reaches for it — a plain script skips its
             // ~8 MB / ~90 ms. `ErrorHighlight` is registered the same
-            // way, and loaded by the first error report that uses it.
+            // way, and loaded by the first error report that uses it,
+            // and so is `SyntaxSuggest`.
             if !globals.no_gems {
                 let path = builtins_dir().join("gem_prelude.rb");
                 executor.require(globals, &path, false)?;
@@ -773,6 +774,10 @@ impl Executor {
                     // The prelude registered the autoload; with the
                     // feature off the constant is not defined at all.
                     globals.remove_constant(OBJECT_CLASS, IdentId::get_id("ErrorHighlight"));
+                }
+                if globals.no_syntax_suggest {
+                    // Likewise for `--disable-syntax_suggest`.
+                    globals.remove_constant(OBJECT_CLASS, IdentId::get_id("SyntaxSuggest"));
                 }
                 // `DidYouMean`, an autoload too, with stand-ins for
                 // the methods it gives four exception classes.

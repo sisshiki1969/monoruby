@@ -43,6 +43,18 @@ class UncaughtThrowError
   end
 end
 
+class SyntaxError
+  # `syntax_error_initialize`: a SyntaxError made with no argument says
+  # "compile error", where another exception falls back to the name of
+  # its class. (An explicit nil is still that fallback.) The message is
+  # `rb_fstring_lit`'s: one frozen US-ASCII String, the same object for
+  # every such error.
+  def initialize(*args)
+    args = [-String.new("compile error", encoding: Encoding::US_ASCII)] if args.empty?
+    super(*args)
+  end
+end
+
 class Exception
   class << self
     # `Exception.exception(...)` is an alias of `.new`, inherited by every
@@ -203,7 +215,52 @@ class Exception
       m = __error_highlight_message(highlight, opts)
       return m if m
     end
+    if ::SyntaxError === self && ::Object.autoload?(:SyntaxSuggest)
+      m = __syntax_suggest_message(default_highlight, highlight, opts)
+      return m if m
+    end
     __usascii_repr(__detailed_message(highlight))
+  end
+
+  # syntax_suggest is loaded here, by the first SyntaxError that is
+  # asked for its message, rather than at boot
+  # (builtins/gem_prelude.rb). Loading `syntax_suggest/core_ext`
+  # prepends an anonymous module to SyntaxError -- too late for the call
+  # under way, as with the two libraries above -- so this once its
+  # method is called directly; its `super` comes back to
+  # `#detailed_message` above, which by then finds nothing left to load.
+  #
+  # The module is the one on top of SyntaxError's ancestors: the first
+  # prepend to SyntaxError loads the library before anything else goes
+  # there (`Module#prepend`), so nothing can be above it yet.
+  #
+  # Its `detailed_message` defaults `highlight:` to true, where
+  # `Exception#detailed_message` defaults it to false, so a call that
+  # did not say is passed on without one.
+  private def __syntax_suggest_message(default_highlight, highlight, opts)
+    return nil unless ::Exception.__load_syntax_suggest
+    mod = ::SyntaxError.ancestors.first
+    return nil if ::Class === mod || !mod.method_defined?(:detailed_message, false)
+    m = mod.instance_method(:detailed_message)
+    default_highlight ? m.bind_call(self, **opts) : m.bind_call(self, highlight: highlight, **opts)
+  end
+
+  # Run the pending autoload of `SyntaxSuggest`, if there is one, and
+  # say whether it ran. Called for the first SyntaxError message (above)
+  # and by `Module#prepend` on SyntaxError, so that the library's module
+  # ends up underneath the others, where a library loaded at boot has
+  # it.
+  def self.__load_syntax_suggest
+    return false unless ::Object.autoload?(:SyntaxSuggest)
+    begin
+      ::SyntaxSuggest
+    rescue ::LoadError
+      # CRuby's gem_prelude says so once and goes on without it.
+      ::Object.__send__(:remove_const, :SyntaxSuggest) if ::Object.autoload?(:SyntaxSuggest)
+      warn "`syntax_suggest' was not loaded."
+      return false
+    end
+    true
   end
 
   # did_you_mean is loaded here, by the first message it would have

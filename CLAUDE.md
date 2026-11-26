@@ -718,6 +718,15 @@ reproducible build. It performs two jobs:
    NoMatchingPatternKeyError that is asked for its detailed message or
    its `corrections`. `--disable-did_you_mean` leaves it out.
 
+   `syntax_suggest` (the "Unmatched keyword, missing `end' ?" block in
+   front of the report of a file that does not parse) is vendored
+   unmodified too. CRuby requires `syntax_suggest/core_ext` at boot;
+   here `SyntaxSuggest` is an autoload of that file
+   (`builtins/gem_prelude.rb`), run for the first SyntaxError that is
+   asked for its detailed message and by the first `prepend` to
+   SyntaxError. `--disable-syntax_suggest` leaves it out. See
+   `doc/error_highlight.md`.
+
 > **Note**: `build.rs` declares `cargo:rerun-if-changed` for each source tree
 > (and the `.ruby-version` pin and the install root's `.build-stamp` self-heal
 > file), so edits to `builtins/`, `stdlib/`, `gem/`, or the vendored snapshot

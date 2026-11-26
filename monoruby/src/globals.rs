@@ -533,6 +533,9 @@ pub struct Globals {
     /// `--disable-did_you_mean`: `DidYouMean` is not registered as an
     /// autoload (`builtins/did_you_mean_prelude.rb` is not run).
     pub no_did_you_mean: bool,
+    /// `--disable-syntax_suggest`: `SyntaxSuggest` is not registered as
+    /// an autoload.
+    pub no_syntax_suggest: bool,
     /// The `Warning[]` switches, one [`WarningCategory`] bit each.
     warning_categories: u8,
     /// The `Encoding` each `Encoding::<NAME>` constant object stands
@@ -1264,6 +1267,7 @@ impl Globals {
             no_gems,
             no_error_highlight: false,
             no_did_you_mean: false,
+            no_syntax_suggest: false,
             warning_categories: WarningCategory::DEFAULT,
             encoding_of_object: HashMap::default(),
             encoding_object_roots: vec![],
