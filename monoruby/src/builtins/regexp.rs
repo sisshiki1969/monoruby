@@ -439,6 +439,30 @@ pub(crate) fn regexp_inner_from_string(
     option: u32,
     default_kcode: Option<u32>,
 ) -> Result<RegexpInner> {
+    let enc = arg0.is_rstring_inner().map(|r| r.encoding());
+    regexp_inner_from_string_(vm, globals, arg0, option, default_kcode).map_err(|mut err| {
+        // `rb_enc_reg_error_desc` tags the message with the source's
+        // encoding (#2254) — not a UTF-16 / UTF-32 one, which the
+        // ASCII text here would not be valid in.
+        if let Some(enc) = enc
+            && err.kind == MonorubyErrKind::Regex
+            && enc != crate::value::Encoding::UTF8
+            && enc.is_ascii_compatible()
+            && err.raw_message.is_none()
+        {
+            err.raw_message = Some((err.message.as_bytes().to_vec(), enc));
+        }
+        err
+    })
+}
+
+fn regexp_inner_from_string_(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    arg0: Value,
+    option: u32,
+    default_kcode: Option<u32>,
+) -> Result<RegexpInner> {
     // The matching engine needs a UTF-8 view, so escape non-UTF-8
     // bytes (`coerce_to_string`), but keep the *raw* bytes for
     // `Regexp#source` so a Shift_JIS/EUC-JP/binary source survives.
