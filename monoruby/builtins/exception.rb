@@ -46,9 +46,11 @@ end
 class SyntaxError
   # `syntax_error_initialize`: a SyntaxError made with no argument says
   # "compile error", where another exception falls back to the name of
-  # its class. (An explicit nil is still that fallback.)
+  # its class. (An explicit nil is still that fallback.) The message is
+  # `rb_fstring_lit`'s: one frozen US-ASCII String, the same object for
+  # every such error.
   def initialize(*args)
-    args = ["compile error"] if args.empty?
+    args = [-String.new("compile error", encoding: Encoding::US_ASCII)] if args.empty?
     super(*args)
   end
 end

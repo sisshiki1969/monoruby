@@ -278,6 +278,8 @@ class Odd < SyntaxError; def path = 1; end
 show Odd.new("odd")
 # No message of its own: "compile error" (#2251).
 p SyntaxError.new.message, SyntaxError.exception.message, Class.new(SyntaxError).new.message
+m = SyntaxError.new.message
+p m.frozen?, m.encoding, m.equal?(SyntaxError.new.message), SyntaxError.new(nil).message.frozen?
 p SyntaxError.new(nil).message, SyntaxError.new(3).message, SyntaxError.new("a").message
 p SyntaxError.instance_method(:initialize).owner
 p SyntaxError.new.detailed_message(highlight: false)
