@@ -704,6 +704,7 @@ fn main() {
     let mut gems = true;
     let mut did_you_mean = true;
     let mut error_highlight = true;
+    let mut syntax_suggest = true;
     let mut frozen_string_literal: Option<bool> = None;
     for (name, on) in &features {
         match name.as_str() {
@@ -714,11 +715,13 @@ fn main() {
                 frozen_string_literal = Some(*on)
             }
             "error_highlight" => error_highlight = *on,
-            "syntax_suggest" | "jit" | "yjit" | "zjit" | "rjit" => {}
+            "syntax_suggest" => syntax_suggest = *on,
+            "jit" | "yjit" | "zjit" | "rjit" => {}
             "all" => {
                 gems = *on;
                 did_you_mean = *on;
                 error_highlight = *on;
+                syntax_suggest = *on;
                 frozen_string_literal = Some(*on);
             }
             other => eprintln!(
@@ -745,6 +748,7 @@ fn main() {
     let mut globals = Globals::new(warning_level, opts.no_jit, !gems);
     globals.no_error_highlight = !error_highlight;
     globals.no_did_you_mean = !did_you_mean;
+    globals.no_syntax_suggest = !syntax_suggest;
     Globals::gc_enable(!opts.no_gc);
     if let Some(limit) = opts.backtrace_limit.or(ropts.backtrace_limit) {
         Globals::set_backtrace_limit(limit);

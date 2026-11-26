@@ -2923,9 +2923,14 @@ fn prepend(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -
             id,
             NAME_ERROR_CLASS | TYPE_ERROR_CLASS | ARGUMENTS_ERROR_CLASS
         );
+        // syntax_suggest, deferred the same way
+        // (`builtins/gem_prelude.rb`), has one module of its own
+        // underneath the others prepended to SyntaxError.
+        let suggested = id == SYNTAX_ERROR_CLASS;
         for (wanted, constant, loader) in [
             (corrected, "DidYouMean", "__load_did_you_mean"),
             (highlighted, "ErrorHighlight", "__load_error_highlight"),
+            (suggested, "SyntaxSuggest", "__load_syntax_suggest"),
         ] {
             if wanted && pending(globals, constant) {
                 let exception = globals.store[EXCEPTION_CLASS].get_module().as_val();
