@@ -185,3 +185,40 @@ fn integer_new_is_undefined() {
         "##,
     );
 }
+
+/// #2246: `#detailed_message` and `#full_message` grow a String by
+/// appends, as `rb_decorate_message` / `rb_error_write` do: US-ASCII /
+/// BINARY while all ASCII, and otherwise the encoding of what made it
+/// not — a message broken in its encoding included.
+#[test]
+fn messages_take_the_encoding_of_a_broken_message() {
+    run_test_once(
+        r##"
+        res = []
+        ["UTF-8", "US-ASCII", "BINARY", "EUC-JP", "ISO-8859-1"].each do |en|
+          ["caf\xE9", "café", "plain", "a\nb\xE9\nc", ""].each do |s|
+            e = RuntimeError.new(s.dup.force_encoding(en))
+            [false, true].each do |hl|
+              d = e.detailed_message(highlight: hl)
+              res << [d.encoding.to_s, d.b]
+              [:top, :bottom].each do |o|
+                f = e.full_message(highlight: hl, order: o)
+                res << [f.encoding.to_s, f.b.include?(d.b), f.b.lines.size]
+              end
+            end
+          end
+        end
+        def deep(n) = n == 0 ? raise("zé") : deep(n - 1)
+        begin; deep(3); rescue => e
+          f = e.full_message(highlight: true, order: :bottom)
+          res << f.encoding.to_s << f.b.gsub(/^.*?:in /n, "").gsub(/'[^']*'/n, "")
+        end
+        begin
+          begin; raise "inner\xE9".b; rescue; raise "outer"; end
+        rescue => e
+          res << e.full_message(highlight: false).encoding.to_s
+        end
+        res
+        "##,
+    );
+}

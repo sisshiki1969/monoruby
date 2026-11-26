@@ -620,6 +620,29 @@ impl RegexpInner {
     }
 }
 
+/// The encoding `rb_enc_reg_error_desc` quotes a regexp source for:
+/// `Encoding.default_internal`, else `default_external`. A character
+/// it cannot show is escaped by value, so under a locale that is not
+/// UTF-8 a UTF-8 source's `あ` is `\u3042` (#2248).
+pub(crate) fn message_resenc() -> crate::value::Encoding {
+    crate::vm::REGEXP_MESSAGE_RESENC
+        .get()
+        .unwrap_or(crate::value::Encoding::UTF8)
+}
+
+/// A UTF-8 regexp source as an error message quotes it: as
+/// `rb_reg_expr_str` renders it against [`message_resenc`], so a bare
+/// `/` takes a backslash and a non-ASCII character is escaped by value
+/// unless the whole source can be shown as it is.
+fn message_source(src: &str) -> String {
+    String::from_utf8_lossy(&crate::builtins::string::regexp_source_desc_bytes(
+        src.as_bytes(),
+        crate::value::Encoding::UTF8,
+        Some(message_resenc()),
+    ))
+    .into_owned()
+}
+
 /// The flag letters `rb_enc_reg_error_desc` appends to the source it
 /// renders in an error message (`option_to_str`: `m`, `i`, `x`).
 fn option_letters(option: u32) -> &'static str {
@@ -688,7 +711,8 @@ fn pre_validate_regex(src: &str) -> Result<()> {
         // "too short escape sequence: /<src>/".
         if i + 1 >= bytes.len() {
             return Err(MonorubyErr::regexerr(format!(
-                "too short escape sequence: /{src}/"
+                "too short escape sequence: /{}/",
+                message_source(src)
             )));
         }
         let next = bytes[i + 1];
@@ -701,7 +725,8 @@ fn pre_validate_regex(src: &str) -> Result<()> {
             // prefixes correctly on its own).
             if i + 2 >= bytes.len() || !bytes[i + 2].is_ascii_hexdigit() {
                 return Err(MonorubyErr::regexerr(format!(
-                    "invalid hex escape: /{src}/"
+                    "invalid hex escape: /{}/",
+                    message_source(src)
                 )));
             }
         }
@@ -712,7 +737,8 @@ fn pre_validate_regex(src: &str) -> Result<()> {
             // (a valid property always has one).
             if !bytes[i + 3..].contains(&b'}') {
                 return Err(MonorubyErr::regexerr(format!(
-                    "invalid character property name: /{src}/"
+                    "invalid character property name: /{}/",
+                    message_source(src)
                 )));
             }
         }
@@ -1804,7 +1830,11 @@ impl RegexpInner {
                         let formatted = if raw_msg.contains(':') {
                             raw_msg
                         } else {
-                            format!("{raw_msg}: /{reg_str}/{}", option_letters(option))
+                            format!(
+                                "{raw_msg}: /{}/{}",
+                                message_source(&reg_str),
+                                option_letters(option)
+                            )
                         };
                         Err(MonorubyErr::regexerr(formatted))
                     }

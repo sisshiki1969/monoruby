@@ -5557,11 +5557,24 @@ pub(crate) fn regexp_source_desc_bytes(
         E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
     );
     // CRuby shows a character as itself when the result encoding is the
-    // pattern's own; otherwise it escapes it by value.
-    let showable = resenc == Some(enc);
+    // pattern's own; otherwise it escapes it by value. And it decides
+    // that for the whole source at once: it is copied raw only when
+    // nothing in it needs escaping — every character valid, every ASCII
+    // one printable and no bare `/` — and once something does, every
+    // non-ASCII character is escaped too (`/\u3042\//`, #2248).
+    let all_pieces = pattern_pieces(enc, bytes);
+    if resenc == Some(enc)
+        && enc.is_ascii_compatible()
+        && all_pieces.iter().all(|&(start, len, valid)| {
+            let b = bytes[start];
+            valid && (len > 1 || b >= 0x80 || (0x20..=0x7e).contains(&b) && b != b'/')
+        })
+    {
+        return bytes.to_vec();
+    }
     let printable = |b: u8| (0x09..=0x0d).contains(&b) || (0x20..=0x7e).contains(&b);
     let mut out: Vec<u8> = Vec::new();
-    let mut pieces = pattern_pieces(enc, bytes).into_iter();
+    let mut pieces = all_pieces.into_iter();
     while let Some((start, len, valid)) = pieces.next() {
         if !valid {
             for b in &bytes[start..start + len] {
@@ -5583,10 +5596,6 @@ pub(crate) fn regexp_source_desc_bytes(
                 b if printable(b) => out.push(b),
                 b => out.extend_from_slice(format!("\\x{b:02X}").as_bytes()),
             }
-            continue;
-        }
-        if showable {
-            out.extend_from_slice(&bytes[start..start + len]);
             continue;
         }
         // The value CRuby escapes is the codepoint in a Unicode

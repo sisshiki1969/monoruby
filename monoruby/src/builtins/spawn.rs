@@ -73,6 +73,12 @@ pub(crate) struct ExecSpec {
     /// What messages name the command by (CRuby's `fail_str`): the whole
     /// command string when it goes to the shell, the program otherwise.
     program_display: String,
+    /// The same as the String CRuby's message quotes, with its
+    /// encoding: the whole command item of a program given on its own
+    /// (`[cmd, argv0]` or the list form), and what was read out of the
+    /// C string of a lone command string — the shell script, or its
+    /// first word — which a UTF-16 command cuts at its first NUL.
+    program_name: (Vec<u8>, crate::value::Encoding),
     /// Candidate program paths: the single path (contains '/'), or one
     /// candidate per PATH dir. Empty means "resolution already failed".
     candidates: CStrBlock,
@@ -237,9 +243,18 @@ fn command_needs_shell(cmd: &[u8]) -> bool {
 /// CRuby's `StringValueCStr`: the bytes of a String that holds no null
 /// character (`RStringInner::check_c_str`, #2231).
 fn cstr_value(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<Vec<u8>> {
+    Ok(cstr_value_enc(vm, globals, v)?.0)
+}
+
+/// [`cstr_value`] with the String's encoding.
+fn cstr_value_enc(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    v: Value,
+) -> Result<(Vec<u8>, crate::value::Encoding)> {
     let rs = v.coerce_to_rstring(vm, globals)?;
     rs.check_c_str()?;
-    Ok(rs.as_bytes().to_vec())
+    Ok((rs.as_bytes().to_vec(), rs.encoding()))
 }
 
 /// What C code reads out of the bytes [`cstr_value`] answers: those up
@@ -458,11 +473,14 @@ pub(crate) fn parse_exec_args(
         None
     };
     let mut shell_script = None;
+    let program_name;
     let (program, argv_strings, via_shell) = if let Some(ary) = first_ary {
         if ary.len() != 2 {
             return Err(MonorubyErr::argumenterr("wrong first argument"));
         }
-        let prog = c_str(cstr_value(vm, globals, ary.get(0).copied().unwrap())?);
+        let (prog, enc) = cstr_value_enc(vm, globals, ary.get(0).copied().unwrap())?;
+        program_name = (prog.clone(), enc);
+        let prog = c_str(prog);
         let mut argv = vec![];
         push_args(
             &mut argv,
@@ -477,9 +495,11 @@ pub(crate) fn parse_exec_args(
         // syntax, and otherwise split into words here and exec'd as a
         // program, with no shell in between (CRuby's `rb_exec_fillarg`).
         // It goes on as the bytes it is.
-        let cmd = c_str(cstr_value(vm, globals, first)?);
+        let (cmd, enc) = cstr_value_enc(vm, globals, first)?;
+        let cmd = c_str(cmd);
         if command_needs_shell(&cmd) {
             let argv = vec![b"sh".to_vec(), b"-c".to_vec(), cmd.clone()];
+            program_name = (cmd.clone(), enc);
             shell_script = Some(cmd);
             (b"sh".to_vec(), argv, true)
         } else {
@@ -491,10 +511,12 @@ pub(crate) fn parse_exec_args(
             // No word at all (`""`, `" "`) is a program named "", which
             // no directory holds.
             let prog = argv.first().cloned().unwrap_or_default();
+            program_name = (prog.clone(), enc);
             (prog, argv, false)
         }
     } else {
-        let first = cstr_value(vm, globals, first)?;
+        let (first, enc) = cstr_value_enc(vm, globals, first)?;
+        program_name = (first.clone(), enc);
         let prog = c_str(first.clone());
         let mut argv = vec![];
         push_args(&mut argv, first);
@@ -563,6 +585,7 @@ pub(crate) fn parse_exec_args(
         envp,
         program_display: String::from_utf8_lossy(shell_script.as_ref().unwrap_or(&program))
             .into_owned(),
+        program_name,
         candidates,
         argv,
         chdir,
@@ -1189,7 +1212,12 @@ fn stage_error(
     let pty = spec.pty_slave.is_some();
     match stage {
         STAGE_EXEC if pty => MonorubyErr::errno_with_msg(&globals.store, &err, "fork failed"),
-        STAGE_EXEC => MonorubyErr::errno_with_msg(&globals.store, &err, &spec.program_display),
+        STAGE_EXEC => MonorubyErr::errno_with_str(
+            &globals.store,
+            &err,
+            &spec.program_name.0,
+            spec.program_name.1,
+        ),
         STAGE_CHDIR if !popen && !pty => {
             let dir = spec.chdir.as_ref().map(|(_, d)| d.as_str()).unwrap_or("");
             MonorubyErr::errno_with_msg(&globals.store, &err, dir)
