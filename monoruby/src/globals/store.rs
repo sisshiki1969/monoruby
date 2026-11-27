@@ -142,6 +142,10 @@ pub struct Store {
     /// skipped (`MONORUBY_SKIP_STARTUP`), which simply disables that
     /// specialization.
     class_new_fid: Option<FuncId>,
+    /// `FuncId` of `Array#each` as `builtins/array.rb` defines it,
+    /// recorded once the bootstrap sources have loaded; see
+    /// [`Self::array_each_is_basic`].
+    array_each_fid: Option<FuncId>,
     /// `FuncId` of the native twin of `Class#new` a call site resolves to
     /// instead when its scope may refine `initialize` — see
     /// [`Self::site_target`].
@@ -941,6 +945,7 @@ impl Store {
             errno_ivar: None,
             kernel_binding_fid: None,
             class_new_fid: None,
+            array_each_fid: None,
             class_new_refined_fid: None,
             struct_initialize_fid: None,
             object_send_fids: vec![],
@@ -1220,6 +1225,29 @@ impl Store {
         self.class_new_fid = self
             .search_method_by_class_id(CLASS_CLASS, IdentId::NEW)
             .and_then(|e| e.func_id());
+    }
+
+    /// Record `Array#each`'s `FuncId`, once array.rb has run.
+    pub(crate) fn record_array_each_fid(&mut self) {
+        self.array_each_fid = self
+            .search_method_by_class_id(ARRAY_CLASS, IdentId::EACH)
+            .and_then(|e| e.func_id());
+    }
+
+    /// Whether `each` on an Array of class `class_id` (a subclass or a
+    /// singleton class included) is still the builtin `Array#each`:
+    /// CRuby's `rb_method_basic_definition_p(CLASS_OF(ary), id_each)`,
+    /// which decides whether a method Array takes from Enumerable may
+    /// walk the storage instead of calling `each` (#2219). Without the
+    /// bootstrap (`MONORUBY_SKIP_STARTUP`) there is no Ruby `each` to
+    /// compare with, and the answer is yes.
+    pub(crate) fn array_each_is_basic(&self, class_id: ClassId) -> bool {
+        let Some(basic) = self.array_each_fid else {
+            return true;
+        };
+        self.check_method_for_class(class_id, IdentId::EACH)
+            .and_then(|e| e.func_id())
+            == Some(basic)
     }
 
     /// The Ruby `Class#new` trampoline's `FuncId`, if the bootstrap ran.

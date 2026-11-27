@@ -32,9 +32,6 @@ pub struct ArgfInner {
     pub filename: Option<Value>,
     /// Cumulative line number across every stream read so far.
     pub lineno: i64,
-    /// `lineno` as it stood when `current` became the current stream —
-    /// what `ARGF.rewind` winds the counter back to.
-    pub file_start_lineno: i64,
     /// The stream most recently retired by the walk, kept so
     /// `ARGF.file` still answers after the last file was consumed.
     pub last_current: Option<Value>,
@@ -66,7 +63,6 @@ impl ArgfInner {
             current: None,
             filename: None,
             lineno: 0,
-            file_start_lineno: 0,
             last_current: None,
             state: ArgfState::Init,
             enc_args: Vec::new(),

@@ -948,38 +948,33 @@ pub(crate) fn hash_hash_value(
     globals: &mut Globals,
     self_val: Value,
 ) -> Result<i64> {
-    let recursive_marker = 0;
-    // Outer-recursion collapse (CRuby rb_exec_recursive_outer): a cycle
-    // detected at any depth collapses the *outermost* #hash to the
-    // sentinel, so `h.hash == {x: h}.hash` when h[:x] = h (h.eql?(x: h)).
-    crate::value::exec_recursive_outer(
-        self_val.id(),
-        || {
-            let h = self_val.as_hash();
-            // Use a non-commutative pair mix so that swapping values between
-            // keys yields different hashes (otherwise `{a:2,b:7}` and
-            // `{a:7,b:2}` would collide). Per-pair hashes are summed (rather
-            // than XOR'd) so identical values across pairs don't cancel.
-            // Size is folded in to distinguish hashes of different cardinality.
-            const KEY_MIX: i64 = 0x100000001b3u64 as i64;
-            const VAL_MIX: i64 = 0xc6bc279692b5c323u64 as i64;
-            const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
-            let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
-            // Walked as `rb_hash_foreach(hash, hash_i)` walks it: a key's
-            // or a value's `hash` may change the receiver.
-            h.walk(vm, globals, |vm, globals, _, k, v| {
-                let kh = k.hash_value(vm, globals)?;
-                let vh = v.hash_value(vm, globals)?;
-                let kpart = kh.wrapping_add(KEY_OFFSET).wrapping_mul(KEY_MIX);
-                let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
-                acc = acc.wrapping_add(kpart ^ vpart);
-                Ok(false)
-            })?;
-            // Fold into Fixnum range.
-            Ok(acc >> 1)
-        },
-        recursive_marker,
-    )
+    // No guard of its own: `rb_hash_hash` has none, and the
+    // outer-recursion collapse (CRuby's `rb_exec_recursive_outer`) is
+    // around each key and value it hashes (`Value::hash_value`), so a
+    // cycle at any depth collapses the outermost of those to the
+    // sentinel and `h.hash == {x: h}.hash` when h[:x] = h.
+    let h = self_val.as_hash();
+    // Use a non-commutative pair mix so that swapping values between
+    // keys yields different hashes (otherwise `{a:2,b:7}` and
+    // `{a:7,b:2}` would collide). Per-pair hashes are summed (rather
+    // than XOR'd) so identical values across pairs don't cancel.
+    // Size is folded in to distinguish hashes of different cardinality.
+    const KEY_MIX: i64 = 0x100000001b3u64 as i64;
+    const VAL_MIX: i64 = 0xc6bc279692b5c323u64 as i64;
+    const KEY_OFFSET: i64 = 0x9e3779b97f4a7c15u64 as i64;
+    let mut acc: i64 = (h.len() as i64).wrapping_mul(0x9ddfea08eb382d69u64 as i64);
+    // Walked as `rb_hash_foreach(hash, hash_i)` walks it: a key's or a
+    // value's `hash` may change the receiver.
+    h.walk(vm, globals, |vm, globals, _, k, v| {
+        let kh = k.hash_value(vm, globals)?;
+        let vh = v.hash_value(vm, globals)?;
+        let kpart = kh.wrapping_add(KEY_OFFSET).wrapping_mul(KEY_MIX);
+        let vpart = vh.wrapping_mul(VAL_MIX).rotate_left(13);
+        acc = acc.wrapping_add(kpart ^ vpart);
+        Ok(false)
+    })?;
+    // Fold into Fixnum range.
+    Ok(acc >> 1)
 }
 
 /// Check if all key-value pairs in `sub` exist in `sup`.

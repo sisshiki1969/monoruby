@@ -130,6 +130,7 @@ pub(super) fn init(globals: &mut Globals) {
         aref_fid,
         Visibility::Private,
     );
+    globals.define_private_builtin_func(ARRAY_CLASS, "__each_basic?", each_basic, 0);
     globals.define_builtin_func(ARRAY_CLASS, "clear", clear, 0);
     globals.define_builtin_func_with(ARRAY_CLASS, "fill", fill, 0, 3, false);
     globals.define_builtin_func(ARRAY_CLASS, "drop", drop, 1);
@@ -765,7 +766,7 @@ fn hash(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // The number a Hash files an Array key under
     // (`Value::array_hash_value`).
     Ok(Value::integer(
-        lfp.self_val().array_hash_value(vm, globals)?,
+        lfp.self_val().array_hash_value(vm, globals, false)?,
     ))
 }
 
@@ -2333,6 +2334,9 @@ fn zip(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Re
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/inject.html]
 #[monoruby_builtin]
 fn inject(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(res) = enumerable_unless_basic_each(vm, globals, lfp, "inject", 2)? {
+        return Ok(res);
+    }
     // A block is used only for the 0/1-argument forms. With two
     // arguments (init, sym) the block is ignored (CRuby warns).
     if let Some(bh) = lfp.block()
@@ -3636,6 +3640,9 @@ fn sort_by_collect_pairs(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/sort_by.html]
 #[monoruby_builtin]
 fn sort_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if let Some(res) = enumerable_unless_basic_each(vm, globals, lfp, "sort_by", 0)? {
+        return Ok(res);
+    }
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
         // Same temp_stack-rooting strategy as Array#sort_by!: keep keys
@@ -3834,6 +3841,9 @@ fn delete_if(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/group_by.html]
 #[monoruby_builtin]
 fn group_by(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePtr) -> Result<Value> {
+    if let Some(res) = enumerable_unless_basic_each(vm, globals, lfp, "group_by", 0)? {
+        return Ok(res);
+    }
     let self_val = lfp.self_val();
     if let Some(bh) = lfp.block() {
         let data = vm.get_block_data(globals, bh)?;
@@ -4167,6 +4177,49 @@ fn grep_match(
     }
 }
 
+/// `Array#__each_basic?` (monoruby intrinsic): whether the receiver's
+/// `each` is the builtin one — what the Ruby methods of
+/// builtins/array.rb that are Enumerable's in CRuby test before they
+/// walk the storage (#2219).
+#[monoruby_builtin]
+fn each_basic(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    Ok(Value::bool(
+        globals.store.array_each_is_basic(lfp.self_val().class()),
+    ))
+}
+
+/// For a method Array takes from Enumerable in CRuby (`inject`,
+/// `group_by`, ...), which walks the elements with `each`: when the
+/// receiver's `each` is not the builtin one (an Array subclass that
+/// overrides it), run Enumerable's method instead of the storage walk
+/// (#2219); `None` while `each` is the builtin one. `max_args` is how
+/// many arguments the method takes at most, the ones given passed on.
+fn enumerable_unless_basic_each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    name: &str,
+    max_args: usize,
+) -> Result<Option<Value>> {
+    let self_val = lfp.self_val();
+    if globals.store.array_each_is_basic(self_val.class()) {
+        return Ok(None);
+    }
+    let name = IdentId::get_id(name);
+    let Some(fid) = globals
+        .store
+        .get_module(ARRAY_CLASS)
+        .superclass()
+        .and_then(|m| globals.store.search_method_by_class_id(m.id(), name))
+        .and_then(|e| e.func_id())
+    else {
+        return Ok(None);
+    };
+    let args: Vec<_> = (0..max_args).map_while(|i| lfp.try_arg(i)).collect();
+    vm.invoke_func_inner(globals, fid, self_val, &args, lfp.block(), None)
+        .map(Some)
+}
+
 ///
 /// #### Enumerable#grep
 ///
@@ -4176,6 +4229,9 @@ fn grep_match(
 /// [https://docs.ruby-lang.org/ja/latest/method/Enumerable/i/grep.html]
 #[monoruby_builtin]
 fn grep(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    if let Some(res) = enumerable_unless_basic_each(vm, globals, lfp, "grep", 1)? {
+        return Ok(res);
+    }
     let self_val = lfp.self_val();
     let pattern = lfp.arg(0);
     if let Some(bh) = lfp.block() {

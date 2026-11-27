@@ -883,8 +883,9 @@ pub(super) fn eql(
 /// Struct#hash
 ///
 /// Order-dependent hash that includes the receiver's class so different
-/// Struct subclasses with identical content do not collide. Recursive
-/// structures hash to a sentinel via `HASH_RECURSION_GUARD`.
+/// Struct subclasses with identical content do not collide. A member
+/// that leads back to an enclosing struct hashes as 0 (`rb_hash`'s
+/// outer-recursion guard).
 #[monoruby_builtin]
 pub(super) fn hash(
     vm: &mut Executor,
@@ -894,7 +895,6 @@ pub(super) fn hash(
 ) -> Result<Value> {
     use std::hash::Hasher;
     let self_val = lfp.self_val();
-    let id = self_val.id();
     // Keyed on the real class, so `#hash` agrees with `#eql?` for an
     // `extend`ed struct (whose own class is a singleton).
     let class_hash =
@@ -911,21 +911,11 @@ pub(super) fn hash(
         }
         Ok(Value::from_hash_digest(hasher.finish()))
     };
-    // An immediate hashes without calling Ruby (`packed_hash_value`), so a
-    // struct of immediates cannot recur into itself: skip the guard.
-    if let Some(s) = self_val.try_struct()
-        && (0..s.len()).all(|i| s.get(i).is_packed_value())
-    {
-        return body(vm, globals);
-    }
-    crate::value::exec_recursive_outer(
-        id,
-        || body(vm, globals),
-        // On any recursion at any depth, the outer call returns this
-        // sentinel, so two structs that cycle at different depths still
-        // hash to the same value.
-        Value::integer((class_hash & 0x7fff_ffff_ffff_ffff) as i64),
-    )
+    // No guard of its own, as `rb_struct_hash` has none: the
+    // outer-recursion collapse is around each member's hash
+    // (`Value::hash_value`, `rb_hash`), so two structs that cycle at
+    // different depths still hash the same.
+    body(vm, globals)
 }
 
 #[monoruby_builtin]

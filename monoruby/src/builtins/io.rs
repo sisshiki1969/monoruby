@@ -2550,13 +2550,13 @@ fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
 /// when the limit cut it short (CRuby's `nolimit`, #2261). `ended` is
 /// whether it ends with its separator, which is looked for before the
 /// limit; `len` its length in the encoding it is returned in.
-fn line_counts(ended: bool, len: usize, limit: Option<usize>) -> bool {
+pub(super) fn line_counts(ended: bool, len: usize, limit: Option<usize>) -> bool {
     ended || limit.is_none_or(|l| len < l)
 }
 
 /// Whether `buf`, a line as [`getline_with`] read it, ends with the
 /// separator it was split by.
-fn ends_with_sep(buf: &[u8], sep: Option<&[u8]>, wide: Option<&WideLines>) -> bool {
+pub(super) fn ends_with_sep(buf: &[u8], sep: Option<&[u8]>, wide: Option<&WideLines>) -> bool {
     let sep = match wide {
         Some(w) => w.sep.as_deref(),
         None => sep,
@@ -2577,6 +2577,7 @@ fn pending_line_counts(line: &[u8], sep: Option<&[u8]>, limit: Option<usize>) ->
 /// Bump the IO's line counter and `$.` after a successful line read.
 fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
     let n = io.as_io_inner_mut().bump_lineno();
+    let n = super::argf::lineno_after_io_line(globals, io, n);
     globals.set_lineno(Value::integer(n));
     Ok(())
 }
@@ -5431,6 +5432,8 @@ fn io_rewind(
     // `rb_io_rewind` also drops the read converter, and with it what
     // `ungetc` left converted.
     self_.as_io_inner_mut().clear_char_pending();
+    let lineno = self_.as_io_inner().lineno();
+    super::argf::io_rewound(globals, self_, lineno);
     self_.as_io_inner_mut().set_lineno(0);
     Ok(Value::integer(0))
 }

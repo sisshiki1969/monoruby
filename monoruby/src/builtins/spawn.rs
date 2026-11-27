@@ -1576,7 +1576,7 @@ pub(crate) fn do_exec(vm: &mut Executor, globals: &mut Globals, spec: &ExecSpec)
 /// truncated (NaN / Infinity are a RangeError), and an Integer must fit
 /// the combined `int` / `unsigned int` window, with CRuby's messages for
 /// each way out of it.
-fn num2uint(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<u32> {
+pub(crate) fn num2uint(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<u32> {
     let i: i128 = if let Some(f) = v.try_float() {
         if f.is_nan() || f.is_infinite() {
             let s = if f.is_nan() {

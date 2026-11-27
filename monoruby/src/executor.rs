@@ -789,6 +789,8 @@ impl Executor {
             // `Class#new` exists only once class.rb has run; the JIT needs
             // its FuncId to recognise a `Foo.new` site.
             globals.store.record_class_new_fid();
+            // Likewise `Array#each`, which array.rb defines.
+            globals.store.record_array_each_fid();
             // Likewise, the `Hash` methods hash.rb defines exist only now.
             crate::builtins::hash::init_recv_escape_ruby(globals);
             crate::builtins::range::init_recv_escape_ruby(globals);

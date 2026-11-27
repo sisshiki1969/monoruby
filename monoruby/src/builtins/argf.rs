@@ -149,6 +149,41 @@ fn expect_inner(mut v: Value) -> Result<&'static mut ArgfInner> {
     }
 }
 
+/// Whether `argf` is the process's ARGF (CRuby's `global_argf_p`).
+fn is_global(globals: &Globals, argf: Value) -> bool {
+    globals.argf.is_some_and(|g| g.id() == argf.id())
+}
+
+/// The global ARGF's current file, when that is `io`.
+fn global_current_is(globals: &Globals, io: Value) -> Option<&'static mut ArgfInner> {
+    let inner = expect_inner(globals.argf?).ok()?;
+    inner
+        .current
+        .is_some_and(|c| c.id() == io.id())
+        .then_some(inner)
+}
+
+/// What `$.` becomes after a line read straight off `io` that counted
+/// as its `io_lineno`-th: that, unless `io` is the global ARGF's current
+/// file, whose read counts in `ARGF.lineno` too (`rb_io_getline_1`).
+pub(crate) fn lineno_after_io_line(globals: &Globals, io: Value, io_lineno: i64) -> i64 {
+    match global_current_is(globals, io) {
+        Some(inner) => {
+            inner.lineno += 1;
+            inner.lineno
+        }
+        None => io_lineno,
+    }
+}
+
+/// `rb_io_rewind`'s ARGF half: rewinding the global ARGF's current file
+/// takes its lines off `ARGF.lineno`.
+pub(crate) fn io_rewound(globals: &Globals, io: Value, io_lineno: i64) {
+    if let Some(inner) = global_current_is(globals, io) {
+        inner.lineno -= io_lineno;
+    }
+}
+
 /// Whether `v` is the stdin IO object (never closed by ARGF).
 fn is_stdin(v: Value) -> bool {
     v.ty() == Some(ObjTy::IO) && matches!(v.as_io_inner().kind(), IoKind::Stdin)
@@ -215,7 +250,6 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                     // ARGV was empty from the start: bind stdin.
                     inner.state = ArgfState::Reading;
                     inner.filename = Some(Value::string_from_str("-"));
-                    inner.file_start_lineno = inner.lineno;
                     let stdin = stdin_value(globals);
                     inner.current = Some(stdin);
                     return Ok(Some(stdin));
@@ -253,7 +287,6 @@ fn force_stream(vm: &mut Executor, globals: &mut Globals, argf: Value) -> Result
                 } else {
                     name
                 });
-                inner.file_start_lineno = inner.lineno;
                 inner.cur_encs = None;
                 inner.current = Some(stream);
                 // Re-apply remembered `set_encoding` / `binmode` to the
@@ -421,6 +454,7 @@ pub(crate) fn argf_getline_raw(
         })?;
         match line {
             Some(mut buf) => {
+                let ended = limit.is_some() && super::io::ends_with_sep(&buf, sep, wide.as_ref());
                 let tail = if chomp {
                     let converts = super::io::read_converts(ext, intl);
                     super::io::chomp_line_for(&mut buf, sep, limit, converts, wide.as_ref())
@@ -428,12 +462,32 @@ pub(crate) fn argf_getline_raw(
                     vec![]
                 };
                 let s = super::io::read_conv(globals, stream, buf, &tail, ext, intl)?;
+                // The file counts the line in its own `lineno` as
+                // `IO#gets` does (`rb_io_getline` on the current file),
+                // leaving out a line the limit cut short (#2262).
+                let counts = super::io::line_counts(ended, s.as_rstring_inner().len(), limit);
+                let file_lineno = if counts {
+                    let mut stream = stream;
+                    Some(stream.as_io_inner_mut().bump_lineno())
+                } else {
+                    None
+                };
                 let inner = expect_inner(argf)?;
                 // Every line counts in `ARGF.lineno`, one the limit cut
                 // short too (`argf_getline`'s `++ARGF.last_lineno`).
                 inner.lineno += 1;
-                let n = inner.lineno;
-                globals.set_lineno(Value::integer(n));
+                // `$.` is the global ARGF's `last_lineno`: its own count
+                // after a read through it, and after a read through
+                // another ARGF object the file's, as for any IO
+                // (`rb_io_getline_1`).
+                let n = if is_global(globals, argf) {
+                    Some(inner.lineno)
+                } else {
+                    file_lineno
+                };
+                if let Some(n) = n {
+                    globals.set_lineno(Value::integer(n));
+                }
                 vm.set_last_read_line(s);
                 return Ok(Some(s));
             }
@@ -980,13 +1034,16 @@ fn seek(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
 fn rewind(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let argf = lfp.self_val();
     let stream = stream_or_argument_error(vm, globals, argf, " to rewind")?;
+    let old_lineno = (stream.ty() == Some(ObjTy::IO)).then(|| stream.as_io_inner().lineno());
+    // `IO#rewind` takes the file's lines off the global ARGF's count
+    // itself (`rb_io_rewind`); another ARGF object takes them off its
+    // own here (`argf_rewind`). `$.` is left as it is.
     let res = invoke0(vm, globals, stream, "rewind")?;
-    // Positioned back to the top of the current file: the line counter
-    // returns to what it was when this file became current.
-    let inner = expect_inner(argf)?;
-    inner.lineno = inner.file_start_lineno;
-    let n = inner.lineno;
-    globals.set_lineno(Value::integer(n));
+    if !is_global(globals, argf)
+        && let Some(old) = old_lineno
+    {
+        expect_inner(argf)?.lineno -= old;
+    }
     Ok(res)
 }
 

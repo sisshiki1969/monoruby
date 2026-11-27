@@ -4,6 +4,15 @@ class Set
   def initialize(enum = nil, &block)
     if enum.nil?
       # empty set
+    elsif Array === enum
+      # `set_initialize` walks an Array's storage, whatever its class's
+      # `each` (#2219): Array's own `each`, under the name array.rb
+      # keeps it by.
+      if block
+        enum.__send__(:__builtin_each) { |o| add(block.call(o)) }
+      else
+        enum.__send__(:__builtin_each) { |o| add(o) }
+      end
     elsif enum.respond_to?(:each_entry)
       if block
         enum.each_entry { |o| add(block.call(o)) }
