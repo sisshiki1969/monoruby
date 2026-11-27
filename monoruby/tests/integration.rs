@@ -141,6 +141,7 @@ mod hash_walk_mutation;
 mod heap_limit_div_between_sort_order;
 mod hidden_ivars;
 mod hidden_state;
+mod initgroups_argf_lineno_hash_recursion_kwsplat;
 mod inspect_dispatch;
 mod install_root;
 mod integer_64bit;

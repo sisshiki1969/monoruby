@@ -117,6 +117,11 @@ class Array
     self
   end
 
+  # `each` as defined here, for code that walks an Array's storage
+  # whatever its class's `each` says (`Set.new(ary)`).
+  alias __builtin_each each
+  private :__builtin_each
+
   def reverse_each
     return self.to_enum(:reverse_each) { __size } unless block_given?
     # `rb_ary_reverse_each`: the length is read again after every
@@ -131,7 +136,14 @@ class Array
     self
   end
 
+  # `each_with_index`, `partition`, `flat_map` / `collect_concat`,
+  # `filter_map`, `find_all` and `tally` are Enumerable's in CRuby, which
+  # walk the elements with `each`: an Array subclass that overrides
+  # `each` gets Enumerable's method (#2219). (`grep`, `group_by`,
+  # `inject` / `reduce` and `sort_by`, written in Rust, make the same
+  # test.)
   def each_with_index
+    return super unless __each_basic?
     return self.to_enum(:each_with_index) { self.size } unless block_given?
     i = 0
     while i < __size
@@ -246,7 +258,7 @@ class Array
   # that fast-path, so it stays out of the Array re-opens.
 
   def tally(hash = nil)
-    return __tally_into(hash) unless hash.nil?
+    return __tally_into(hash) unless hash.nil? && __each_basic?
     h = {}
     # `tally_up`: the element is the key as it is (see `__tally_into`).
     each { |x| __tally_up(h, x) }
@@ -271,7 +283,102 @@ class Array
     res
   end
   alias filter select
-  alias find_all select
+
+  # Enumerable's in CRuby, unlike `select`: it collects each element as
+  # `each` yielded it.
+  def find_all
+    return super unless __each_basic?
+    return self.to_enum(:find_all) { self.size } unless block_given?
+    res = []
+    i = 0
+    while i < __size
+      x = __aref(i)
+      res << x if yield(x)
+      i += 1
+    end
+    res
+  end
+
+  # `none?`, `one?` and `take_while` are Array's own in CRuby
+  # (`rb_ary_none_p`, `rb_ary_one_p`, `rb_ary_take_while`), which walk
+  # the storage and never call `each` (#2219).
+  def none?(*pattern)
+    if pattern.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+    end
+    if !pattern.empty?
+      warn "warning: given block not used" if block_given?
+      pat = pattern[0]
+      i = 0
+      while i < __size
+        return false if pat === __aref(i)
+        i += 1
+      end
+    elsif block_given?
+      i = 0
+      while i < __size
+        return false if yield(__aref(i))
+        i += 1
+      end
+    else
+      i = 0
+      while i < __size
+        return false if __aref(i)
+        i += 1
+      end
+    end
+    true
+  end
+
+  def one?(*pattern)
+    if pattern.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{pattern.size}, expected 0..1)"
+    end
+    return false if __size == 0
+    found = false
+    if !pattern.empty?
+      warn "warning: given block not used" if block_given?
+      pat = pattern[0]
+      i = 0
+      while i < __size
+        if pat === __aref(i)
+          return false if found
+          found = true
+        end
+        i += 1
+      end
+    elsif block_given?
+      i = 0
+      while i < __size
+        if yield(__aref(i))
+          return false if found
+          found = true
+        end
+        i += 1
+      end
+    else
+      i = 0
+      while i < __size
+        if __aref(i)
+          return false if found
+          found = true
+        end
+        i += 1
+      end
+    end
+    found
+  end
+
+  def take_while
+    return self.to_enum(:take_while) unless block_given?
+    i = 0
+    while i < __size
+      break unless yield(__aref(i))
+      i += 1
+    end
+    # `rb_ary_take`: what the receiver holds now, up to that point.
+    __aref(0, i)
+  end
 
   def reject
     return self.to_enum(:reject) { __size } unless block_given?
@@ -286,6 +393,7 @@ class Array
   end
 
   def partition
+    return super unless __each_basic?
     return self.to_enum(:partition) { self.size } unless block_given?
     first = []
     second = []
@@ -303,6 +411,7 @@ class Array
   end
 
   def flat_map
+    return super unless __each_basic?
     return self.to_enum(__callee__) { self.size } unless block_given?
     res = []
     i = 0
@@ -338,6 +447,7 @@ class Array
   alias collect_concat flat_map
 
   def filter_map
+    return super unless __each_basic?
     return to_enum(:filter_map) { self.size } unless block_given?
     res = []
     each do |x|

@@ -765,6 +765,34 @@ fn check_single_arg_expand(
     None
 }
 
+/// The Hash of a call site whose only keyword source is one `**h` (no
+/// `k: v` of its own), after `coerce_hash_splat_args`; `None` for any
+/// other shape, and for `**nil`.
+fn single_kw_splat(globals: &Globals, callid: CallSiteId, caller_lfp: Lfp) -> Option<Value> {
+    let cs = &globals[callid];
+    if cs.kw_len() != 1 || !matches!(cs.kw_order()[0], KwElem::Splat) {
+        return None;
+    }
+    caller_lfp
+        .register(cs.kw_pos)
+        .filter(|v| v.try_hash_ty().is_some())
+}
+
+/// `rb_hash_dup`, what CRuby passes for `f(**h)` when `h` is the only
+/// keyword source: a Hash of `h`'s real class with its pairs, default
+/// (value or proc), `compare_by_identity` and instance variables — but
+/// neither its singleton class nor its frozen or ruby2_keywords state —
+/// made without asking a key for its `#hash` again (#2200).
+fn kw_splat_dup(globals: &mut Globals, h: Value) -> Value {
+    let mut copy = h.dup();
+    let real = h.real_class(&globals.store).id();
+    if copy.class() != real {
+        copy.change_class_fresh(real);
+        globals.store.relayout_ivars(copy, h.class());
+    }
+    copy
+}
+
 ///
 /// Set arguments for the callee frame.
 ///
@@ -861,7 +889,22 @@ fn set_callee_frame_arguments(
         return Err(MonorubyErr::argumenterr("no keywords accepted"));
     }
 
-    let ex = if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
+    let ex = if globals[callee_fid].no_keyword()
+        && globals[callid].kw_may_exists()
+        && let Some(src) = single_kw_splat(globals, callid, caller_lfp)
+    {
+        // `**h` alone: the Hash is copied as a whole (`rb_hash_dup`),
+        // its keys not hashed again (#2200).
+        if src.as_hashmap_inner().len() == 0 {
+            None
+        } else {
+            let copy = kw_splat_dup(globals, src);
+            if globals[callee_fid].ruby2_keywords() {
+                copy.try_hash_ty().unwrap().set_ruby2_keywords_flag();
+            }
+            Some(copy)
+        }
+    } else if globals[callee_fid].no_keyword() && globals[callid].kw_may_exists() {
         // handle excessive keyword arguments
         let mut h = RubyMap::default();
         // In source order, so the trailing Hash this becomes carries the
@@ -1584,6 +1627,28 @@ fn bind_keywords(
     let param_id = |globals: &Globals, name: IdentId| -> Option<usize> {
         globals[callee].kw_names().iter().position(|n| *n == name)
     };
+
+    // `**h` alone into a `**kwrest`: the rest is a copy of the Hash
+    // (`rb_hash_dup`) less the keys the parameters take, its keys not
+    // hashed again (#2200). Nothing is unknown when there is a rest.
+    if has_kw_rest
+        && r2k_kw.is_none()
+        && let Some(src) = single_kw_splat(globals, caller, caller_lfp)
+    {
+        let rest = kw_splat_dup(globals, src);
+        let mut rest_hash = rest.try_hash_ty().unwrap();
+        for id in 0..kw_num {
+            let name = globals[callee].kw_names()[id];
+            // A Symbol key is taken out by the table's own probe, which
+            // asks no key anything.
+            if let Some(v) = rest_hash.remove(Value::symbol(name), vm, globals)? {
+                unsafe { callee_lfp.set_register(callee_kw_pos + id, Some(v)) }
+            }
+        }
+        let rest_slot = globals[callee].kw_rest().unwrap();
+        unsafe { callee_lfp.set_register(rest_slot, Some(rest)) }
+        return Ok(vec![]);
+    }
 
     for i in 0..kw_len + usize::from(r2k_kw.is_some()) {
         match source(globals, i) {

@@ -315,7 +315,9 @@ impl<T: Copy + PartialEq> RecursionStack<T> {
     /// Remove *id*: normally the top of the stack, but a Fiber switch
     /// inside a walk can finish an inner walk under an outer one.
     fn remove(&mut self, id: &T) {
-        if let Some(pos) = self.0.iter().rposition(|x| x == id) {
+        if self.0.last() == Some(id) {
+            self.0.pop();
+        } else if let Some(pos) = self.0.iter().rposition(|x| x == id) {
             self.0.remove(pos);
         }
     }
@@ -343,59 +345,75 @@ where
 }
 
 thread_local! {
-    /// Tracks whether the *outer* recursion-protected hash call has seen any
-    /// nested recursion. Used by [`exec_recursive_outer`] to surface inner
-    /// cycles to the outermost frame so that two structures with cycles at
-    /// different depths still hash to the same sentinel value (matching
-    /// CRuby's `rb_exec_recursive_outer`).
-    static OUTER_RECURSION_DEPTH: std::cell::RefCell<usize> = const { std::cell::RefCell::new(0) };
-    static OUTER_RECURSION_HIT: std::cell::RefCell<bool> = const { std::cell::RefCell::new(false) };
+    /// The id of the tag an inner recursion threw to unwind to the
+    /// outermost call, while that throw is in flight.
+    static OUTER_RECURSION_TAG: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
-/// Execute `f` with **outer**-recursion protection: if any recursion is
-/// detected at *any* depth during `f` (including transitively, via the same
-/// guard set), the **outermost** call returns `on_recursive` instead of `f`'s
-/// result. Equivalent to CRuby's `rb_exec_recursive_outer`.
+/// Execute `f` with **outer**-recursion protection, CRuby's
+/// `rb_exec_recursive_outer`: when `id` comes round again under `f` at
+/// any depth (via the same guard set), the inner call does not run but
+/// *throws* to the outermost call, which then returns `on_recursive`
+/// instead of `f`'s result. The throw unwinds whatever Ruby ran in
+/// between, as CRuby's does: a key whose `#hash` deletes itself from the
+/// Hash being probed stops after one nesting level instead of recursing
+/// until the stack runs out (#2226). A `rescue` does not catch it, and
+/// an `ensure` runs.
 ///
-/// This is what `Struct#hash` uses so that two structs that are cyclic at
-/// different depths still hash to the same value (the spec requirement that
-/// `car.hash == similar_car.hash` when one wraps the other and one is
-/// directly self-cyclic).
+/// [`Value::hash_value`] puts it around the hash of every element or key
+/// that is not a leaf — an Array, a Hash, an object with a `#hash` of its
+/// own — as `rb_hash` does, so that two structures that are cyclic at
+/// different depths still hash to the same value (the spec requirement
+/// that `car.hash == similar_car.hash` when one wraps the other and one
+/// is directly self-cyclic).
+//
+// Inlined, so that `f`'s `Result` (large in its `Err`) is written straight
+// into the caller's instead of being copied out; the rare paths are out of
+// line.
+#[inline(always)]
 pub(crate) fn exec_recursive_outer<T, F>(id: u64, f: F, on_recursive: T) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
-    let is_outer = OUTER_RECURSION_DEPTH.with(|d| {
-        let was = *d.borrow() == 0;
-        *d.borrow_mut() += 1;
-        was
-    });
-    if is_outer {
-        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = false);
-    }
-    let on_stack = HASH_RECURSION_GUARD.with(|g| !g.borrow_mut().insert(id));
-    if on_stack {
-        // Inner recursion: surface to outer.
-        OUTER_RECURSION_HIT.with(|h| *h.borrow_mut() = true);
-        OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
-        return Ok(on_recursive);
-    }
+    // The guard set is this function's alone, so the call that finds it
+    // empty is the outermost.
+    let Some(outermost) = HASH_RECURSION_GUARD.with(|g| {
+        let mut g = g.borrow_mut();
+        let outermost = g.0.is_empty();
+        g.insert(id).then_some(outermost)
+    }) else {
+        return Err(throw_to_outermost());
+    };
     let result = f();
     HASH_RECURSION_GUARD.with(|g| {
         g.borrow_mut().remove(&id);
     });
-    OUTER_RECURSION_DEPTH.with(|d| *d.borrow_mut() -= 1);
-    if is_outer {
-        let hit = OUTER_RECURSION_HIT.with(|h| {
-            let v = *h.borrow();
-            *h.borrow_mut() = false;
-            v
-        });
-        if hit {
-            return Ok(on_recursive);
-        }
+    // Rebuilt rather than passed on, so that only an error is moved.
+    match result {
+        Ok(v) => Ok(v),
+        Err(err) if outermost && is_throw_to_outermost(&err) => Ok(on_recursive),
+        Err(err) => Err(err),
     }
-    result
+}
+
+/// Inner recursion: unwind to the outermost [`exec_recursive_outer`].
+/// The tag is a fresh object, so no `catch` of the program's can take
+/// it; the throw in flight holds it.
+#[cold]
+#[inline(never)]
+fn throw_to_outermost() -> MonorubyErr {
+    let tag = Value::object(OBJECT_CLASS);
+    OUTER_RECURSION_TAG.set(Some(tag.id()));
+    MonorubyErr::throw(tag, Value::nil())
+}
+
+/// Whether *err*, reaching the outermost [`exec_recursive_outer`], is the
+/// throw an inner one started.
+#[cold]
+#[inline(never)]
+fn is_throw_to_outermost(err: &MonorubyErr) -> bool {
+    let tag = OUTER_RECURSION_TAG.take();
+    matches!(err.kind(), MonorubyErrKind::Throw(t, _) if Some(t.id()) == tag)
 }
 
 /// Execute `f` with recursion protection for paired operations (==, <=>, eql?).
@@ -537,11 +555,21 @@ impl Value {
                 // `#hash` call per probe. `Set` (`ObjTy::HASH` with its
                 // own, order-independent `Set#hash`) falls through the
                 // same way.
+                //
+                // `rb_hash` guards the call (`rb_exec_recursive_outer_mid`)
+                // and `Array#hash` / `Hash#hash` themselves do not, so a
+                // cyclic structure hashes the same whether it is asked
+                // directly or found inside another: `a.hash == [a].hash`
+                // for `a = [a]`.
                 ObjTy::ARRAY if g.store.has_builtin_container_hash(self, ObjTy::ARRAY) => {
-                    self.array_hash_value(e, g)
+                    self.array_hash_value(e, g, true)
                 }
                 ObjTy::HASH if g.store.has_builtin_container_hash(self, ObjTy::HASH) => {
-                    crate::builtins::hash::hash_hash_value(e, g, self)
+                    exec_recursive_outer(
+                        self.id(),
+                        || crate::builtins::hash::hash_hash_value(e, g, self),
+                        0,
+                    )
                 }
                 // A plain object — one that inherits the builtin identity
                 // `hash` — is the common case for a Hash or Set keyed by
@@ -552,7 +580,14 @@ impl Value {
                 _ => {
                     // `rb_hash`: send `#hash`, and coerce an answer that
                     // is not an Integer with `#to_int`.
-                    let h = e.invoke_method_inner(g, IdentId::HASH, self, &[], None, None)?;
+                    // Under the outer-recursion guard, as `rb_hash` calls it
+                    // (`rb_exec_recursive_outer_mid`): a `#hash` that comes
+                    // back to `self` makes the outermost call 0.
+                    let h = exec_recursive_outer(
+                        self.id(),
+                        || e.invoke_method_inner(g, IdentId::HASH, self, &[], None, None),
+                        Value::integer(0),
+                    )?;
                     match h.unpack() {
                         RV::Fixnum(i) => Ok(i),
                         RV::BigInt(b) => Ok(Self::bignum_hash_value(b)),
@@ -565,9 +600,17 @@ impl Value {
 
     /// `rb_ary_hash`: the length, then each element's hash value. A
     /// structure that is cyclic at any depth hashes to the one sentinel
-    /// (CRuby's `rb_exec_recursive_outer`), so `rec.hash == [[rec]].hash`
-    /// when `rec.eql?([[rec]])`.
-    pub(crate) fn array_hash_value(self, e: &mut Executor, g: &mut Globals) -> Result<i64> {
+    /// (CRuby's `rb_exec_recursive_outer`, which `rb_hash` puts around
+    /// each element), so `rec.hash == [[rec]].hash` when
+    /// `rec.eql?([[rec]])`. `guarded` is whether the Array is itself an
+    /// element (or a key) being hashed — `rb_hash`'s guard — rather than
+    /// the receiver of `Array#hash`, which has none.
+    pub(crate) fn array_hash_value(
+        self,
+        e: &mut Executor,
+        g: &mut Globals,
+        guarded: bool,
+    ) -> Result<i64> {
         use std::hash::Hasher;
         // An Array of leaves — the composite key `[id, :name]` — cannot
         // lead back to itself, and none of its elements is asked: no
@@ -584,26 +627,27 @@ impl Value {
         }) {
             return Ok(h.hash_value());
         }
-        exec_recursive_outer(
-            self.id(),
-            || {
-                let mut h = hash_value_hasher();
-                h.write_u64(self.as_array().len() as u64);
-                // An element's `#hash` is Ruby and may change the
-                // receiver, so the length is read and the element taken
-                // afresh each round (#2172) — and through a reference
-                // made afresh too: one `&ArrayInner` held over the calls
-                // lets the compiler read the length once, and the loop
-                // then walks elements the method has popped.
-                let mut i = 0;
-                while let Some(v) = self.as_array().get(i).copied() {
-                    h.write_i64(v.hash_value(e, g)?);
-                    i += 1;
-                }
-                Ok(h.hash_value())
-            },
-            0,
-        )
+        let mut body = || {
+            let mut h = hash_value_hasher();
+            h.write_u64(self.as_array().len() as u64);
+            // An element's `#hash` is Ruby and may change the receiver,
+            // so the length is read and the element taken afresh each
+            // round (#2172) — and through a reference made afresh too:
+            // one `&ArrayInner` held over the calls lets the compiler
+            // read the length once, and the loop then walks elements the
+            // method has popped.
+            let mut i = 0;
+            while let Some(v) = self.as_array().get(i).copied() {
+                h.write_i64(v.hash_value(e, g)?);
+                i += 1;
+            }
+            Ok(h.hash_value())
+        };
+        if guarded {
+            exec_recursive_outer(self.id(), body, 0)
+        } else {
+            body()
+        }
     }
 
     /// `recursive_eql` of array.c: whether each element of the Array

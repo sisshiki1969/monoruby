@@ -264,7 +264,7 @@ module Enumerable
   alias find_all filter
 
   def filter_map
-    return self.to_enum(:filter_map) unless block_given?
+    return self.to_enum(:filter_map) { __check_funcall(self, :size, nil) } unless block_given?
     res = []
     __gather_each do |x|
       y = yield(x)

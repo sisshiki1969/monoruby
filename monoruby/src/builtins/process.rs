@@ -124,6 +124,7 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_module_func(klass, "groups=", process_groups_set, 1);
     globals.define_builtin_module_func(klass, "maxgroups", process_maxgroups, 0);
     globals.define_builtin_module_func(klass, "maxgroups=", process_maxgroups_set, 1);
+    globals.define_builtin_module_func(klass, "initgroups", process_initgroups, 2);
     globals.define_builtin_module_func(klass, "argv0", process_argv0, 0);
     globals.define_builtin_module_func_with(
         klass,
@@ -348,10 +349,10 @@ fn process_getrlimit(
     let rc = unsafe { libc::getrlimit(resource as _, &mut rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
+        return Err(MonorubyErr::errno_with_msg(
             &globals.store,
             &err,
-            format!("getrlimit"),
+            "getrlimit",
         ));
     }
     Ok(Value::array_from_vec(vec![
@@ -390,10 +391,10 @@ fn process_setrlimit(
     let rc = unsafe { libc::setrlimit(resource as _, &rlim) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
+        return Err(MonorubyErr::errno_with_msg(
             &globals.store,
             &err,
-            format!("setrlimit"),
+            "setrlimit",
         ));
     }
     Ok(Value::nil())
@@ -565,11 +566,7 @@ fn process_getpgid(
     let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
     if pgid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            format!("getpgid"),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(pgid as i64))
 }
@@ -585,11 +582,7 @@ fn process_setpgrp(
     let rc = unsafe { libc::setpgid(0, 0) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            format!("setpgrp"),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(0))
 }
@@ -606,11 +599,7 @@ fn process_setpgid(
     let rc = unsafe { libc::setpgid(pid as libc::pid_t, pgid as libc::pid_t) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            format!("setpgid"),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(0))
 }
@@ -630,11 +619,7 @@ fn process_getsid(
     let sid = unsafe { libc::getsid(pid as libc::pid_t) };
     if sid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            format!("getsid"),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(sid as i64))
 }
@@ -649,11 +634,7 @@ fn process_setsid(
     let sid = unsafe { libc::setsid() };
     if sid < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            format!("setsid"),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(sid as i64))
 }
@@ -685,11 +666,7 @@ fn process_getpriority(
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if prio == -1 && errno != 0 {
             let err = std::io::Error::from_raw_os_error(errno);
-            return Err(MonorubyErr::from_io_err(
-                &globals.store,
-                &err,
-                "getpriority".to_string(),
-            ));
+            return Err(sys_fail(&globals.store, &err));
         }
         Ok(Value::integer(prio as i64))
     }
@@ -733,11 +710,7 @@ fn process_setpriority(
     let res = unsafe { libc::setpriority(which as _, who, prio) };
     if res < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            "setpriority".to_string(),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     Ok(Value::integer(0))
 }
@@ -755,32 +728,95 @@ fn process_groups(
     _lfp: Lfp,
     _: BytecodePtr,
 ) -> Result<Value> {
+    current_groups(globals)
+}
+
+/// The supplementary group list, getgroups(2).
+fn current_groups(globals: &Globals) -> Result<Value> {
     // First call with size 0 returns the number of supplementary
     // groups; then read them into a sized buffer.
     let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
     if count < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            "getgroups".to_string(),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     let mut buf: Vec<libc::gid_t> = vec![0; count as usize];
     let n = unsafe { libc::getgroups(count, buf.as_mut_ptr()) };
     if n < 0 {
         let err = std::io::Error::last_os_error();
-        return Err(MonorubyErr::from_io_err(
-            &globals.store,
-            &err,
-            "getgroups".to_string(),
-        ));
+        return Err(sys_fail(&globals.store, &err));
     }
     let elems: Vec<Value> = buf[..n as usize]
         .iter()
         .map(|g| Value::integer(*g as i64))
         .collect();
     Ok(Value::array_from_vec(elems))
+}
+
+///
+/// ### Process.initgroups
+///
+/// - initgroups(username, gid) -> [Integer]
+///
+/// initgroups(3): the supplementary group list from the group database
+/// for `username`, plus `gid`; answers the new `Process.groups`. As in
+/// CRuby the group is converted first (a name is looked up, anything else
+/// is `NUM2GIDT`), then the user name (`StringValueCStr`), and a refusal
+/// is the bare `Errno` (`rb_sys_fail(0)`).
+///
+/// [https://docs.ruby-lang.org/ja/latest/method/Process/m/initgroups.html]
+#[monoruby_builtin]
+fn process_initgroups(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    _: BytecodePtr,
+) -> Result<Value> {
+    let gid = obtain_gid(vm, globals, lfp.arg(1))?;
+    let user = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    user.check_c_str()?;
+    let user = std::ffi::CString::new(user.as_bytes()).unwrap();
+    // SAFETY: `user` is a NUL-terminated C string that outlives the call.
+    let rc = unsafe { libc::initgroups(user.as_ptr(), gid as _) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(sys_fail(&globals.store, &err));
+    }
+    current_groups(globals)
+}
+
+/// CRuby's `rb_sys_fail(0)`: the `Errno` of *err* with the bare
+/// description as its message.
+fn sys_fail(store: &Store, err: &std::io::Error) -> MonorubyErr {
+    MonorubyErr::from_io_err(store, err, crate::globals::errno_description(err))
+}
+
+/// CRuby's `OBJ2GID`: a Fixnum, or anything that does not convert to a
+/// String, is a number (`NUM2GIDT`); a String names a group.
+fn obtain_gid(vm: &mut Executor, globals: &mut Globals, v: Value) -> Result<libc::gid_t> {
+    let name = if v.try_fixnum().is_some() {
+        None
+    } else {
+        v.check_string_type(vm, globals)?
+    };
+    let Some(name) = name else {
+        return Ok(crate::builtins::spawn::num2uint(vm, globals, v)? as libc::gid_t);
+    };
+    let name = name.as_rstring_inner();
+    name.check_c_str()?;
+    let c = std::ffi::CString::new(name.as_bytes()).unwrap();
+    // SAFETY: getgrnam returns a pointer to a static group entry or NULL,
+    // and the entry is read before anything else can overwrite it.
+    let gid = unsafe {
+        let g = libc::getgrnam(c.as_ptr());
+        (!g.is_null()).then(|| (*g).gr_gid)
+    };
+    gid.ok_or_else(|| {
+        MonorubyErr::argumenterr(format!(
+            "can't find group for {}",
+            String::from_utf8_lossy(name.as_bytes())
+        ))
+    })
 }
 
 ///
