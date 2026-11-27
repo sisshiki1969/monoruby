@@ -168,7 +168,6 @@ impl Globals {
                     count
                 );
             }
-            crate::codegen::jitgen::join_profile::dump(&self.store);
         }
         #[cfg(feature = "jit-log")]
         {

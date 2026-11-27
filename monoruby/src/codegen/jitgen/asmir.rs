@@ -638,10 +638,6 @@ impl AsmIr {
                     pc: self.ivar_base_release_pc,
                 });
             }
-            #[cfg(feature = "profile")]
-            if matches!(inst, AsmInst::GuardClass(..)) {
-                crate::codegen::jitgen::join_profile::count_guard_class();
-            }
             // A source-position record emits no code. A class test on rdi
             // leaves it as it was on the fall-through path (both backends
             // test or compare it in place, using scratch registers), so what

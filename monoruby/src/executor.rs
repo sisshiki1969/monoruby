@@ -3509,8 +3509,9 @@ impl Executor {
     }
 
     ///
-    /// [`Self::set_class_variable`] for a `StoreCvar` site, through the
-    /// site's cache word (see [`Self::find_class_variable_cached`]).
+    /// Set a class variable with `name` to `val` for a `StoreCvar` site:
+    /// in the class that already defines it, else in the lexical parent,
+    /// through the site's cache word (see [`Self::find_class_variable_cached`]).
     ///
     pub(crate) fn set_class_variable_cached(
         &self,
@@ -3536,24 +3537,6 @@ impl Executor {
         // Read after the store: creating the variable moved the state, and
         // from now on the name resolves to `owner` from this scope.
         *cache = ((crate::globals::cvar_state() as u64) << 32) | owner.id().u32() as u64;
-        Ok(())
-    }
-
-    ///
-    /// Set a class variable with `name` to `value`.
-    ///
-    pub(crate) fn set_class_variable(
-        &self,
-        globals: &mut Globals,
-        name: IdentId,
-        val: Value,
-    ) -> Result<()> {
-        let parent = self.get_parent(globals)?;
-        let parent = match globals.search_class_variables_superclass(parent, name) {
-            Some((module, _)) => module,
-            None => parent,
-        };
-        globals.set_class_variable(parent.id(), name, val);
         Ok(())
     }
 

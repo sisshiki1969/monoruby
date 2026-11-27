@@ -18,8 +18,6 @@ pub(crate) use self::context::JitContext;
 use self::context::CondBrSink;
 pub(in crate::codegen) use self::context::SplicePlan;
 pub(crate) use self::state::{AbstractFrame, AbstractState};
-#[cfg(feature = "profile")]
-pub(crate) use self::state::join_profile;
 use state::{DeoptPoint, FrameRef, Keep, LinkMode, ReturnState};
 
 use super::*;

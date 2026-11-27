@@ -1029,22 +1029,10 @@ fn one_enc_spec(
     Ok(from_mode.or(from_opts))
 }
 
-/// CRuby's `rb_io_ext_int_to_encs` for what [`open_enc_names`] answered.
-/// Binary mode reads ASCII-8BIT only when no encoding was named at all:
-/// a named one that turned out unknown still leaves the default.
-fn resolve_named_encodings(
-    globals: &mut Globals,
-    names: Option<EncNames>,
-    binmode: bool,
-    readable: bool,
-    writable: bool,
-) -> (ExtSlot, Option<Value>) {
-    let de = enc_default_external_obj(globals);
-    let di = enc_default_internal_obj(globals);
-    resolve_names_with(globals, names, binmode, readable, writable, de, di)
-}
-
-/// [`resolve_named_encodings`] under the given defaults.
+/// CRuby's `rb_io_ext_int_to_encs` for what [`open_enc_names`] answered,
+/// under the given default external / internal encodings. Binary mode
+/// reads ASCII-8BIT only when no encoding was named at all: a named one
+/// that turned out unknown still leaves the default.
 fn resolve_names_with(
     globals: &Globals,
     names: Option<EncNames>,
@@ -3532,6 +3520,41 @@ fn io_class_readlines(
         .coerce_to_path_rstring(vm, globals)?
         .to_str()?
         .to_string();
+    let ary = Value::array_empty();
+    vm.with_temp_scope(|vm| {
+        // Root the result lines across the per-line allocations.
+        vm.temp_push(ary);
+        // Read through the getline machinery, as `IO.foreach`: each line
+        // that counts is `$.` (#2263). No Ruby code runs between two
+        // lines, so `$.` is set once at the end.
+        let mut lineno = 0i64;
+        let result = class_each_line(vm, globals, lfp, path, "readlines", |_, _, line, counts| {
+            if counts {
+                lineno += 1;
+            }
+            ary.as_array().push(line);
+            Ok(())
+        });
+        if lineno > 0 {
+            globals.set_lineno(Value::integer(lineno));
+        }
+        result.map(|_| ary)
+    })
+}
+
+/// The line loop of `IO.readlines` and `IO.foreach`: open `path` with
+/// the options in `lfp` (`class_getline_args`), and hand each line to
+/// `on_line` with whether it counts for `$.` (a line the limit cut does
+/// not). The file is closed when the loop ends, by error or not; `name`
+/// is the method named in the limit error.
+fn class_each_line(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    path: String,
+    name: &str,
+    mut on_line: impl FnMut(&mut Executor, &mut Globals, Value, bool) -> Result<()>,
+) -> Result<()> {
     let (mut sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts, sep_src) =
         class_getline_args(vm, globals, lfp)?;
     let universal = class_reads_universal_newline(
@@ -3541,7 +3564,9 @@ fn io_class_readlines(
         lfp.try_arg(3).and_then(|v| v.try_hash_ty()),
     )?;
     if limit == Some(0) {
-        return Err(MonorubyErr::argumenterr("invalid limit: 0 for readlines"));
+        return Err(MonorubyErr::argumenterr(format!(
+            "invalid limit: 0 for {name}"
+        )));
     }
     reject_unreadable_mode(&path, &mode)?;
     let file = std::fs::File::open(&path)
@@ -3586,11 +3611,8 @@ fn io_class_readlines(
         }
     };
     vm.with_temp_scope(|vm| {
-        // Root the transient File IO (and the result lines) across the
-        // per-line allocations below.
+        // Root the transient File IO across the per-line work below.
         vm.temp_push(io_val);
-        vm.temp_array_new(None);
-        let mut lineno = 0i64;
         let result = (|| {
             while let Some(mut buf) =
                 blocking_io_region(vm, globals, io_val, libc::POLLIN, |store| {
@@ -3612,19 +3634,11 @@ fn io_class_readlines(
                     vec![]
                 };
                 let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
-                // Read through the getline machinery, as `IO.foreach`:
-                // each line that counts is `$.` (#2263). No Ruby code
-                // runs between two lines, so `$.` is set once below.
-                if line_counts(ended, line.as_rstring_inner().len(), limit) {
-                    lineno += 1;
-                }
-                vm.temp_array_push(line);
+                let counts = line_counts(ended, line.as_rstring_inner().len(), limit);
+                on_line(vm, globals, line, counts)?;
             }
-            Ok(vm.temp_pop())
+            Ok(())
         })();
-        if lineno > 0 {
-            globals.set_lineno(Value::integer(lineno));
-        }
         // Close the fd now — leaving it to GC lets descriptors pile up.
         let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
@@ -3742,101 +3756,28 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         .to_str()?
         .to_string();
     let p = vm.get_block_data(globals, bh)?;
-    let (mut sep, limit, chomp, (mode, ext_obj, int_obj, bom), ecopts, sep_src) =
-        class_getline_args(vm, globals, lfp)?;
-    let universal = class_reads_universal_newline(
+    // CRuby's foreach reads through the getline machinery, which updates
+    // `$.` and `$_` per line (and leaves `$_` nil at EOF). A line the
+    // limit cut leaves `$.` alone.
+    let mut lineno = 0i64;
+    class_each_line(
         vm,
         globals,
-        &mode,
-        lfp.try_arg(3).and_then(|v| v.try_hash_ty()),
+        lfp,
+        path,
+        "foreach",
+        |vm, globals, line, counts| {
+            if counts {
+                lineno += 1;
+                globals.set_lineno(Value::integer(lineno));
+            }
+            vm.set_last_read_line(line);
+            vm.invoke_block(globals, &p, &[line])?;
+            Ok(())
+        },
     )?;
-    if limit == Some(0) {
-        return Err(MonorubyErr::argumenterr("invalid limit: 0 for foreach"));
-    }
-    reject_unreadable_mode(&path, &mode)?;
-    let file = std::fs::File::open(&path)
-        .map_err(|e| MonorubyErr::errno_with_path(&globals.store, &e, "rb_sysopen", &path))?;
-    let mut io_val = Value::new_file(file, path, None, true, false);
-    set_io_ecopts(globals, io_val, ecopts)?;
-    // A `BOM|` encoding: the mark at the head of the stream is taken off
-    // and names the external encoding (#2217). The fresh IO is rooted
-    // while that read runs, and closed when the pair it settles on turns
-    // out to be one a text-mode read cannot take.
-    let (ext_obj, int_obj) = if let Some(names) = bom {
-        let binmode = mode.split(':').next().unwrap_or("").contains('b');
-        let settled = vm.with_temp_scope(|vm| {
-            vm.temp_push(io_val);
-            let detected = consume_bom(vm, globals, io_val)?;
-            let (ext, int) = class_read_bom_encs(globals, names, detected);
-            class_read_check_binmode(globals, ext, int, binmode)?;
-            Ok((ext, int))
-        });
-        match settled {
-            Ok(pair) => pair,
-            Err(e) => {
-                let _ = io_val.as_io_inner_mut().close(&globals.store);
-                return Err(e);
-            }
-        }
-    } else {
-        (ext_obj, int_obj)
-    };
-    let complete_utf8 = ext_completes_utf8(globals, ext_obj);
-    if universal {
-        io_val.as_io_inner_mut().set_universal_newline(true);
-    }
-    let (converts, wide, conv) = {
-        let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
-        match line_split(globals, &mut sep, sep_src, ext, intl) {
-            Ok(wide) => (read_converts(ext, intl), wide, conv_pair(ext, intl)),
-            Err(e) => {
-                let _ = io_val.as_io_inner_mut().close(&globals.store);
-                return Err(e);
-            }
-        }
-    };
-    vm.with_temp_scope(|vm| {
-        // Root the transient File IO across the block calls below.
-        vm.temp_push(io_val);
-        let mut lineno = 0i64;
-        let result = (|| {
-            while let Some(mut buf) =
-                blocking_io_region(vm, globals, io_val, libc::POLLIN, |store| {
-                    getline_with(
-                        io_val,
-                        sep.as_deref(),
-                        limit,
-                        complete_utf8,
-                        wide.as_ref(),
-                        conv,
-                        store,
-                    )
-                })?
-            {
-                let ended = limit.is_some() && ends_with_sep(&buf, sep.as_deref(), wide.as_ref());
-                let tail = if chomp {
-                    chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
-                } else {
-                    vec![]
-                };
-                let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
-                // CRuby's foreach reads through the getline machinery,
-                // which updates `$.` and `$_` per line (and leaves `$_`
-                // nil at EOF). A line the limit cut leaves `$.` alone.
-                if line_counts(ended, line.as_rstring_inner().len(), limit) {
-                    lineno += 1;
-                    globals.set_lineno(Value::integer(lineno));
-                }
-                vm.set_last_read_line(line);
-                vm.invoke_block(globals, &p, &[line])?;
-            }
-            vm.set_last_read_line(Value::nil());
-            Ok(Value::nil())
-        })();
-        // Close the fd now — leaving it to GC lets descriptors pile up.
-        let _ = io_val.as_io_inner_mut().close(&globals.store);
-        result
-    })
+    vm.set_last_read_line(Value::nil());
+    Ok(Value::nil())
 }
 
 ///
@@ -7301,7 +7242,7 @@ fn consume_bom(vm: &mut Executor, globals: &mut Globals, mut io: Value) -> Resul
 fn detect_and_consume_bom(
     vm: &mut Executor,
     globals: &mut Globals,
-    mut io: Value,
+    io: Value,
 ) -> Result<Option<Value>> {
     let Some(enc) = consume_bom(vm, globals, io)? else {
         return Ok(None);

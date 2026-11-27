@@ -3445,7 +3445,7 @@ fn class_variable_set(
     // defines it, update *that* definition instead of shadowing a fresh copy
     // on the receiver (CRuby's `rb_cvar_set` walks to the defining class).
     // This mirrors the `@@x = v` assignment path
-    // (`Executor::set_class_variable`); shadowing would otherwise make a
+    // (`Executor::set_class_variable_cached`); shadowing would otherwise make a
     // later `class_variable_get` raise "class variable … is overtaken".
     let module = globals.store[class_id].get_module();
     let target = match globals.search_class_variables_superclass(module, name) {

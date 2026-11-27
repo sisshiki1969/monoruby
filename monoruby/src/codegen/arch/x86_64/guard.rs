@@ -102,6 +102,30 @@ impl Codegen {
     /// - R(*reg*): Value
     ///
     pub(super) fn guard_class(&mut self, reg: GP, class_id: CachedClass, fail: &DestLabel) {
+        self.guard_class_inner(reg, class_id, fail, None)
+    }
+
+    ///
+    /// Class guard used in JIT dispatch stub.
+    ///
+    /// if *reg* is Bignum, always dispatched to VM entry.
+    ///
+    pub(crate) fn guard_class2(&mut self, reg: GP, class_id: CachedClass, fail: &DestLabel) {
+        let vm_entry = self.vm_entry();
+        self.guard_class_inner(reg, class_id, fail, Some(&vm_entry))
+    }
+
+    ///
+    /// [`Self::guard_class`], with an Integer guard that sends a Bignum to
+    /// *bignum* (when given) instead of *fail*.
+    ///
+    fn guard_class_inner(
+        &mut self,
+        reg: GP,
+        class_id: CachedClass,
+        fail: &DestLabel,
+        bignum: Option<&DestLabel>,
+    ) {
         let fail = if reg != GP::Rdi {
             let label = self.jit.label();
             if self.jit.get_page() == 0 {
@@ -130,12 +154,26 @@ impl Codegen {
             fail.clone()
         };
         match class_id.id() {
-            INTEGER_CLASS => {
-                monoasm!( &mut self.jit,
-                    testq R(reg as _), 0b001;
-                    jz fail;
-                );
-            }
+            INTEGER_CLASS => match bignum {
+                None => {
+                    monoasm!( &mut self.jit,
+                        testq R(reg as _), 0b001;
+                        jz fail;
+                    );
+                }
+                Some(bignum) => {
+                    let exit = self.jit.label();
+                    monoasm!( &mut self.jit,
+                        testq R(reg as _), 0b001;
+                        jnz exit;
+                    );
+                    self.guard_rvalue(reg, INTEGER_CLASS, &fail);
+                    monoasm!( &mut self.jit,
+                        jmp bignum;
+                    );
+                    self.jit.bind_label(exit);
+                }
+            },
             FLOAT_CLASS => {
                 let exit = self.jit.label();
                 monoasm!( &mut self.jit,
@@ -343,110 +381,6 @@ impl Codegen {
         {
             self.guard_class(reg, class_id, deopt);
         }
-    }
-
-    ///
-    /// Class guard used in JIT dispatch stub.
-    ///
-    /// if *reg* is Bignum, always dispatched to VM entry.
-    ///
-    pub(crate) fn guard_class2(&mut self, reg: GP, class_id: CachedClass, fail: &DestLabel) {
-        let vm_entry = self.vm_entry();
-        let fail = if reg != GP::Rdi {
-            let label = self.jit.label();
-            if self.jit.get_page() == 0 {
-                self.jit.select_page(1);
-                monoasm!( &mut self.jit,
-                label:
-                    movq rdi, R(reg as _);
-                    jmp fail;
-                );
-                self.jit.select_page(0);
-            } else {
-                // Already on the cold page (an outline bridge): the stub sits
-                // in place, jumped over. It must bind the *same* `label` the
-                // guard below branches to.
-                let exit = self.jit.label();
-                monoasm!( &mut self.jit,
-                    jmp exit;
-                label:
-                    movq rdi, R(reg as _);
-                    jmp fail;
-                exit:
-                );
-            }
-            label
-        } else {
-            fail.clone()
-        };
-        match class_id.id() {
-            INTEGER_CLASS => {
-                let exit = self.jit.label();
-                monoasm!( &mut self.jit,
-                    testq R(reg as _), 0b001;
-                    jnz exit;
-                );
-                self.guard_rvalue(reg, INTEGER_CLASS, &fail);
-                monoasm!( &mut self.jit,
-                    jmp vm_entry;
-                );
-                self.jit.bind_label(exit);
-            }
-            FLOAT_CLASS => {
-                let exit = self.jit.label();
-                monoasm!( &mut self.jit,
-                    testq R(reg as _), 0b001;
-                    jnz fail;
-                    testq R(reg as _), 0b010;
-                    jnz exit;
-                );
-                self.guard_rvalue(reg, FLOAT_CLASS, &fail);
-                self.jit.bind_label(exit);
-            }
-            NIL_CLASS => {
-                monoasm!( &mut self.jit,
-                    cmpq R(reg as _), (NIL_VALUE);
-                    jnz fail;
-                );
-            }
-            SYMBOL_CLASS => {
-                monoasm!( &mut self.jit,
-                    cmpb R(reg as _), (TAG_SYMBOL);
-                    jnz fail;
-                );
-            }
-            TRUE_CLASS => {
-                monoasm!( &mut self.jit,
-                    cmpq R(reg as _), (TRUE_VALUE);
-                    jnz fail;
-                );
-            }
-            FALSE_CLASS => {
-                monoasm!( &mut self.jit,
-                    cmpq R(reg as _), (FALSE_VALUE);
-                    jnz fail;
-                );
-            }
-            BOOL_CLASS => {
-                // TRUE_VALUE (0x1c) and FALSE_VALUE (0x14) differ only in
-                // bit 3, so OR'ing bit 3 in collapses both to TRUE_VALUE.
-                // No other tagged value lands at 0x1c after the OR. Use
-                // rax as scratch so the source register is preserved for
-                // the downstream consumer.
-                monoasm!( &mut self.jit,
-                    movq rax, R(reg as _);
-                    orq rax, 8;
-                    cmpq rax, (TRUE_VALUE);
-                    jnz fail;
-                );
-            }
-            _ => self.guard_rvalue(reg, class_id.id(), &fail),
-        }
-        //if reg != GP::Rdi {
-        //    monoasm!( &mut self.jit,
-        //        xchgq R(reg as _), rdi;
-        //    );
-        //}
     }
 
     pub(super) fn guard_array_ty(&mut self, r: GP, deopt: &DestLabel) {

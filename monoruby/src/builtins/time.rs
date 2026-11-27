@@ -1331,77 +1331,16 @@ fn time_build(
 /// every other slot's coercion (String → numeric, nil-default,
 /// month-name lookup, fractional sec → nsec, day/sec carry-over).
 fn from_args_skip_last(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsResult> {
-    // Wrap with a synthetic Lfp would be ideal, but the helper takes a
-    // real `Lfp`. Inline the body of `from_args` here, dropping the
-    // final `usec_arg` slot.
-    let year_arg = lfp.try_arg(0);
-    let mon_arg = lfp.try_arg(1);
-    let day_arg = lfp.try_arg(2);
-    let hour_arg = lfp.try_arg(3);
-    let min_arg = lfp.try_arg(4);
-    let sec_arg = lfp.try_arg(5);
-
-    let year = match year_arg {
-        Some(v) => match i32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        None => {
-            return Err(MonorubyErr::typeerr(
-                "no implicit conversion of nil into Integer",
-            ));
-        }
-    };
-    let mon = match mon_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_month_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        _ => 1,
-    };
-    let day = match day_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        _ => 1,
-    };
-    let hour = match hour_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        _ => 0,
-    };
-    let min = match min_arg {
-        Some(v) if !v.is_nil() => match u32::try_from(time_arg_to_i64(vm, globals, v)?) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        },
-        _ => 0,
-    };
-    let (sec, sec_fractional_nsec) = match sec_arg {
-        Some(v) if !v.is_nil() => time_sec_to_i64_nsec(vm, globals, v)?,
-        _ => (0, 0),
-    };
-    let sec_u32 = match u32::try_from(sec) {
-        Ok(i) => i,
-        Err(_) => return Ok(None),
-    };
-    let (frac_num, frac_den) = sec_arg
-        .filter(|v| !v.is_nil())
-        .and_then(arg_exact_fraction)
-        .unwrap_or_else(|| {
-            (
-                num::BigInt::from(sec_fractional_nsec),
-                num::BigInt::from(1_000_000_000i64),
-            )
-        });
-    Ok(Some((
-        build_naive_datetime(year, mon, day, hour, min, sec_u32, sec_fractional_nsec)?,
-        frac_num,
-        frac_den,
-    )))
+    // The fields of `from_args`, without the final `usec` slot.
+    let fields = [
+        lfp.try_arg(0),
+        lfp.try_arg(1),
+        lfp.try_arg(2),
+        lfp.try_arg(3),
+        lfp.try_arg(4),
+        lfp.try_arg(5),
+    ];
+    from_fields(vm, globals, fields, None)
 }
 
 /// Parse a `utc_offset` argument. Accepts:
@@ -2728,7 +2667,22 @@ fn from_args(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<ArgsR
             lfp.try_arg(6),
         )
     };
+    from_fields(
+        vm,
+        globals,
+        [year_arg, mon_arg, day_arg, hour_arg, min_arg, sec_arg],
+        usec_arg,
+    )
+}
 
+/// The `(year, mon, day, hour, min, sec)` fields and the optional `usec`
+/// of `Time.utc` / `Time.local` / `Time.new`, converted and validated.
+fn from_fields(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    [year_arg, mon_arg, day_arg, hour_arg, min_arg, sec_arg]: [Option<Value>; 6],
+    usec_arg: Option<Value>,
+) -> Result<ArgsResult> {
     let year = match year_arg {
         Some(v) => match i32::try_from(time_arg_to_i64(vm, globals, v)?) {
             Ok(i) => i,
