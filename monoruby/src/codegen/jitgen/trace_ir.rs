@@ -843,7 +843,7 @@ impl TraceIr {
     /// (`alias_method :-@, :binding`; `alias_method :[], :eval`), or run a
     /// block (`yield` to `&:name`). Such a callee sees every local of the
     /// frame that executes the instruction, so the frame liveness
-    /// (`SlotAnalysis::frame_live_out`, `doc/escape_analysis.md` §12)
+    /// (`SlotAnalysis::frame_live_out`, `doc/escape_analysis.md` §10)
     /// counts the instruction as a read of every local.
     ///
     /// Exhaustive by construction: a new instruction has to say which it

@@ -623,9 +623,6 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
-            // A block's plain return never hands an object over
-            // (`return_virtual_in_caller`).
-            return_virtual: _,
             reads_header,
         } = self.compile_specialized_func(
             state,

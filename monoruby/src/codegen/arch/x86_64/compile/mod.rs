@@ -82,7 +82,6 @@ impl Codegen {
             | AsmInst::ArrayMinMax { .. }
             | AsmInst::CreateArrayFrom { .. }
             | AsmInst::LoadCallerSlot { .. }
-            | AsmInst::StoreCallerSlot { .. }
             | AsmInst::NewHash(..)
             | AsmInst::HashInsert { .. }
             | AsmInst::ArrayConcat { .. }
@@ -211,7 +210,6 @@ impl Codegen {
             | AsmInst::StoreDynVarSpecialized { .. }
             | AsmInst::Inline(..)
             | AsmInst::ArrayIndex { .. }
-            | AsmInst::ElidedArrayIndex { .. }
             | AsmInst::ArrayIndexAssign { .. }
             | AsmInst::LoadFieldToReg { .. }
             | AsmInst::BoolFieldToReg { .. }
@@ -328,25 +326,9 @@ impl Codegen {
     }
 
     /// `**kwrest` fixup: build a const table of (name, slot) pairs and call
-    /// `correct_rest_kw(&table, lfp) -> kwrest Hash`, `lfp` being the frame
-    /// `base` names (the caller's `lfp == rbp - RBP_LOCAL_FRAME` for a
-    /// handed-over `**kwrest`, `VirtualSrc::CallerKw`).
-    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel, base: SlotBase) {
-        match base {
-            SlotBase::Own => self.lfp_into(GP::Rsi),
-            SlotBase::SavedFp => {
-                debug_assert_eq!(0, fdisp(), "a frameless body has no saved fp");
-                monoasm!( &mut self.jit,
-                    movq rsi, [rbp];
-                    subq rsi, (RBP_LOCAL_FRAME);
-                );
-            }
-            SlotBase::Window(delta) => {
-                monoasm!( &mut self.jit,
-                    lea  rsi, [r14 + (delta - fdisp())];
-                );
-            }
-        }
+    /// `correct_rest_kw(&table, lfp) -> kwrest Hash`.
+    pub(in crate::codegen::jitgen) fn emit_rest_kw(&mut self, table: DestLabel) {
+        self.lfp_into(GP::Rsi);
         monoasm!( &mut self.jit,
             lea  rdi, [rip + table];
             movq rax, (runtime::correct_rest_kw);
@@ -1795,22 +1777,6 @@ impl Codegen {
         self.caller_slot_addr(base, slot, GP::Rax);
         monoasm!( &mut self.jit,
             movq rax, [rax];
-        );
-        true
-    }
-
-    /// `slot`, addressed in the frame `base` names, <- `src`
-    /// (`AsmInst::StoreCallerSlot`).
-    pub(in crate::codegen::jitgen) fn emit_store_caller_slot(
-        &mut self,
-        base: SlotBase,
-        slot: SlotId,
-        src: GP,
-    ) -> bool {
-        debug_assert_ne!(src, GP::Rcx);
-        self.caller_slot_addr(base, slot, GP::Rcx);
-        monoasm!( &mut self.jit,
-            movq [rcx], R(src as _);
         );
         true
     }

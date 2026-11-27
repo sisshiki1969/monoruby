@@ -791,8 +791,7 @@ impl Executor {
             globals.store.record_class_new_fid();
             // Likewise `Array#each`, which array.rb defines.
             globals.store.record_array_each_fid();
-            // Likewise, the `Hash` methods hash.rb defines exist only now.
-            crate::builtins::hash::init_recv_escape_ruby(globals);
+            // Likewise, the `Range` methods range.rb defines exist only now.
             crate::builtins::range::init_recv_escape_ruby(globals);
             crate::builtins::init_leaf_builtins(globals);
         }

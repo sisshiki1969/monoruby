@@ -52,101 +52,17 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let (src, len) = (cs.args, cs.pos_num as u16);
-        if self.is_temp(dst) {
-            if len != 0 && (!self.is_temp(src) || src < state.next_sp()) {
-                return false;
-            }
-            state.write_back_range(ir, src, len);
-            state.def_virtual(dst, VirtualSrc::Slots { src, len, callid });
-            return true;
-        }
-        // Into a local (`doc/escape_analysis.md` §10): the elements move
-        // into the local's scratch window, where no push can reach them.
-        let Some((base, cap)) = self.local_scratch(state, dst) else {
-            return false;
-        };
-        if len > cap {
+        if !self.is_temp(dst) || (len != 0 && (!self.is_temp(src) || src < state.next_sp())) {
             return false;
         }
-        self.copy_to_scratch(state, ir, src, base, len);
-        state.def_virtual(
-            dst,
-            VirtualSrc::Slots {
-                src: base,
-                len,
-                callid,
-            },
-        );
+        state.write_back_range(ir, src, len);
+        state.def_virtual(dst, VirtualSrc::Slots { src, len, callid });
         true
     }
 
     ///
-    /// Whether an elided object may be kept in the local *dst*
-    /// (`doc/escape_analysis.md` §10): the frame is proven on the stack
-    /// and uncaptured (`no_capture_guard`: nothing can read the local
-    /// behind the compiler's back, and every way to capture it from here
-    /// on materializes the object first, [`Self::settle_virtuals`]), and
-    /// rescues nothing (a handler could read any local). A frameless
-    /// callee qualifies: its window is its whole frame, scratch windows
-    /// included, addressed through the shifted LFP like any slot of its
-    /// own, and its materializing exit builds the object from the window
-    /// as a framed side exit does.
-    ///
-    fn local_elision_ok(&self, state: &AbstractState, dst: SlotId) -> bool {
-        !self.is_temp(dst)
-            && state.no_capture_guard()
-            && !self.iseq().has_exception_handler()
-    }
-
-    ///
-    /// The scratch window `(base, len)` of the local *dst*, when an object
-    /// may be kept in it ([`Self::local_elision_ok`]) and the bytecode
-    /// reserved one (`ISeqInfo::local_scratch`: an Array or Range literal
-    /// is assigned to the local).
-    ///
-    fn local_scratch(&self, state: &AbstractState, dst: SlotId) -> Option<(SlotId, u16)> {
-        if !self.local_elision_ok(state, dst) {
-            return None;
-        }
-        self.iseq().local_scratch(dst)
-    }
-
-    ///
-    /// Copy the slots `src .. src + len` into the scratch slots
-    /// `base .. base + len` and home them there, so that the elements of
-    /// an object a local holds are in memory for a side exit, a chain
-    /// deopt and the collector.
-    ///
-    fn copy_to_scratch(
-        &self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        src: SlotId,
-        base: SlotId,
-        len: u16,
-    ) {
-        // A plain stack-to-stack copy: the window slot is homed and holds
-        // no register (a `copy_slot` would leave it sharing a resident,
-        // whose later re-use could write back over the element), and keeps
-        // only the Fixnum proof an elided Range's endpoint relies on.
-        state.flush_gp(ir);
-        for i in 0..len {
-            let (from, to) = (src + i, base + i);
-            let guarded = if state.is_fixnum(from) {
-                Guarded::Fixnum
-            } else {
-                Guarded::Value
-            };
-            state.write_back_slots(ir, &[from]);
-            ir.stack2reg(from, GP::Rax);
-            ir.reg2stack(GP::Rax, to);
-            state.def_S_guarded(to, guarded);
-        }
-    }
-
-    ///
-    /// Elide the deep copy of a literal Array or Hash `dst = literal[..]`
-    /// whose elements (keys and values) are all immediates: the copy is
+    /// Elide the deep copy of a literal Array or Range `dst = literal`
+    /// into a temporary whose elements are all immediates: the copy is
     /// indistinguishable from the template to any use that does not let
     /// its receiver escape, so such a use is handed the template itself.
     ///
@@ -156,18 +72,13 @@ impl<'a> JitContext<'a> {
         dst: SlotId,
         val: Value,
     ) -> bool {
-        if !self.is_temp(dst) && !self.local_elision_ok(state, dst) {
+        if !self.is_temp(dst) {
             return false;
         }
         let all_immediates = if val.class() == ARRAY_CLASS
             && let Some(ary) = val.try_array_ty()
         {
             ary.iter().all(|v| v.is_packed_value())
-        } else if val.class() == HASH_CLASS
-            && let Some(h) = val.try_hash_ty()
-        {
-            h.iter()
-                .all(|(k, v)| k.is_packed_value() && v.is_packed_value())
         } else if val.class() == RANGE_CLASS
             && let Some(r) = val.is_range()
         {
@@ -200,17 +111,9 @@ impl<'a> JitContext<'a> {
         end: SlotId,
         exclude_end: bool,
     ) -> bool {
-        // Into a local (`doc/escape_analysis.md` §10): the slot endpoints
-        // move into the local's scratch window, out of the way of every
-        // later write to a local or a push.
-        let scratch = if self.is_temp(dst) {
-            None
-        } else {
-            match self.local_scratch(state, dst) {
-                Some((base, cap)) if cap >= 2 => Some(base),
-                _ => return false,
-            }
-        };
+        if !self.is_temp(dst) {
+            return false;
+        }
         let next_sp = state.next_sp();
         let endpoint = |state: &AbstractState, slot: SlotId| -> Option<RangeEnd> {
             if let LinkMode::C(v) = state.mode(slot)
@@ -219,24 +122,15 @@ impl<'a> JitContext<'a> {
                 return Some(RangeEnd::Const(v));
             }
             if !state.is_fixnum(slot)
-                || (scratch.is_none() && self.is_temp(slot) && slot != dst && slot < next_sp)
+                || (self.is_temp(slot) && slot != dst && slot < next_sp)
             {
                 return None;
             }
             Some(RangeEnd::Slot(slot))
         };
-        let (Some(mut start), Some(mut end)) = (endpoint(state, start), endpoint(state, end))
-        else {
+        let (Some(start), Some(end)) = (endpoint(state, start), endpoint(state, end)) else {
             return false;
         };
-        if let Some(base) = scratch {
-            for (i, e) in [&mut start, &mut end].into_iter().enumerate() {
-                if let RangeEnd::Slot(slot) = *e {
-                    self.copy_to_scratch(state, ir, slot, base + i as u16, 1);
-                    *e = RangeEnd::Slot(base + i as u16);
-                }
-            }
-        }
         let slots: Vec<SlotId> = [start.slot(), end.slot()].into_iter().flatten().collect();
         state.write_back_slots(ir, &slots);
         state.def_virtual(
@@ -270,19 +164,14 @@ impl<'a> JitContext<'a> {
     ///   nor — for an object in a temporary — can run Ruby code or reach a
     ///   call ([`virtual_survives`]).
     ///
-    /// So an elided object in a temporary never lives across a call (no
-    /// suspended frame owes one, and dispatch arms never see one) nor
-    /// across a block boundary. An object in a parameter slot
-    /// (`CallerSlots`, or a literal handed over by the caller) does live
-    /// across the frame's own calls — its elements are in the caller's
-    /// frame, out of this frame's way, and a chain deopt materializes it —
-    /// in a body that can neither capture its locals nor rescue
-    /// (`caller_slots_ok`); and it lives across a forward block boundary
-    /// into a merge ([`Self::merge_carries_virtual`]), where the merge
-    /// keeps it if every path brings the same object and the other paths
-    /// materialize theirs on their bridges (`JitContext::settle_entries`)
-    /// — a loop head included, when its loop neither writes the local nor
-    /// captures it ([`Self::loop_keeps_virtual`]).
+    /// So an elided object never lives across a block boundary, and one in
+    /// a temporary never lives across a call either (no suspended frame
+    /// owes one, and dispatch arms never see one). An object in a
+    /// parameter slot (`CallerSlots`, or a literal handed over by the
+    /// caller) does live across the frame's own calls — its elements are
+    /// in the caller's frame, out of this frame's way, and a chain deopt
+    /// materializes it — in a body that can neither capture its locals nor
+    /// rescue (`caller_slots_ok`).
     ///
     pub(super) fn settle_virtuals(
         &mut self,
@@ -309,15 +198,6 @@ impl<'a> JitContext<'a> {
         let written = survives
             .then(|| defined_slot(trace_ir, self.store))
             .flatten();
-        // The scratch window the instruction may fill: an Array or Range
-        // literal into a local, or an object moved into one
-        // ([`Self::consume_virtual_mov`]), copies its elements there.
-        let window = match trace_ir {
-            TraceIr::Array { dst, .. } | TraceIr::Range { dst, .. } | TraceIr::Mov(dst, _) => {
-                self.iseq().local_scratch(*dst)
-            }
-            _ => None,
-        };
         // A call that may read every local of this frame behind the
         // compiler's back (`doc/escape_analysis.md` §10): a block literal
         // (its body reads the frame's locals through the outer chain, a
@@ -329,7 +209,7 @@ impl<'a> JitContext<'a> {
         // (a generic `send` could be any of these).
         let capture = self.capture_point(trace_ir);
         for (dst, src) in state.virtuals().to_vec() {
-            if self.may_consume_virtual(state, trace_ir, dst, src, bc_pos) {
+            if self.may_consume_virtual(trace_ir, dst, src, bc_pos) {
                 continue;
             }
             let captured = match capture {
@@ -348,22 +228,18 @@ impl<'a> JitContext<'a> {
             // one does: nothing can observe it any more.
             let redefined = defined_slot(trace_ir, self.store) == Some(dst);
             // A store into an element slot: a push onto one (an argument
-            // of the use pushed over an element, `[a, b].include?(x)`), a
-            // store into a local endpoint of an elided Range, or a fill of
-            // the scratch window holding the elements. The object's own
-            // slot doubling as an element (`a..b` built where `a` was; the
-            // first element of an Array returned elided) is not written
-            // while the object is elided, and an object the instruction
-            // redefines is dropped by the definition, whatever else it
-            // writes.
-            let in_window =
-                |s: SlotId| window.is_some_and(|(base, len)| base <= s && s < base + len);
+            // of the use pushed over an element, `[a, b].include?(x)`), or
+            // a store into a local endpoint of an elided Range. The
+            // object's own slot doubling as an element (`a..b` built where
+            // `a` was) is not written while the object is elided, and an
+            // object the instruction redefines is dropped by the
+            // definition, whatever else it writes.
             let overwrites = src
                 .own_slots()
-                .any(|s| s != dst && (written == Some(s) || in_window(s)));
+                .any(|s| s != dst && written == Some(s));
             if !read && (dead || redefined) {
                 // An instruction that may send a message keeps a local's
-                // object through itself (`doc/escape_analysis.md` §12):
+                // object through itself (`doc/escape_analysis.md` §10):
                 // if it leaves by a side exit, the interpreter runs it,
                 // and the callee it finds there may be `binding`. The
                 // object stays elided (the exit's write-back builds it)
@@ -384,8 +260,7 @@ impl<'a> JitContext<'a> {
                     continue;
                 }
             }
-            let carried = bb_end && self.merge_carries_virtual(bc_pos, dst, src);
-            if read || (bb_end && !carried) || overwrites || (self.is_temp(dst) && !survives) {
+            if read || bb_end || overwrites || (self.is_temp(dst) && !survives) {
                 self.materialize_virtual(state, ir, dst);
             }
         }
@@ -394,7 +269,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Run after an instruction that falls through: if it ends its basic
     /// block, perform the elided allocations still live (dropping the dead
-    /// ones), except for a parameter's object a merge may carry.
+    /// ones).
     ///
     pub(super) fn settle_virtuals_at_bb_end(
         &mut self,
@@ -405,17 +280,15 @@ impl<'a> JitContext<'a> {
         if !self.is_bb_end(bc_pos) {
             return;
         }
-        self.settle_virtuals_before_branch(state, ir, bc_pos, true, &[], DeadLocal::Drop);
+        self.settle_virtuals_before_branch(state, ir, bc_pos, &[], DeadLocal::Drop);
     }
 
     ///
     /// Perform the elided allocations still live after the instruction at
     /// *branch_pos* (the block's last one: a branch, or the instruction a
     /// dispatch's per-arm `CondBr` was sunk into, see
-    /// [`JitContext::declare_merge`]), dropping the dead ones. With
-    /// *carries*, a local's object is left for the merges that may carry
-    /// it ([`Self::merge_carries_virtual`]). The objects in *keep* are
-    /// left alone. *dead_local* says what becomes of a local's object
+    /// [`JitContext::declare_merge`]), dropping the dead ones. The objects
+    /// in *keep* are left alone. *dead_local* says what becomes of a local's object
     /// nothing can observe after the branch, which depends on what is
     /// still to run before it ([`DeadLocal`]).
     ///
@@ -424,7 +297,6 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         branch_pos: BcIndex,
-        carries: bool,
         keep: &[SlotId],
         dead_local: DeadLocal,
     ) {
@@ -455,11 +327,7 @@ impl<'a> JitContext<'a> {
                 // object without emitting anything (`settle_virtuals`).
                 (true, DeadLocal::Keep) => {}
                 (true, DeadLocal::Build) => self.materialize_virtual(state, ir, dst),
-                (false, _) => {
-                    if !(carries && self.merge_carries_virtual(branch_pos, dst, src)) {
-                        self.materialize_virtual(state, ir, dst);
-                    }
-                }
+                (false, _) => self.materialize_virtual(state, ir, dst),
             }
         }
     }
@@ -484,7 +352,7 @@ impl<'a> JitContext<'a> {
     ///
     /// A local's object nothing can observe after the branch is not
     /// dropped here: the producer is still to run, and may send a message
-    /// (`doc/escape_analysis.md` §12). It is dropped where the branch
+    /// (`doc/escape_analysis.md` §10). It is dropped where the branch
     /// itself is settled, which emits nothing.
     ///
     pub(super) fn settle_virtuals_for_sink(
@@ -494,160 +362,53 @@ impl<'a> JitContext<'a> {
         reads: &[SlotId],
         sink_pos: BcIndex,
     ) {
-        self.settle_virtuals_before_branch(state, ir, sink_pos, true, reads, DeadLocal::Keep);
+        self.settle_virtuals_before_branch(state, ir, sink_pos, reads, DeadLocal::Keep);
     }
 
     ///
-    /// Whether every merge the block ending at *bc_pos* branches into may
-    /// carry the elided object *src* in the local *dst*
-    /// (`doc/escape_analysis.md` §3): a forward merge, compiled from the
-    /// states of its branches ([`JitContext::settle_entries`] reconciles
-    /// them), or a loop head whose loop can keep the object
-    /// ([`Self::loop_keeps_virtual`]). An object in a temporary is never
-    /// carried, nor is anything out of a dispatch arm, whose per-arm
-    /// branch merges with the fall-through (`declare_merge`).
-    ///
-    fn merge_carries_virtual(&self, bc_pos: BcIndex, dst: SlotId, src: VirtualSrc) -> bool {
-        if self.is_temp(dst) || self.in_dispatch_arm() {
-            return false;
-        }
-        let bb_info = &self.iseq().bb_info;
-        let bb = bb_info.get_bb_id(bc_pos);
-        bb_info
-            .succ(bb)
-            .iter()
-            .all(|s| match bb_info.is_loop_begin(*s) {
-                None => true,
-                Some((start, end)) => self.loop_keeps_virtual(start, end, dst, src),
-            })
-    }
-
-    ///
-    /// Whether the loop `loop_start..=loop_end` can keep the elided object
-    /// *src* in the local *dst* across its head (`doc/escape_analysis.md`
-    /// §3): by the tables, no block of the loop writes the local (nor a
-    /// local among the object's element slots; the others are the local's
-    /// scratch window, which only a literal into the local writes), and
-    /// the loop holds no capture point. The body may still read the
-    /// object in a way that materializes it; the back-edge fixpoint then
-    /// says so, and the loop's entries materialize it instead
-    /// ([`JitContext::settle_entries`]).
-    ///
-    fn loop_keeps_virtual(
-        &self,
-        loop_start: BasicBlockId,
-        loop_end: BasicBlockId,
-        dst: SlotId,
-        src: VirtualSrc,
-    ) -> bool {
-        let iseq_id = self.iseq_id();
-        let a = self.slot_analysis(iseq_id);
-        if a.all_live() {
-            return false;
-        }
-        let iseq = self.iseq();
-        let window = iseq.local_scratch(dst);
-        let in_window = |s: SlotId| window.is_some_and(|(base, len)| base <= s && s < base + len);
-        let locals = std::iter::once(dst).chain(src.own_slots().filter(|s| !self.is_temp(*s)));
-        if src.own_slots().any(|s| self.is_temp(s) && !in_window(s)) {
-            return false;
-        }
-        let (begin, end) = (iseq.bb_info[loop_start].begin, iseq.bb_info[loop_end].end);
-        if self.unit_liveness(iseq_id).captured_in(begin, end) {
-            return false;
-        }
-        for slot in locals {
-            if a.defined_in_blocks(loop_start, loop_end, slot) {
-                return false;
-            }
-        }
-        true
-    }
-
-    ///
-    /// Reconcile the elided objects the branch *entries* of a merge bring
-    /// in, before their states are joined: an object every entry carries
-    /// identically (same slot, same `VirtualSrc`) — and, at a loop head
-    /// whose back edge *backedge* is recorded, one the back edge carries
-    /// too — stays elided through the merge; any other is materialized on
-    /// its entry's bridge, in the returned per-entry `AsmIr` the bridge is
-    /// prepended with.
+    /// Materialize the elided objects the branch *entries* of the merge
+    /// *bbid* bring in, before their states are joined. Only one entry
+    /// can bring any: a method's start, into its first block, with the
+    /// objects its caller handed over in parameters (§6) — kept, as the
+    /// method's own. Every other block boundary is crossed by none
+    /// ([`Self::settle_virtuals`] builds or drops each object at its
+    /// block's end), so this finds nothing there on a sound path and is
+    /// kept as the merge's safety net. The allocations go in the returned
+    /// per-entry `AsmIr` the bridge is prepended with.
     ///
     pub(in crate::codegen::jitgen) fn settle_entries(
         &mut self,
+        bbid: BasicBlockId,
         entries: &mut [BranchEntry],
-        backedge: Option<&[(SlotId, VirtualSrc)]>,
     ) -> PreBridges {
-        let common: Vec<(SlotId, VirtualSrc)> = if entries.is_empty() {
-            vec![]
-        } else {
-            entries[0]
-                .state
-                .virtuals()
-                .iter()
-                .filter(|v| entries.iter().all(|e| e.state.virtuals().contains(v)))
-                .filter(|v| backedge.is_none_or(|be| be.contains(v)))
-                .copied()
-                .collect()
-        };
+        // A method whose first block is a loop head is handed nothing
+        // (`caller_slots_ok`): the bridge of its start runs before its
+        // prologue, where nothing can be built.
+        let method_start = self.position().is_none()
+            && bbid == BasicBlockId::new(0)
+            && self.iseq().bb_info.is_loop_begin(bbid).is_none();
         entries
             .iter_mut()
             .map(|entry| {
                 let mut ir = AsmIr::new(self);
-                self.materialize_except(&mut entry.state, &mut ir, &common);
+                if !method_start {
+                    self.materialize_all(&mut entry.state, &mut ir);
+                }
                 ir
             })
             .collect()
     }
 
     ///
-    /// Bring the back edge recorded for the loop head *head* in line with
-    /// the elided objects *head_virtuals* the state reaching the head
-    /// carries: one the back edge carries and the head does not is
-    /// materialized in the record.
+    /// Materialize every elided object of *state*.
     ///
-    /// A back edge is recorded by a walk of the fixpoint of this loop or
-    /// of an enclosing one, and describes the head that walk entered. A
-    /// later walk can enter the head with less: the enclosing loop's body
-    /// materializes an object after this loop, so its second walk comes
-    /// round with the object materialized, to a head whose back edge was
-    /// recorded while it was still elided (issue #1914). The loop itself
-    /// never defines the local (`loop_keeps_virtual`), so its real back
-    /// edge brings what the head has, the materialized object; joining
-    /// the stale record as it is would meet `V` with the object's slot
-    /// and leave the local without a value.
-    ///
-    pub(in crate::codegen::jitgen) fn settle_recorded_backedge(
-        &mut self,
-        head: BasicBlockId,
-        head_virtuals: &[(SlotId, VirtualSrc)],
-    ) {
-        let Some(backedge) = self.loop_backedge(head) else {
-            return;
-        };
-        if backedge.virtuals().iter().all(|v| head_virtuals.contains(v)) {
-            return;
-        }
-        let mut backedge = backedge.clone();
-        let mut scratch = AsmIr::new(self);
-        self.materialize_except(&mut backedge, &mut scratch, head_virtuals);
-        self.set_loop_backedge(head, backedge);
-    }
-
-    ///
-    /// Materialize every elided object of *state* but those in *keep*
-    /// (same slot, same `VirtualSrc`).
-    ///
-    pub(in crate::codegen::jitgen) fn materialize_except(
+    pub(in crate::codegen::jitgen) fn materialize_all(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
-        keep: &[(SlotId, VirtualSrc)],
     ) {
-        for v in state.virtuals().to_vec() {
-            if !keep.contains(&v) {
-                self.materialize_virtual(state, ir, v.0);
-            }
+        for (slot, _) in state.virtuals().to_vec() {
+            self.materialize_virtual(state, ir, slot);
         }
     }
 
@@ -681,7 +442,7 @@ impl<'a> JitContext<'a> {
     ///
     /// Whether the object the local *slot* holds may be observed after
     /// the instruction at *bc_pos*, as the interpreter sees the frame
-    /// (`doc/escape_analysis.md` §12): by the rest of its basic block, or
+    /// (`doc/escape_analysis.md` §10): by the rest of its basic block, or
     /// by any block control can reach from there, counting every
     /// instruction that may send a message as a read of every local. A
     /// side exit hands the frame to the interpreter, where a call the
@@ -729,6 +490,9 @@ impl<'a> JitContext<'a> {
         !info.possibly_capture_without_block()
             && !iseq.has_exception_handler()
             && iseq.forwarding_no_escape
+            // The objects enter the body's first block, which must not
+            // be a merge (`settle_entries`).
+            && iseq.bb_info.is_loop_begin(BasicBlockId::new(0)).is_none()
     }
 
     ///
@@ -791,33 +555,31 @@ impl<'a> JitContext<'a> {
     ///
     fn may_consume_virtual(
         &self,
-        state: &AbstractState,
         trace_ir: &TraceIr,
         slot: SlotId,
         src: VirtualSrc,
         bc_pos: BcIndex,
     ) -> bool {
-        // `h[k]` on an elided Hash ([`Self::consume_virtual_index`]).
+        // `a[i]` on an elided literal ([`Self::consume_virtual_index`]).
         if let TraceIr::Index { base, idx, .. } = trace_ir {
             return *base == slot && *idx != slot;
         }
-        // `y = x` with `x` dead afterwards: the object moves to `y`
-        // ([`Self::consume_virtual_mov`]).
+        // `y = x` into a temporary with `x` dead afterwards: the object
+        // moves to `y` ([`Self::consume_virtual_mov`]).
         // Or `x` still live: a temporary's second view of the object,
         // for a call that only reads its elements
         // ([`Self::alias_consumed_by_call`]).
         if let TraceIr::Mov(dst, from) = trace_ir {
             return *from == slot
                 && *dst != slot
-                && ((self.dead_after(bc_pos, slot) && self.mov_target_ok(state, *dst, src))
+                && self.is_temp(*dst)
+                && (self.dead_after(bc_pos, slot)
                     || self.alias_consumed_by_call(*dst, src, bc_pos));
         }
-        // A plain `return` of the object out of a specialized method, into
-        // a call site that takes it elided (`doc/escape_analysis.md` §9).
-        // A call site that discards the result drops the object instead.
+        // A plain `return` of the object out of a specialized method into
+        // a call site that discards the result: the object is dropped.
         if let TraceIr::Ret(ret) = trace_ir {
-            return *ret == slot
-                && (self.return_virtual_in_caller(src).is_some() || self.return_discarded());
+            return *ret == slot && self.return_discarded();
         }
         // `a, b = ary` ([`Self::consume_virtual_expand`]): the elements go
         // straight to their targets. Only when nothing reads the Array
@@ -833,12 +595,6 @@ impl<'a> JitContext<'a> {
                 && rest_pos.is_none()
                 && src.class_id() == ARRAY_CLASS
                 && self.dead_after(bc_pos, slot);
-        }
-        // The prologue's "`nil` means an empty Hash" check of a `**kwrest`
-        // handed over elided: nothing to do, the object stands for the
-        // Hash (its slot does hold `nil`).
-        if let TraceIr::CheckKwRest(local) = trace_ir {
-            return *local == slot && matches!(src, VirtualSrc::CallerKw { .. });
         }
         // `range === v` — `case v when lo..hi` ([`Self::consume_virtual_teq`]).
         if let TraceIr::BinCmp {
@@ -881,7 +637,7 @@ impl<'a> JitContext<'a> {
                 base: SlotBase::SavedFp,
                 ..
             } => Self::forwarded_rest_slot(cs) == Some(slot),
-            VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => false,
+            VirtualSrc::CallerSlots { .. } => false,
             // An elided Range's endpoints are this frame's slots, which
             // the callee cannot be handed.
             VirtualSrc::Range { .. } => false,
@@ -933,40 +689,11 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// Whether the elided object *src* may move into *dst* by a `Mov`
-    /// (`doc/escape_analysis.md` §10): into a temporary as it is (its
-    /// elements stay where they are, pinned or in a local's window);
-    /// into a local under the local gate, with its own-frame elements
-    /// copied into the local's window — so a `Slots` or slot-endpoint
-    /// `Range` needs a window wide enough, while a handed-over object or
-    /// a template needs none. A `**kwrest` object is tied to its
-    /// parameter slot (the frame's `caller_kw` table) and does not move.
-    ///
-    fn mov_target_ok(&self, state: &AbstractState, dst: SlotId, src: VirtualSrc) -> bool {
-        if matches!(src, VirtualSrc::CallerKw { .. }) {
-            return false;
-        }
-        if self.is_temp(dst) {
-            return true;
-        }
-        if !self.local_elision_ok(state, dst) {
-            return false;
-        }
-        let need = src.own_slots().count() as u16;
-        need == 0
-            || self
-                .iseq()
-                .local_scratch(dst)
-                .is_some_and(|(_, cap)| need <= cap)
-    }
-
-    ///
     /// Whether `tmp = x` (*dst* a temporary, *src* the object a still-live
-    /// local holds) copies the object into a temporary for a call that
+    /// parameter holds) copies the object into a temporary for a call that
     /// reads its elements and nothing else: `x.include?(a + 1)` evaluates
-    /// its receiver into a temporary before its argument, and so does
-    /// `x[i % 3]` (the `%d = %base[%idx]` index instruction, which is
-    /// `[]` on the object's class). The temporary then takes a second
+    /// its receiver into a temporary before its argument. The temporary
+    /// then takes a second
     /// view of the same object, which that call consumes, while the local
     /// keeps its own. The two views are never told apart: the call's
     /// method reads the elements and neither mutates nor lets out the
@@ -976,7 +703,7 @@ impl<'a> JitContext<'a> {
     /// that is not the temporary may come, in the same basic block.
     ///
     fn alias_consumed_by_call(&self, dst: SlotId, src: VirtualSrc, bc_pos: BcIndex) -> bool {
-        if !self.is_temp(dst) || matches!(src, VirtualSrc::CallerKw { .. }) {
+        if !self.is_temp(dst) {
             return false;
         }
         let a = self.slot_analysis(self.iseq_id());
@@ -993,12 +720,7 @@ impl<'a> JitContext<'a> {
             return false;
         }
         let Some(callid) = a.call(pos) else {
-            let TraceIr::Index { base, idx, .. } =
-                TraceIr::from_pc(self.iseq().get_pc(pos), self.store)
-            else {
-                return false;
-            };
-            return base == dst && idx != dst && elements(IdentId::_INDEX);
+            return false;
         };
         let cs = &self.store[callid];
         cs.recv == dst
@@ -1011,16 +733,13 @@ impl<'a> JitContext<'a> {
     }
 
     ///
-    /// `dst = src` with an elided object in *src*: dead afterwards
-    /// ([`Self::mov_target_ok`]), the object is now *dst*'s — into a
-    /// local, the elements in this frame's slots are copied into the
-    /// local's scratch window first. Still live, *dst* takes a second
-    /// view of the object ([`Self::alias_consumed_by_call`]).
+    /// `tmp = src` with an elided object in *src*: dead afterwards, the
+    /// object is now the temporary's; still live, the temporary takes a
+    /// second view of it ([`Self::alias_consumed_by_call`]).
     ///
     pub(super) fn consume_virtual_mov(
         &mut self,
         state: &mut AbstractState,
-        ir: &mut AsmIr,
         dst: SlotId,
         src: SlotId,
         bc_pos: BcIndex,
@@ -1031,44 +750,7 @@ impl<'a> JitContext<'a> {
             return;
         }
         let obj = state.take_virtual(src).unwrap();
-        let moved = if self.is_temp(dst) {
-            obj
-        } else {
-            let base = self.iseq().local_scratch(dst).map(|(base, _)| base);
-            match obj {
-                VirtualSrc::Slots { src, len, callid } => {
-                    let base = base.unwrap();
-                    self.copy_to_scratch(state, ir, src, base, len);
-                    VirtualSrc::Slots {
-                        src: base,
-                        len,
-                        callid,
-                    }
-                }
-                VirtualSrc::Range {
-                    mut start,
-                    mut end,
-                    exclude_end,
-                } => {
-                    for (i, e) in [&mut start, &mut end].into_iter().enumerate() {
-                        if let RangeEnd::Slot(slot) = *e {
-                            let to = base.unwrap() + i as u16;
-                            self.copy_to_scratch(state, ir, slot, to, 1);
-                            *e = RangeEnd::Slot(to);
-                        }
-                    }
-                    VirtualSrc::Range {
-                        start,
-                        end,
-                        exclude_end,
-                    }
-                }
-                VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => obj,
-                VirtualSrc::CallerKw { .. } => unreachable!(),
-            }
-        };
-        state.def_virtual(dst, moved);
-        // The elements left behind by a copy are dead with `src`.
+        state.def_virtual(dst, obj);
         state.discard_dead_elements(obj, src);
     }
 
@@ -1100,20 +782,8 @@ impl<'a> JitContext<'a> {
             VirtualSrc::Slots { src, len, callid } => {
                 state.write_back_range(ir, src, len);
                 let using_fpr = state.get_using_fpr(ir);
-                if src != self.store[callid].args {
-                    // The elements moved into a local's scratch window
-                    // (§10): built over the window, which the literal's
-                    // own allocation (whose cold path reads the call
-                    // site's argument slots) would not read.
-                    ir.create_array_from(using_fpr, SlotBase::Own, src, len);
-                } else {
-                    let inline = if len as usize <= ARRAY_INLINE_CAPA {
-                        Some((src, len))
-                    } else {
-                        None
-                    };
-                    ir.new_array(using_fpr, callid, inline);
-                }
+                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+                ir.new_array(using_fpr, callid, inline);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) if val.class().is_always_frozen() => {
@@ -1128,15 +798,9 @@ impl<'a> JitContext<'a> {
                 state.def_reg2acc_concrete_value(ir, GP::Rax, dst, val);
             }
             VirtualSrc::CallerSlots { src, len, base } => {
-                if base == SlotBase::Own {
-                    state.write_back_elements(ir, src, len);
-                }
                 let using_fpr = state.get_using_fpr(ir);
                 ir.create_array_from(using_fpr, base, src, len);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
-            }
-            VirtualSrc::CallerKw { base, .. } => {
-                state.materialize_caller_kw(ir, dst, base);
             }
             VirtualSrc::Range {
                 start,
@@ -1175,7 +839,7 @@ impl<'a> JitContext<'a> {
         let elements = match src {
             VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
             VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => None,
+            VirtualSrc::Literal(_) | VirtualSrc::Range { .. } => None,
         };
         // Resolved as the call itself would be (refinements in scope
         // included), and a private method stays the interpreter's to reject.
@@ -1201,24 +865,16 @@ impl<'a> JitContext<'a> {
         // (issue #1980).
         let args_elided = (0..pos_num).any(|i| state.virtual_at(args + i).is_some());
         // What the elements lowering would do, decided before anything is
-        // emitted: an Array's elements are in frame slots, a Hash's pairs
-        // are in its template or in the caller's kw window, a Range's
+        // emitted: an Array's elements are in frame slots, a Range's
         // endpoints are constants or frame slots.
         let plan = match summary {
             Some(RecvEscape {
                 elements: Some(op), ..
-            }) if block_less && !args_elided => match (
-                elements,
-                Self::hash_pairs(state, src),
-                Self::range_ends(src),
-            ) {
-                (Some((base, src, len)), _, _) if pos_num == 0 => {
+            }) if block_less && !args_elided => match (elements, Self::range_ends(src)) {
+                (Some((base, src, len)), _) if pos_num == 0 => {
                     Some(ElementsPlan::Array(base, src, len))
                 }
-                (None, Some(pairs), _) => self
-                    .plan_hash_op(state, op, &pairs, args, pos_num)
-                    .map(ElementsPlan::Hash),
-                (None, None, Some(ends)) => self
+                (None, Some(ends)) => self
                     .plan_range_op(op, ends, args, pos_num)
                     .map(ElementsPlan::Range),
                 _ => None,
@@ -1261,7 +917,6 @@ impl<'a> JitContext<'a> {
                         let newarray = self.store[callid].newarray_recv;
                         self.emit_elements_op(state, ir, op, base, src, len, call_dst, newarray);
                     }
-                    ElementsPlan::Hash(fold) => self.emit_hash_fold(state, ir, fold, call_dst),
                     ElementsPlan::Range(plan) => {
                         self.emit_range_plan(state, ir, plan, fid, call_dst)
                     }
@@ -1309,18 +964,12 @@ impl<'a> JitContext<'a> {
         len: u16,
     ) {
         let virt = state.take_virtual(src).unwrap();
-        // The targets may overlap the element slots (`a, b = f(x, y)`
-        // expands into the temporaries right above the result, which hold
-        // the elements of an Array returned elided): copy from the far
-        // end first, as a `memmove` does, so no element is overwritten
-        // before it is read.
+        // The targets may overlap the element slots (`a, b = [x, y]`
+        // expands into the temporaries right above the object): copy from
+        // the far end first, as a `memmove` does, so no element is
+        // overwritten before it is read.
         let own = match virt {
-            VirtualSrc::Slots { src, .. }
-            | VirtualSrc::CallerSlots {
-                src,
-                base: SlotBase::Own,
-                ..
-            } => Some(src),
+            VirtualSrc::Slots { src, .. } => Some(src),
             _ => None,
         };
         let order: Vec<u16> = if own.is_some_and(|elems| dst > elems) {
@@ -1335,12 +984,7 @@ impl<'a> JitContext<'a> {
                     let elem = val.as_array().get(i as usize).copied().unwrap_or_default();
                     state.def_C(target, elem);
                 }
-                VirtualSrc::Slots { src, len: n, .. }
-                | VirtualSrc::CallerSlots {
-                    src,
-                    len: n,
-                    base: SlotBase::Own,
-                } => {
+                VirtualSrc::Slots { src, len: n, .. } => {
                     if i < n {
                         self.copy_element(state, ir, src + i, target);
                     } else {
@@ -1356,9 +1000,7 @@ impl<'a> JitContext<'a> {
                         state.def_C(target, Value::nil());
                     }
                 }
-                VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => {
-                    unreachable!("an Array expansion of a Hash or Range")
-                }
+                VirtualSrc::Range { .. } => unreachable!("an Array expansion of a Range"),
             }
         }
         // The object and the elements no target took are gone.
@@ -1373,9 +1015,8 @@ impl<'a> JitContext<'a> {
 
     ///
     /// `dst = elem`, an element of an elided Array in this frame's slot
-    /// *elem*: a slot copy, unless the element is in the object's own slot
-    /// (the first element of an Array returned elided, `V`), which is read
-    /// from the stack.
+    /// *elem*: a slot copy, unless the element slot is `V` (the object's
+    /// own slot doubling as an element), which is read from the stack.
     ///
     fn copy_element(&self, state: &mut AbstractState, ir: &mut AsmIr, elem: SlotId, dst: SlotId) {
         match state.mode(elem) {
@@ -1389,30 +1030,6 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 state.copy_slot(ir, elem, dst);
             }
-        }
-    }
-
-    ///
-    /// The pairs of an elided Hash, in order: a template's keys and
-    /// values, or a handed-over `**kwrest`'s names and the caller's slots
-    /// of their values (the frame's table, [`AbstractFrame::caller_kw_table`]).
-    ///
-    fn hash_pairs(state: &AbstractState, src: VirtualSrc) -> Option<Vec<(Value, HashElem)>> {
-        match src {
-            VirtualSrc::Literal(val) => {
-                let h = val.try_hash_ty()?;
-                Some(h.iter().map(|(k, v)| (k, HashElem::Const(v))).collect())
-            }
-            VirtualSrc::CallerKw { base, .. } => {
-                let (_, table) = state.caller_kw_table()?;
-                Some(
-                    table
-                        .iter()
-                        .map(|(name, slot)| (Value::symbol(*name), HashElem::Caller(base, *slot)))
-                        .collect(),
-                )
-            }
-            _ => None,
         }
     }
 
@@ -1700,243 +1317,37 @@ impl<'a> JitContext<'a> {
 
     ///
     /// `dst = base[idx]` (`TraceIr::Index`) with an elided object in *base*
-    /// ([`Self::may_consume_virtual`]). An elided Hash: a template's `[]`
-    /// by a constant key it holds is the value, and by any other key runs
-    /// on the template, as [`Self::consume_virtual`] has it for a method
-    /// call. An elided Array whose elements are in frame slots: `[]` by a
-    /// constant Integer is the element's slot (or nil), and by a Fixnum
-    /// (proven, or guarded on the site's cached index class *ic*) reads
-    /// the slot in place (`AsmInst::ElidedArrayIndex`); either way the
-    /// object stays elided for its next use. Otherwise the object is
-    /// materialized. Returns whether the instruction was lowered here.
+    /// ([`Self::may_consume_virtual`]): a literal of immediates whose `[]`
+    /// lets no receiver escape runs on the template, as
+    /// [`Self::consume_virtual`] has it for a method call; any other object
+    /// is materialized. The ordinary `[]` lowering follows either way.
     ///
     pub(super) fn consume_virtual_index(
         &mut self,
         state: &mut AbstractState,
         ir: &mut AsmIr,
         base: SlotId,
-        idx: SlotId,
         dst: SlotId,
-        ic: Option<(CachedClass, CachedClass)>,
         bc_pos: BcIndex,
-    ) -> bool {
+    ) {
         let src = state.virtual_at(base).unwrap();
         let class = CachedClass::from_class(src.class_id());
         let callid = self.store.get_callsite_id(self.iseq_id(), bc_pos).unwrap();
-        let resolved =
-            self.jit_check_method(class, IdentId::_INDEX)
-                .and_then(|(fid, visibility)| {
-                    (!self.jit_visibility_blocks(callid, visibility, fid)).then_some(fid)
-                });
-        let summary = resolved.and_then(|fid| self.store.recv_escape(fid));
+        let transparent = self
+            .jit_check_method(class, IdentId::_INDEX)
+            .filter(|(fid, visibility)| !self.jit_visibility_blocks(callid, *visibility, *fid))
+            .and_then(|(fid, _)| self.store.recv_escape(fid))
+            .is_some_and(|e| e.transparent);
         let recv_dead = base == dst || self.dead_after(bc_pos, base);
-        let elements = match src {
-            VirtualSrc::Slots { src, len, .. } => Some((SlotBase::Own, src, len)),
-            VirtualSrc::CallerSlots { src, len, base } => Some((base, src, len)),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerKw { .. } | VirtualSrc::Range { .. } => None,
-        };
-        let plan = match (summary, elements) {
-            (
-                Some(RecvEscape {
-                    elements: Some(ElementsOp::ArrayIndex),
-                    ..
-                }),
-                Some((base, src, len)),
-            ) => {
-                let idx_class = state
-                    .class(idx)
-                    .map(CachedClass::from_class)
-                    .or(ic.map(|(_, class)| class));
-                Self::plan_array_index(state, base, src, len, idx, idx_class).map(IndexPlan::Array)
-            }
-            (
-                Some(RecvEscape {
-                    elements: Some(op), ..
-                }),
-                None,
-            ) => Self::hash_pairs(state, src)
-                .and_then(|pairs| self.plan_hash_op(state, op, &pairs, idx, 1))
-                .map(IndexPlan::Hash),
-            _ => None,
-        };
-        match (plan, summary) {
-            (Some(plan), _) => {
-                self.inline_method_cache.push(InlineCacheEntry {
-                    recv_class: class,
-                    name: Some(IdentId::_INDEX),
-                    refinements: self.refinements(),
-                    func_id: resolved,
-                    super_of: None,
-                    visibility: None,
-                });
-                self.guard_class_version(state, ir, true);
-                match plan {
-                    IndexPlan::Hash(fold) => {
-                        if recv_dead {
-                            state.take_virtual(base);
-                        }
-                        self.emit_hash_fold(state, ir, fold, Some(dst));
-                    }
-                    IndexPlan::Array(ArrayIndexPlan::Nil) => {
-                        if recv_dead {
-                            state.take_virtual(base);
-                        }
-                        state.def_C(dst, Value::nil());
-                    }
-                    IndexPlan::Array(ArrayIndexPlan::Elem(SlotBase::Own, elem)) => {
-                        if recv_dead {
-                            state.take_virtual(base);
-                        }
-                        self.copy_element(state, ir, elem, dst);
-                    }
-                    IndexPlan::Array(ArrayIndexPlan::Elem(elem_base, elem)) => {
-                        if recv_dead {
-                            state.take_virtual(base);
-                        }
-                        state.flush_gp(ir);
-                        ir.load_caller_slot(elem_base, elem);
-                        state.def_rax2acc(ir, dst);
-                    }
-                    IndexPlan::Array(ArrayIndexPlan::Dynamic(elem_base, src, len)) => {
-                        // The read is in place: the elements stay in their
-                        // slots, so this frame's are written back first. The
-                        // index guard deopts with the object still registered
-                        // (the side exit builds it).
-                        if elem_base == SlotBase::Own {
-                            state.write_back_elements(ir, src, len);
-                        }
-                        state.load_fixnum(ir, idx, GP::Rsi);
-                        if recv_dead {
-                            state.take_virtual(base);
-                        }
-                        ir.elided_array_index(elem_base, src, len);
-                        state.def_rax2acc(ir, dst);
-                    }
-                }
-                true
-            }
-            (
-                None,
-                Some(RecvEscape {
-                    transparent: true, ..
-                }),
-            ) if recv_dead && matches!(src, VirtualSrc::Literal(_)) => {
-                let VirtualSrc::Literal(val) = src else {
-                    unreachable!()
-                };
-                self.guard_class_version(state, ir, true);
-                state.take_virtual(base);
-                state.def_C(base, val);
-                false
-            }
-            _ => {
-                self.materialize_virtual(state, ir, base);
-                false
-            }
-        }
-    }
-
-    ///
-    /// Decide `[]` by *idx* on an elided Array whose `len` elements are the
-    /// slots at *src* in the frame *base* names: a compile-time Integer
-    /// index names its element's slot (counting from the end when
-    /// negative) or is out of range, and a Fixnum index (*idx_class*) is
-    /// read in place. Any other index (a Range, a non-Integer) is not
-    /// lowered here.
-    ///
-    fn plan_array_index(
-        state: &AbstractState,
-        base: SlotBase,
-        src: SlotId,
-        len: u16,
-        idx: SlotId,
-        idx_class: Option<CachedClass>,
-    ) -> Option<ArrayIndexPlan> {
-        if let LinkMode::C(v) = state.mode(idx) {
-            let i = v.try_fixnum()?;
-            let i = if i < 0 { i + len as i64 } else { i };
-            return Some(if (0..len as i64).contains(&i) {
-                ArrayIndexPlan::Elem(base, src + i as u16)
-            } else {
-                ArrayIndexPlan::Nil
-            });
-        }
-        (idx_class == Some(CachedClass::INTEGER)).then_some(ArrayIndexPlan::Dynamic(base, src, len))
-    }
-
-    ///
-    /// Decide the Hash elements lowering *op* over *pairs* for a call with
-    /// *pos_num* arguments at *args*: a lookup is folded only for a key
-    /// that is a compile-time packed immediate — for which `eql?` is bit
-    /// equality and no `hash` is dispatched — and, for `[]` / `fetch`,
-    /// only when it is present (a miss would dispatch `default` or raise).
-    ///
-    fn plan_hash_op(
-        &self,
-        state: &AbstractState,
-        op: ElementsOp,
-        pairs: &[(Value, HashElem)],
-        args: SlotId,
-        pos_num: usize,
-    ) -> Option<HashFold> {
-        let const_key = |slot: SlotId| match state.mode(slot) {
-            LinkMode::C(k) if k.is_packed_value() => Some(k),
-            _ => None,
-        };
-        let lookup = |k: Value| {
-            pairs
-                .iter()
-                .find(|(k0, _)| k0.id() == k.id())
-                .map(|(_, v)| *v)
-        };
-        let found = |v: HashElem| match v {
-            HashElem::Const(v) => HashFold::Const(v),
-            HashElem::Caller(base, slot) => HashFold::Caller(base, slot),
-        };
-        match op {
-            ElementsOp::Size if pos_num == 0 => {
-                Some(HashFold::Const(Value::integer(pairs.len() as i64)))
-            }
-            ElementsOp::Empty if pos_num == 0 => {
-                Some(HashFold::Const(Value::bool(pairs.is_empty())))
-            }
-            ElementsOp::HashIndex if pos_num == 1 => lookup(const_key(args)?).map(found),
-            ElementsOp::HashFetch if pos_num == 1 => lookup(const_key(args)?).map(found),
-            // `fetch(key, default)`: the default is the answer on a miss.
-            ElementsOp::HashFetch if pos_num == 2 => Some(match lookup(const_key(args)?) {
-                Some(v) => found(v),
-                None => HashFold::Own(args + 1usize),
-            }),
-            ElementsOp::HashHasKey if pos_num == 1 => {
-                let k = const_key(args)?;
-                Some(HashFold::Const(Value::bool(lookup(k).is_some())))
-            }
-            _ => None,
-        }
-    }
-
-    /// Emit a folded Hash elements lowering ([`Self::plan_hash_op`]).
-    fn emit_hash_fold(
-        &mut self,
-        state: &mut AbstractState,
-        ir: &mut AsmIr,
-        fold: HashFold,
-        dst: Option<SlotId>,
-    ) {
-        match (fold, dst) {
-            (_, None) => {}
-            (HashFold::Const(v), Some(dst)) => state.def_C(dst, v),
-            (HashFold::Own(slot), Some(dst)) => {
-                if !matches!(state.mode(slot), LinkMode::S(_) | LinkMode::C(_)) {
-                    state.flush_gp(ir);
-                }
-                state.copy_slot(ir, slot, dst);
-            }
-            (HashFold::Caller(base, slot), Some(dst)) => {
-                state.flush_gp(ir);
-                ir.load_caller_slot(base, slot);
-                state.def_rax2acc(ir, dst);
-            }
+        if let VirtualSrc::Literal(val) = src
+            && transparent
+            && recv_dead
+        {
+            self.guard_class_version(state, ir, true);
+            state.take_virtual(base);
+            state.def_C(base, val);
+        } else {
+            self.materialize_virtual(state, ir, base);
         }
     }
 
@@ -1992,12 +1403,6 @@ impl<'a> JitContext<'a> {
                     }
                 }
             },
-            // `[]` with an argument is `TraceIr::Index`, lowered by
-            // `consume_virtual_index`; as a method call it has no plan.
-            ElementsOp::ArrayIndex => unreachable!("Array#[] as an argument-less call"),
-            ElementsOp::HashIndex | ElementsOp::HashFetch | ElementsOp::HashHasKey => {
-                unreachable!("a Hash lowering on an Array's elements")
-            }
             ElementsOp::RangeCover
             | ElementsOp::RangeSize
             | ElementsOp::RangeCount
@@ -2015,8 +1420,6 @@ impl<'a> JitContext<'a> {
 enum ElementsPlan {
     /// Over the `len` element slots at the slot, in the frame the base names.
     Array(SlotBase, SlotId, u16),
-    /// A folded Hash lookup.
-    Hash(HashFold),
     /// Over an elided Range's endpoints.
     Range(RangePlan),
 }
@@ -2035,47 +1438,6 @@ enum RangePlan {
     Op(ElementsOp, RangeEnd, RangeEnd, bool),
 }
 
-/// Where an elided Hash's value is.
-#[derive(Clone, Copy)]
-enum HashElem {
-    /// In the template (a `Literal` object).
-    Const(Value),
-    /// In the caller's slot, in the frame the base names (a `CallerKw`
-    /// object).
-    Caller(SlotBase, SlotId),
-}
-
-/// How [`JitContext::consume_virtual_index`] lowers `base[idx]`.
-enum IndexPlan {
-    /// A folded Hash lookup.
-    Hash(HashFold),
-    /// An elided Array's element.
-    Array(ArrayIndexPlan),
-}
-
-/// The answer of `[]` by an Integer on an elided Array
-/// ([`JitContext::plan_array_index`]).
-#[derive(Clone, Copy)]
-enum ArrayIndexPlan {
-    /// A constant index out of range.
-    Nil,
-    /// The element's slot, in the frame the base names.
-    Elem(SlotBase, SlotId),
-    /// A Fixnum index, read in place over the `len` slots at the slot, in
-    /// the frame the base names (`AsmInst::ElidedArrayIndex`).
-    Dynamic(SlotBase, SlotId, u16),
-}
-
-/// The answer of a folded Hash elements lowering.
-#[derive(Clone, Copy)]
-enum HashFold {
-    Const(Value),
-    /// A copy of this frame's slot (the default of `fetch(k, default)`).
-    Own(SlotId),
-    /// The caller's slot, in the frame the base names.
-    Caller(SlotBase, SlotId),
-}
-
 impl AbstractFrame {
     ///
     /// Materialize, inside an argument fill, every elided object among the
@@ -2086,13 +1448,12 @@ impl AbstractFrame {
     ///
     pub(in crate::codegen::jitgen) fn materialize_virtual_args(
         &mut self,
-        store: &Store,
         ir: &mut AsmIr,
         callsite: &CallSiteInfo,
     ) {
         for slot in callsite.args..callsite.args + callsite.pos_num {
             if self.virtual_at(slot).is_some() {
-                self.materialize_virtual_at(store, ir, slot, UsingFpr::new());
+                self.materialize_virtual_at(ir, slot, UsingFpr::new());
             }
         }
     }
@@ -2101,12 +1462,10 @@ impl AbstractFrame {
     /// Perform the allocation of the elided object in *slot* of this frame
     /// alone, with *using_fpr* saved around it: the frame-level half of
     /// [`JitContext::materialize_virtual`], for the places that hold no
-    /// `AbstractState` — an argument fill, a return segment
-    /// (`doc/escape_analysis.md` §9).
+    /// `AbstractState` — an argument fill, a return segment.
     ///
     pub(in crate::codegen::jitgen) fn materialize_virtual_at(
         &mut self,
-        store: &Store,
         ir: &mut AsmIr,
         slot: SlotId,
         using_fpr: UsingFpr,
@@ -2115,14 +1474,8 @@ impl AbstractFrame {
         match src {
             VirtualSrc::Slots { src, len, callid } => {
                 self.write_back_range(ir, src, len);
-                if src != store[callid].args {
-                    // Elements in a local's scratch window (§10), as in
-                    // `JitContext::materialize_virtual`.
-                    ir.create_array_from(using_fpr, SlotBase::Own, src, len);
-                } else {
-                    let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
-                    ir.new_array(using_fpr, callid, inline);
-                }
+                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+                ir.new_array(using_fpr, callid, inline);
                 self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) => {
@@ -2130,13 +1483,9 @@ impl AbstractFrame {
                 self.def_reg2acc_concrete_value(ir, GP::Rax, slot, val);
             }
             VirtualSrc::CallerSlots { src, len, base } => {
-                if base == SlotBase::Own {
-                    self.write_back_elements(ir, src, len);
-                }
                 ir.create_array_from(using_fpr, base, src, len);
                 self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
             }
-            VirtualSrc::CallerKw { base, .. } => self.materialize_caller_kw(ir, slot, base),
             VirtualSrc::Range {
                 start,
                 end,
@@ -2148,29 +1497,8 @@ impl AbstractFrame {
         }
         self.discard_dead_elements(src, slot);
     }
-
-    ///
-    /// Build the `**kwrest` Hash a handed-over object stands for
-    /// (`VirtualSrc::CallerKw`) into *dst*, from the frame's table
-    /// ([`AbstractFrame::caller_kw_table`]) over the caller's kw window.
-    /// Symbol keys only: no Ruby code runs, so the FP pool needs no save.
-    ///
-    pub(in crate::codegen::jitgen) fn materialize_caller_kw(
-        &mut self,
-        ir: &mut AsmIr,
-        dst: SlotId,
-        base: SlotBase,
-    ) {
-        let (kwrest, table) = self
-            .caller_kw_table()
-            .expect("a handed-over kwrest has its table");
-        debug_assert_eq!(*kwrest, dst);
-        let rest_kw = table.iter().map(|(name, slot)| (*slot, *name)).collect();
-        self.flush_gp(ir);
-        ir.kw_rest_from(base, rest_kw);
-        self.def_reg2acc_class(ir, GP::Rax, dst, HASH_CLASS);
-    }
 }
+
 /// The slot *trace_ir* defines without reading ([`TraceIr::defined_slot`]).
 fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
     trace_ir.defined_slot(store)
@@ -2179,7 +1507,7 @@ fn defined_slot(trace_ir: &TraceIr, store: &Store) -> Option<SlotId> {
 ///
 /// What [`JitContext::settle_virtuals_before_branch`] does with a local's
 /// elided object nothing can observe after the branch
-/// (`doc/escape_analysis.md` §12).
+/// (`doc/escape_analysis.md` §10).
 ///
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::codegen::jitgen) enum DeadLocal {

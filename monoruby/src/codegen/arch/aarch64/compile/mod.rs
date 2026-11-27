@@ -1262,9 +1262,6 @@ impl Codegen {
                     ldr x30, [sp], #16;        // restore LR
                 );
             }
-            VirtualSrc::CallerKw { .. } => {
-                unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
-            }
             VirtualSrc::Range {
                 start,
                 end,
@@ -1461,10 +1458,9 @@ impl Codegen {
             self.a64_frame_store(9, 25, conv(*slot) as u32);
         }
         debug_assert!(wb.gp_is_empty());
-        // The elided objects this frame owes (`doc/escape_analysis.md`):
-        // handed-over ones with elements in its caller's frame, templates,
-        // and ones a local holds with elements in the frame's own scratch
-        // slots (§10). Here x24 is the frame's own bp, so its saved caller
+        // The elided objects this frame owes (`doc/escape_analysis.md` §6):
+        // handed-over ones with elements in its caller's frame, and
+        // templates. Here x24 is the frame's own bp, so its saved caller
         // fp is `[x24]` (what `a64_caller_slot_addr` reads at `[x29]`),
         // and x25 its lfp.
         for (dst, src) in wb.virtual_obj_entries() {
@@ -1496,41 +1492,9 @@ impl Codegen {
                         blr x9;
                     );
                 }
-                // An object a local holds (`doc/escape_analysis.md` §10):
-                // its elements, or its Range's endpoints, are in the
-                // frame's own scratch slots, reached through its lfp (x25).
-                VirtualSrc::Slots { src, len, .. } => {
-                    let f = runtime::create_array as *const () as u64;
-                    self.a64_addr_sub(0, 25, conv(src) as u32);
-                    monoasm_arm64!(&mut self.jit,
-                        mov x1, (len as u64);
-                        mov x9, (f);
-                        blr x9;
-                    );
-                }
-                VirtualSrc::Range {
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    let f = runtime::create_range as *const () as u64;
-                    for (reg, end) in [(0, start), (1, end)] {
-                        match end {
-                            RangeEnd::Const(v) => {
-                                monoasm_arm64!(&mut self.jit, mov x(reg), (v.id()););
-                            }
-                            RangeEnd::Slot(slot) => self.a64_frame_load(reg, 25, conv(slot) as u32),
-                        }
-                    }
-                    monoasm_arm64!(&mut self.jit,
-                        mov x2, (exclude_end as u64);
-                        mov x9, (f);
-                        blr x9;
-                    );
-                }
-                VirtualSrc::CallerKw { .. } => {
-                    unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
-                }
+                // A temporary's object never lives across a call, and a
+                // Range is never handed over.
+                VirtualSrc::Slots { .. } | VirtualSrc::Range { .. } => unreachable!(),
             }
             self.a64_frame_store(0, 25, conv(*dst) as u32);
         }
@@ -3402,21 +3366,6 @@ impl Codegen {
     ) -> bool {
         self.a64_caller_slot_addr(base, slot, 0);
         monoasm_arm64!(&mut self.jit, ldr x0, [x0];);
-        true
-    }
-
-    /// `slot`, addressed in the frame `base` names, <- `src`
-    /// (`AsmInst::StoreCallerSlot`).
-    pub(in crate::codegen::jitgen) fn emit_store_caller_slot(
-        &mut self,
-        base: SlotBase,
-        slot: SlotId,
-        src: GP,
-    ) -> bool {
-        let src = src.a64().0;
-        debug_assert!(src != 9 && src != 10);
-        self.a64_caller_slot_addr(base, slot, 10);
-        monoasm_arm64!(&mut self.jit, str x(src), [x10];);
         true
     }
 

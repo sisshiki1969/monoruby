@@ -1476,19 +1476,6 @@ impl AsmIr {
         self.push(AsmInst::RestKw {
             rest_kw,
             table: None,
-            base: SlotBase::Own,
-        });
-    }
-
-    /// rax <- the `**kwrest` Hash of the listed `(slot, name)` pairs, the
-    /// slots addressed in the frame `base` names (the materialization of a
-    /// `**kwrest` handed over elided, whose values are in the caller's kw
-    /// window; `doc/escape_analysis.md`).
-    pub(super) fn kw_rest_from(&mut self, base: SlotBase, rest_kw: Vec<(SlotId, IdentId)>) {
-        self.push(AsmInst::RestKw {
-            rest_kw,
-            table: None,
-            base,
         });
     }
 
@@ -1758,12 +1745,6 @@ impl AsmIr {
         });
     }
 
-    /// rax <- the element of an elided Array at the Fixnum index in the
-    /// index register (`AsmInst::ElidedArrayIndex`).
-    pub(super) fn elided_array_index(&mut self, base: SlotBase, src: SlotId, len: u16) {
-        self.push(AsmInst::ElidedArrayIndex { base, src, len });
-    }
-
     /// rax <- Array of the `len` slots at `src`, addressed in the frame
     /// `base` names (the materialization of an elided object whose
     /// elements are in the caller's frame; `doc/escape_analysis.md`).
@@ -1785,11 +1766,6 @@ impl AsmIr {
     /// rax <- the value of `slot`, addressed in the frame `base` names.
     pub(super) fn load_caller_slot(&mut self, base: SlotBase, slot: SlotId) {
         self.push(AsmInst::LoadCallerSlot { base, slot });
-    }
-
-    /// the value of `slot`, addressed in the frame `base` names <- `src`.
-    pub(super) fn store_caller_slot(&mut self, base: SlotBase, slot: SlotId, src: GP) {
-        self.push(AsmInst::StoreCallerSlot { base, slot, src });
     }
 
     pub(super) fn new_hash(&mut self, using_fpr: UsingFpr, args: SlotId, len: usize) {
@@ -3541,28 +3517,6 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
 
-    ///
-    /// Generate new Array object according to `callid`.
-    ///
-    /// ### out
-    ///
-    /// - rax: result Option<Value>
-    ///
-    /// ### destroy
-    ///
-    /// - caller save registers
-    ///
-    /// `[a, b, …][i]` with the Array elided and a Fixnum index already
-    /// loaded into the index register (Rsi / x3): rax <- the element at
-    /// the index (negative counts from the end) among the `len` slots at
-    /// `src`, or nil out of range. See `doc/escape_analysis.md`.
-    ElidedArrayIndex {
-        /// The frame the `len` slots at `src` are addressed in (as
-        /// `ArrayMinMax`).
-        base: SlotBase,
-        src: SlotId,
-        len: u16,
-    },
     /// `[a, b, …].min` / `.max` with the Array elided: compare the
     /// literal's elements in their slots. See `doc/escape_analysis.md`.
     ArrayMinMax {
@@ -3594,19 +3548,6 @@ pub(super) enum AsmInst {
     LoadCallerSlot {
         base: SlotBase,
         slot: SlotId,
-    },
-    ///
-    /// `slot`, addressed in the frame `base` names, <- `src` (an element
-    /// of an elided object a return segment hands to the caller,
-    /// `doc/escape_analysis.md` §9).
-    ///
-    /// ### destroy
-    /// - rcx (x86-64) / x9, x10 (aarch64)
-    ///
-    StoreCallerSlot {
-        base: SlotBase,
-        slot: SlotId,
-        src: GP,
     },
     NewArray {
         callid: CallSiteId,
@@ -4166,9 +4107,6 @@ pub(super) enum AsmInst {
     RestKw {
         rest_kw: Vec<(SlotId, IdentId)>,
         table: Option<DestLabel>,
-        /// The frame the slots are addressed in: this one, or the caller's
-        /// for a handed-over `**kwrest` (`VirtualSrc::CallerKw`).
-        base: SlotBase,
     },
 
     UndefMethod {

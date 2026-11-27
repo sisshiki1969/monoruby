@@ -291,9 +291,9 @@ impl<'a> JitContext<'a> {
     /// backedge` (§2.4) — and recording it as it is made the sequence
     /// rise and fall.
     ///
-    /// The two sides must carry the same elided objects for the join: one
-    /// not on both is materialized, as `analyse_loop` does for the walk's
-    /// entry. The join keeps *new*'s placement where the two disagree.
+    /// Neither side carries an elided object (a stray one is built, as
+    /// `analyse_loop` does). The join keeps *new*'s placement where the
+    /// two disagree.
     ///
     #[cfg(feature = "fixpoint-join")]
     fn accumulate_backedge(
@@ -306,18 +306,12 @@ impl<'a> JitContext<'a> {
             return new;
         };
         let mut old = old.clone();
-        if new.virtuals() != old.virtuals() {
-            let common: Vec<(SlotId, VirtualSrc)> = new
-                .virtuals()
-                .iter()
-                .filter(|v| old.virtuals().contains(v))
-                .copied()
-                .collect();
+        if !new.virtuals().is_empty() || !old.virtuals().is_empty() {
             let pc = self.iseq().get_bb_pc(loop_start);
             let mut ctx = JitContext::loop_analysis(self, pc, loop_start);
             let mut scratch = AsmIr::new(&ctx);
-            ctx.materialize_except(&mut new, &mut scratch, &common);
-            ctx.materialize_except(&mut old, &mut scratch, &common);
+            ctx.materialize_all(&mut new, &mut scratch);
+            ctx.materialize_all(&mut old, &mut scratch);
         }
         new.join(&old);
         new
@@ -337,12 +331,10 @@ impl<'a> JitContext<'a> {
         let pc = self.iseq().get_bb_pc(loop_start);
         let mut ctx = JitContext::loop_analysis(self, pc, loop_start);
         if let Some(backedge) = self.loop_backedge(loop_start) {
-            // An elided object the entry carries but the recorded back
-            // edge does not is one the body materializes: analyse the
-            // body from a head with it materialized, as the real compile's
-            // entries will leave it (`incoming_context`).
+            // No elided object crosses into the loop: a stray one is
+            // built, as the real compile's entries do (`settle_entries`).
             let mut scratch = AsmIr::new(&ctx);
-            ctx.materialize_except(&mut state, &mut scratch, backedge.virtuals());
+            ctx.materialize_all(&mut state, &mut scratch);
             state.join(backedge);
         };
         // The liveness is the loop's own: what was read or overwritten
@@ -385,18 +377,11 @@ impl<'a> JitContext<'a> {
                         state
                     })
                     .collect();
-                // The back edges agree on the elided objects they carry
-                // (`doc/escape_analysis.md` §3): one not on every back
-                // edge is materialized on the others.
-                let common: Vec<(SlotId, VirtualSrc)> = states[0]
-                    .virtuals()
-                    .iter()
-                    .filter(|v| states.iter().all(|s| s.virtuals().contains(v)))
-                    .copied()
-                    .collect();
+                // No back edge carries an elided object: a stray one is
+                // built, as the real compile's bridges do.
                 let mut scratch = AsmIr::new(&ctx);
                 for state in &mut states {
-                    ctx.materialize_except(state, &mut scratch, &common);
+                    ctx.materialize_all(state, &mut scratch);
                 }
                 for state in states {
                     liveness.join(&state);

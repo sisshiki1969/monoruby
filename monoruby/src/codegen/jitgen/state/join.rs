@@ -14,13 +14,12 @@ impl AbstractState {
             if FrameRef::ptr_eq(lhs, rhs) {
                 continue;
             }
-            // The two sides of a merge carry the same elided objects
-            // (`doc/escape_analysis.md` §3): the meet has no way to
-            // reconcile a difference (`V` against anything keeps `V`, and a
-            // `Discard` would silently drop the object), so the entries of
-            // a merge are settled first — an object every path brings
-            // identically stays, any other is materialized on its path's
-            // bridge (`JitContext::settle_entries`) — and a suspended outer
+            // The two sides of a merge carry the same elided objects: the
+            // meet has no way to reconcile a difference (`V` against
+            // anything keeps `V`, and a `Discard` would silently drop the
+            // object), so the entries of a merge are settled first — the
+            // frame being compiled carries none across a block boundary
+            // (`JitContext::settle_entries`) — and a suspended outer
             // frame's parameter is untouched by the callee being compiled.
             debug_assert!(
                 lhs.virtuals() == rhs.virtuals(),

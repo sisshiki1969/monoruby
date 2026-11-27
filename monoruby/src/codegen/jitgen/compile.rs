@@ -579,7 +579,7 @@ impl<'a> JitContext<'a> {
                 } else if val.class() == RANGE_CLASS && self.try_elide_literal(state, dst, val) {
                     // A `lo..hi` literal with immediate endpoints is a
                     // template the escape analysis answers from
-                    // (`doc/escape_analysis.md` §8); a use that needs the
+                    // (`doc/escape_analysis.md` §7); a use that needs the
                     // object gets the literal itself, uncopied.
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
@@ -1153,11 +1153,11 @@ impl<'a> JitContext<'a> {
                 }
             }
             TraceIr::Mov(dst, src) => {
-                // An elided object moving into `dst`
-                // (`doc/escape_analysis.md` §10; `settle_virtuals` has
-                // materialized any the move may not take).
+                // An elided object moving into a temporary
+                // (`settle_virtuals` has materialized any the move may not
+                // take).
                 if state.virtual_at(src).is_some() {
-                    self.consume_virtual_mov(state, ir, dst, src, bc_pos);
+                    self.consume_virtual_mov(state, dst, src, bc_pos);
                     self.restore_unfrozen(Some(dst));
                     return Ok(CompileResult::Continue);
                 }
@@ -1381,10 +1381,9 @@ impl<'a> JitContext<'a> {
                 let bbid = self.iseq().bb_info.get_bb_id(bc_pos);
                 let seg = self.label();
                 // An elided object still in the returned slot is one the
-                // call site may take elided (`settle_virtuals` let it
-                // through, `return_virtual_in_caller`): the edge keeps it,
-                // and the segment hands it over or allocates it, once every
-                // return path is known (`doc/escape_analysis.md` §9).
+                // call site discards (`settle_virtuals` let it through,
+                // `return_discarded`): the edge keeps it, and the segment
+                // drops it (`doc/escape_analysis.md` §8).
                 let virt = state.virtual_at(ret);
                 if self.record_return_edge(seg, state, ret, bbid, virt) {
                     ir.push(AsmInst::Br(seg));
@@ -1662,11 +1661,7 @@ impl<'a> JitContext<'a> {
                 // hash-splat — see `set_callee_frame_arguments` /
                 // `hash_splat_and_kw_rest`), so leaving it nil is
                 // universally safe and avoids a per-call `empty_hash`.
-                // Likewise for a `**kwrest` handed over elided
-                // (`VirtualSrc::CallerKw`, `doc/escape_analysis.md`): the
-                // slot holds the `nil` the caller stored, and the object
-                // stands for the Hash.
-                if self.forward_kw_deferral().is_none() && state.virtual_at(local).is_none() {
+                if self.forward_kw_deferral().is_none() {
                     ir.push(AsmInst::CheckKwRest(local));
                 }
             }
