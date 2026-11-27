@@ -4,8 +4,6 @@ use crate::codegen::jitgen::context::DeferredForward;
 mod binop;
 mod index;
 mod join;
-#[cfg(feature = "profile")]
-pub(crate) mod join_profile;
 mod liveness;
 mod read_slot;
 mod slot;
@@ -1716,11 +1714,7 @@ impl ReturnState {
         // Bignum constant at `Value` — `v.class()`-based comparison used to
         // meet it with a `Fixnum` path as `Class(INTEGER_CLASS)`, which the
         // caller reads back as `Guarded::Fixnum`.
-        let joined = self.ret.to_guarded().join_raw(&other.ret.to_guarded());
-        #[cfg(feature = "profile")]
-        if joined == Guarded::Value {
-            join_profile::record_return(&self.ret, &other.ret);
-        }
+        let joined = self.ret.to_guarded().join(&other.ret.to_guarded());
         self.ret = ReturnValue::from_guarded(joined);
     }
 }

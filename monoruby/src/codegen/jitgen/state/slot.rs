@@ -2892,7 +2892,7 @@ impl LinkMode {
     /// [`Self::equiv`] sees it: `self` is at or below `other` in the order
     /// the back-edge fixpoint climbs (`jit-log` statistics only).
     ///
-    /// Pure: it compares types with [`Guarded::join_raw`] rather than
+    /// Pure: it compares types with [`Guarded::join`] rather than
     /// running the frame join, which allocates registers and has no arm
     /// for some pairs of sentinels. A sentinel against anything it is not
     /// `equiv` to is answered `false` both ways (incomparable).
@@ -2909,7 +2909,7 @@ impl LinkMode {
             (_, LinkMode::C(_)) => false,
             (lhs, rhs) => {
                 let top = rhs.guarded();
-                lhs.guarded().join_raw(&top) == top
+                lhs.guarded().join(&top) == top
             }
         }
     }
@@ -3195,7 +3195,7 @@ impl Guarded {
         classes
             .iter()
             .map(|c| Guarded::from_cached(*c))
-            .reduce(|a, b| a.join_raw(&b))
+            .reduce(|a, b| a.join(&b))
             .unwrap_or(Guarded::Value)
     }
 
@@ -3218,17 +3218,6 @@ impl Guarded {
     /// type equals this meet for every non-sentinel slot (placement
     /// reconciliation is the rest of `join`).
     pub(super) fn join(&self, other: &Self) -> Self {
-        let res = self.join_raw(other);
-        #[cfg(feature = "profile")]
-        if res == Guarded::Value && self != other {
-            super::join_profile::record_guarded(self, other);
-        }
-        res
-    }
-
-    /// [`Self::join`] without the `profile`-feature stats hook — for callers
-    /// that only probe the meet (the hook would double-count).
-    pub(super) fn join_raw(&self, other: &Self) -> Self {
         if self == other {
             return *self;
         }
