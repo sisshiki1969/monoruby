@@ -11,7 +11,7 @@
 //! `Database` owns its `sqlite3*` and a `Statement` its `sqlite3_stmt*`
 //! as native payloads closed when collected; `Statement#step` steps and
 //! reads the whole row in one call; opening and closing a connection run
-//! on the native pool so the other green threads keep going; a user
+//! with the GVL released so the other threads keep going; a user
 //! function is a real SQLite function that calls back into Ruby from
 //! inside `sqlite3_step`, and an exception it raises is stashed rather
 //! than unwound through the C frames, then re-raised once the step
@@ -642,9 +642,8 @@ fn db_open_v2(ctx: &mut Ctx, this: Value, args: &[Value], _: Block) -> Result<Va
     };
     let mut db: *mut sq::sqlite3 = std::ptr::null_mut();
     // The strings and the out-parameter are owned by this frame, which
-    // stays put while the worker runs (the green thread parks here). The
-    // library is `SQLITE_THREADSAFE=1`, so a connection opened on a
-    // worker is usable from the interpreter thread afterwards.
+    // stays put while the open runs without the GVL. The library is
+    // `SQLITE_THREADSAFE=1`, so a connection is usable from any thread.
     let (fname, vfs, out) = (
         filename.as_ptr(),
         zvfs.as_ref().map_or(std::ptr::null(), |v| v.as_ptr()),
@@ -691,8 +690,8 @@ fn db_close(ctx: &mut Ctx, this: Value, _: &[Value], _: Block) -> Result<Value> 
     if h.db.is_null() {
         return Ok(Value::nil());
     }
-    // Clear the handle *before* parking: the object must not be closed
-    // twice if another green thread reaches `close` while this one waits.
+    // Clear the handle *before* releasing the GVL: the object must not be
+    // closed twice if another thread reaches `close` while this one waits.
     let db = std::mem::replace(&mut h.db, std::ptr::null_mut());
     h.funcs.clear();
     // `close_v2` never fails for a live handle; with statements still open
@@ -995,14 +994,11 @@ thread_local! {
     /// The step in progress on each connection.
     ///
     /// Keyed by connection, and saved-and-restored rather than pushed
-    /// and popped, because green-thread switches are not LIFO: a
-    /// callback that parks (any `sleep` or IO in the block) lets another
-    /// green thread run, and it may finish its own step first. A plain
-    /// stack would then have one thread pop the other's entry and hand a
-    /// callback the wrong context. Per connection, two green threads
-    /// stepping two connections never meet; nesting on one connection —
-    /// which SQLite allows, and the C extension permits — still works,
-    /// since the inner guard restores the outer on the way out.
+    /// and popped, a leftover of the M:1 thread model, where a callback
+    /// that parked let another thread run on the same OS thread and finish
+    /// its own step first. Nesting on one connection — which SQLite
+    /// allows, and the C extension permits — still works, since the inner
+    /// guard restores the outer on the way out.
     ///
     /// Per kernel thread is right under the 1:1 thread model too: SQLite
     /// calls a function back on the thread that is stepping, so the entry

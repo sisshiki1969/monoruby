@@ -288,8 +288,8 @@ cd ../monoruby
 bin/spec
 ```
 
-> **Note**: Under monoruby's thread scheduler (the 1:1 model by default,
-> the M:1 green one with `MONORUBY_THREAD_MODEL=green`), the formerly
+> **Note**: Under monoruby's 1:1 thread model (kernel threads under a
+> GVL), the formerly
 > hang-prone specs (`core/io/copy_stream_spec.rb`, `core/io/select_spec.rb`)
 > run to completion — blocking IO parks the calling thread (releasing the
 > GVL) on an fd poll instead of blocking the process.
@@ -568,16 +568,15 @@ External crates (fetched from git):
   it through `tests::ensure_extension` (into `target/ext/`, since the
   outer cargo holds the main target dir's lock). `Statement#step` steps
   and reads the whole row in one call. Opening and closing a connection
-  park the green thread on the native pool (`NativeOp::Ext`); everything
+  run with the GVL released (`call_blocking`, `NativeOp::Ext`); everything
   else runs inline.
   `create_function` is a real user-defined function: SQLite calls back
   into Ruby from inside `sqlite3_step`, as nokogiri's XPath handlers do.
   A raised exception is stashed rather than unwound through the C frames
   and re-raised once the step returns. The callback finds the running
   `Executor` through a thread-local map keyed by **connection**, saved
-  and restored rather than pushed and popped: green-thread switches are
-  not LIFO, so a callback that parks would otherwise let another thread
-  pop its entry. `create_aggregate` rides the same machinery with
+  and restored rather than pushed and popped, so nested steps on one
+  connection restore the outer context on the way out. `create_aggregate` rides the same machinery with
   `xStep` / `xFinal`: each aggregation group gets one instance of the
   gem's proxy class, held in `DbHandle::aggregates` (where `mark` finds
   it) and addressed by a slot number kept in SQLite's per-group
@@ -838,10 +837,7 @@ missing one is now a visible skip in the script's summary rather than a
 1. `cargo llvm-cov nextest` with the stress features (`stress-spill-pool`, plus
    `gc-stress` only when `GC_STRESS=1` is exported — it is opt-in, so pushes
    and PRs never pay the per-safepoint stress; see the manual `gc-stress`
-   workflow below), then the thread-related unit tests once more with
-   `MONORUBY_THREAD_MODEL=green` (the modules that spawn, park, wait on
-   fds or block in the kernel), so the M:1 green scheduler, no longer the
-   default, is still exercised and counted in the coverage report
+   workflow below)
 2. Builds a debug benchmark binary with the **same** feature list, so under
    `GC_STRESS=1` the benchmark/optcarrot/spec phases are stressed too (that
    run takes hours — it is a manual, deliberate exercise)
@@ -1140,7 +1136,7 @@ and the options blob are per prism version.
    Gems monoruby installs itself (`gem install` through `<root>/bin/gem`) go to **monoruby's own gem home**, `~/.monoruby/gems/<api version>` (`Gem.default_dir`, set in `stdlib/rubygems/defaults/operating_system.rb`; `GEM_HOME` overrides it), never the host CRuby's: a C extension built there is linked against monoruby's C API layer and rubygems keys built extensions on `extensions/<platform>/<api>/<gem>` alone. Those gems are not in the probe cache, so a `require` that finds nothing on `$LOAD_PATH` or in the cached host gem `lib/`s calls `Gem.try_activate(feature)` and looks again (`Executor::activate_gem_for`; what rubygems' own `Kernel#require` does on a `LoadError`). The host's gem directories stay on `Gem.path` for reading: through `GEM_PATH`, and — because a program may clear `GEM_PATH` itself, as ruby-bench's harness does before running the host's `bundle install` — through `Gem.default_path`, which `operating_system.rb` extends with the `GEM_PATH` monoruby started with (`MONORUBY_HOST_GEM_PATH`, set by `Globals::new`). A gem bundled from a **git** source is checked out by Bundler under `Gem.dir/bundler/gems` — monoruby's own home when Bundler runs on monoruby, the host's after the host's `bundle install` — so `stdlib/monoruby_hooks/bundler_source_git.rb` prepends a fallback to `Bundler::Source::Git#install_path`: a checkout missing from monoruby's home is taken from the same place under a host gem directory. It is loaded right after `bundler/source/git.rb` by `Executor::run_load_hooks` (a table of path suffix → stub feature, applied after any `require` / autoload of a matching file), since Bundler autoloads that file by absolute path and a same-named stub could not intercept it. The same table loads `stdlib/monoruby_hooks/bundler_runtime.rb` after `bundler/runtime.rb`: once `Bundler.setup` has run, the cached host gem `lib/`s stop being a `require` fallback (`Globals::disable_host_gem_fallback`), so only the bundle is visible, as on CRuby (ruby-lsp probes `require "rubocop"` and must not find a host rubocop outside its bundle). `stdlib/<arch>/rbconfig/sizeof.rb` asks the host `ruby` with the Bundler variables (`RUBYOPT`, `BUNDLER_SETUP`, `GEM_HOME`, …) removed, so the child does not set up the bundle against monoruby's gem home.
 7. **gc-stress in tests**: `gc-stress` is **opt-in** — `export GC_STRESS=1` before `bin/test` and it applies to **every** phase (nextest *and* the benchmark binary, so optcarrot / ruby-spec are stressed too). Since the true-stress restoration this means a collection at **every safepoint**, so a `GC_STRESS=1` run of the full scope is an hours-scale job. Nothing enables it implicitly, so the automatic CI never pays it; run the manual `gc-stress` workflow instead. Tests whose loop counts exist only to reach the JIT thresholds should shrink them under `cfg!(feature = "gc-stress")` (see `tests/method_call.rs`) — otherwise they blow past nextest's per-test cap.
 8. **Interpreter instance (`src/vm.rs`)**: the allocator (`ALLOC`), the JIT
-   (`CODEGEN`), the green-thread scheduler (`SCHEDULER`, `SCHED_RSP`), the
+   (`CODEGEN`), the thread registry (`SCHEDULER`), the
    preempt timer state and a few caches (weak maps,
    const epochs, `Regexp.timeout`, JSON's class ids) are fields of one
    `vm::Vm`, reached through `vm::vm()`. Each OS thread carries only a
@@ -1150,25 +1146,23 @@ and the options blob are per prism version.
    the `KEY.with(|c| ..)` shape of the `thread_local!`s they replaced. What
    stays a genuine `thread_local!` is per *OS thread* state: the poll-word
    address (`poll_flag`, reachable from inside the global allocator), the
-   scheduler-entry depth, the `hash`/`inspect` recursion guards.
-   By default (`scheduler/native.rs`; `MONORUBY_THREAD_MODEL=green`
-   selects the older M:1 green scheduler in `scheduler.rs`) each Ruby
-   `Thread` is a kernel thread that *adopts* the
+   GVL bookkeeping, the `hash`/`inspect` recursion guards.
+   Each Ruby `Thread` is a kernel thread (`scheduler/native.rs`; the M:1
+   green scheduler was removed in 2026-11) that *adopts* the
    spawner's `Vm` (`vm::adopt`) and touches it only while holding the GVL
    (`src/gvl.rs`), so `CODEGEN` / `ALLOC` / `SCHEDULER` are still never
    used concurrently; every GVL release is at a safepoint (`doc/threads.md`
    §12). A syscall that blocks in the kernel with nothing to poll
    (`flock`, a FIFO `open`, `waitpid`, `getaddrinfo`, a blocking FFI or
    extension call) runs on the calling kernel thread with the GVL
-   released (`scheduler::without_gvl`, §12.7) instead of on the native
-   pool; an interrupt reaches it through `SIGVTALRM` (`EINTR`, then
+   released (`scheduler::without_gvl`, §12.7); an interrupt reaches it through `SIGVTALRM` (`EINTR`, then
    delivery). The closure must touch nothing of the interpreter.
    Signals are converted (trap handlers run) on the main thread only:
    the kernel delivers them to main's kernel thread, whose park or
    GVL-less region returns `EINTR`, and a non-main holder that sees the
    pending signal at its poll point hands the GVL over at once
-   (§12.8). `Thread.ignore_deadlock` switches the deadlock detector off
-   in both models. JIT code is written only under the GVL; an acquire by
+   (§12.8). `Thread.ignore_deadlock` switches the deadlock detector off.
+   JIT code is written only under the GVL; an acquire by
    another thread than the last holder serializes the instruction stream
    (`Gvl::on_acquired`'s `cpuid`, skipped on a same-thread reacquire,
    which is costly under virtualization and frequent around C-extension

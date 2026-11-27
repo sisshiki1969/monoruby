@@ -20,7 +20,7 @@ String 側の表現（共有部分文字列、code range、`regex_view`）は
 束ねている。`Regex` は生の `re_pattern_buffer` ポインタ、コンパイル時の
 パターンバイト列、オプション語、`OnigmoEncoding`、コンパイル時の診断
 `Vec<String>` を持ち、`unsafe impl Send + Sync` なので、プロセス全体で 1 つの
-`Arc<Regex>` をグリーンスレッド間で共有できる。
+`Arc<Regex>` をスレッド間で共有できる。
 
 構築は `Regex::new_bytes_with_encoding` の 1 本に集約され、`onig_new` を
 `OnigSyntaxRuby` で呼び、Onigmo の `onig_syntax_warn` 出力をフックで拾って

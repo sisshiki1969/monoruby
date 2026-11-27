@@ -225,7 +225,7 @@ What it cannot tell:
 Each OS thread knows the `Executor` running on it: `prof::start` sets it
 for the main program, `prof::enter_thread` for a native thread's body, and
 `prof::set_executor` follows every fiber switch (`Fiber#resume` /
-`#transfer`, the enumerator fibers) and green-thread resume. Each thread
+`#transfer`, the enumerator fibers). Each thread
 also carries a phase byte, set by guards around `Allocator::gc`, the JIT
 compile in `Codegen::compile`, the parser and `bytecode_compile`, and the
 global allocator.

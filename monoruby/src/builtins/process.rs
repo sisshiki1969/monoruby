@@ -15,8 +15,8 @@ mod rusage;
 pub(super) fn init(globals: &mut Globals) {
     let klass = globals.define_toplevel_module("Process").id();
     globals.define_builtin_module_func(klass, "pid", pid, 0);
-    // Share Kernel#fork's implementation: it resets the green-thread
-    // scheduler in the child and maps an uncaught SystemExit /
+    // Share Kernel#fork's implementation: it resets the thread registry
+    // in the child and maps an uncaught SystemExit /
     // SignalException in the block to the right process exit, which the
     // old Process-local copy did not.
     globals.define_builtin_module_func(klass, "fork", crate::builtins::kernel::fork, 0);
@@ -1476,7 +1476,7 @@ fn process_kill(
         // raises the converted SignalException (or runs the trap handler)
         // inside the `kill` call, as CRuby does — not at some later poll
         // point after the caller's block has already returned. On a
-        // non-main green thread this poll is a deferring no-op (delivery
+        // non-main thread this poll is a deferring no-op (delivery
         // is gated to main; see `execute_gc`), which is exactly right.
         if crate::executor::execute_gc(vm, globals).is_none() {
             return Err(vm.take_error());
@@ -1748,7 +1748,8 @@ fn process_fork(
     // cannot inherit one another OS thread was holding, and snapshot
     // what the child has to reset (`crate::fork`).
     let guards = crate::fork::prepare(crate::fork::ForkKind::Continue);
-    // SAFETY: fork() in a green-thread (single OS thread) process.
+    // SAFETY: fork() with every process-wide lock held by this thread
+    // (`fork::prepare`); the child keeps only this thread.
     let pid = unsafe { libc::fork() };
     if pid < 0 {
         let err = std::io::Error::last_os_error();
@@ -1756,8 +1757,8 @@ fn process_fork(
         return Err(MonorubyErr::errno_with_msg(&globals.store, &err, "fork"));
     }
     if pid == 0 {
-        // Child: only the forking green thread survives — and neither do
-        // the native offload workers nor the preempt timer.
+        // Child: only the forking thread survives — the other Ruby
+        // threads' kernel threads and the preempt timer do not.
         guards.reset_child();
         crate::scheduler::fork_child_reset_threads(vm);
     } else {
@@ -1802,8 +1803,9 @@ fn process_daemon(
     // As in `_fork`: nothing buffered may cross the fork — here the
     // daemon child's std fds are about to become `/dev/null`.
     crate::rvalue::io::flush_std_streams();
-    // SAFETY: fork/setsid/chdir/open/dup2 on our own process; green
-    // threads mean the child is single-threaded.
+    // SAFETY: fork/setsid/chdir/open/dup2 on our own process, with every
+    // process-wide lock held across the fork (`fork::prepare`); the child
+    // is single-threaded.
     unsafe {
         let guards = crate::fork::prepare(crate::fork::ForkKind::Continue);
         let pid = libc::fork();
@@ -2460,14 +2462,6 @@ mod tests {
     /// running. `Kernel#system`'s own path and the backtick held it.
     #[test]
     fn a_child_is_waited_for_without_the_gvl() {
-        // Only the 1:1 model has a GVL to hand over: in the M:1 green
-        // model `scheduler::without_gvl` runs its closure inline, so a
-        // waitpid stops the process there by design. `bin/test` re-runs
-        // this module under `MONORUBY_THREAD_MODEL=green`, so skip it
-        // there rather than assert the other model's behaviour.
-        if std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green") {
-            return;
-        }
         run_test_once(
             r#"
             res = []
@@ -3519,8 +3513,8 @@ mod new_api_tests {
     }
 
     /// A fork from a thread other than main: the forking thread is the
-    /// child's only thread and its main (in the 1:1 model its own GVL
-    /// handle, not the `Vm`'s main one, is the survivor's).
+    /// child's only thread and its main (its own GVL handle, not the
+    /// `Vm`'s main one, is the survivor's).
     #[test]
     fn fork_from_a_non_main_thread() {
         run_test_once(
@@ -3670,14 +3664,12 @@ mod new_api_tests {
     #[test]
     fn signal_delivered_while_another_thread_is_parked() {
         // A trap handler on MAIN must still run while a second thread sits
-        // parked inside `sleep`. `sleep`/`pass`/`join` bump the
-        // scheduler-entry depth that gates signal delivery, and a parked
-        // thread keeps that guard alive on its own frozen stack — so the
-        // depth has to travel with the context switch. When it did not,
-        // one sleeping thread pinned the count above zero and no
-        // `Signal.trap` handler ever ran again: `nil until f` spun
-        // forever, and the next blocking write surfaced the internal
-        // `__monoruby_signal_interrupt__` marker as a RuntimeError.
+        // parked inside `sleep`. Under the former M:1 scheduler a parked
+        // thread pinned the scheduler-entry depth that gated signal
+        // delivery, so no `Signal.trap` handler ever ran again: `nil
+        // until f` spun forever, and the next blocking write surfaced the
+        // internal `__monoruby_signal_interrupt__` marker as a
+        // RuntimeError. Kept as a regression test for delivery to main.
         //
         // Forked, like the two tests above, so a starvation regression
         // fails by timeout instead of wedging the harness.

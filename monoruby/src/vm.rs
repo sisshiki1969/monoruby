@@ -2,10 +2,10 @@
 //! per-OS-thread `thread_local!` singleton, gathered into one struct.
 //!
 //! monoruby's runtime state has always been "one interpreter per OS
-//! thread": the allocator, the JIT, the green-thread scheduler and a
+//! thread": the allocator, the JIT, the thread scheduler and a
 //! handful of caches each lived in their own `thread_local!`, and the
 //! test harness relied on that to run one interpreter per test thread.
-//! A 1:1 thread model (one kernel thread per Ruby `Thread`) breaks that
+//! One kernel thread per Ruby `Thread` breaks that
 //! identification — several OS threads then share one interpreter — so
 //! this module makes the identification explicit and *indirect*: the
 //! state lives in a [`Vm`], and each OS thread carries only a pointer to
@@ -20,8 +20,8 @@
 //!
 //! What stays a genuine `thread_local!` is what is per *OS thread*
 //! rather than per interpreter: the poll-word address `poll_flag` reads
-//! from inside the global allocator, the scheduler-entry depth of the
-//! running context, and the recursion guards of `hash` / `inspect`.
+//! from inside the global allocator, the GVL bookkeeping of the kernel
+//! thread, and the recursion guards of `hash` / `inspect`.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
@@ -51,12 +51,8 @@ pub(crate) struct Vm {
     /// The VM-tier and JIT code generator (`codegen::CODEGEN`). Dropped
     /// first: its `Drop` detaches the poll word from the registries.
     codegen: OnceCell<RefCell<Codegen>>,
-    /// The green-thread scheduler (`scheduler::SCHEDULER`).
+    /// The thread registry (`scheduler::SCHEDULER`).
     scheduler: OnceCell<RefCell<Scheduler>>,
-    /// The scheduler loop's saved machine context; its address is baked
-    /// into the context switch stubs, so it must not move — it lives in
-    /// the `Box` this `Vm` is allocated in.
-    sched_rsp: Cell<u64>,
     /// The preempt timer's state (`preempt::STATE`).
     preempt: OnceCell<RefCell<crate::preempt::State>>,
     /// Every live `ObjectSpace::WeakMap`, as raw cells (not roots).
@@ -104,7 +100,6 @@ impl Vm {
             gc_force_major: Cell::new(false),
             codegen: OnceCell::new(),
             scheduler: OnceCell::new(),
-            sched_rsp: Cell::new(0),
             preempt: OnceCell::new(),
             weakmaps: RefCell::new(Vec::new()),
             fstrings: RefCell::new(Default::default()),
@@ -190,7 +185,7 @@ pub(crate) fn vm() -> &'static Vm {
 }
 
 /// Serve an interpreter another OS thread owns: the kernel thread of a
-/// Ruby `Thread` in the 1:1 model. The thread must have no interpreter
+/// Ruby `Thread`. The thread must have no interpreter
 /// of its own, and must call [`unadopt`] before it exits (the owner
 /// tears the `Vm` down, and only after every adopter is gone).
 pub(crate) fn adopt(vm: &Vm) {
@@ -310,8 +305,6 @@ pub(crate) fn class_version() -> u32 {
 pub(crate) static SCHEDULER: VmField<RefCell<Scheduler>> =
     VmField::new(|vm| vm.scheduler.get_or_init(|| RefCell::new(Scheduler::new())));
 
-pub(crate) static SCHED_RSP: VmField<Cell<u64>> = VmField::new(|vm| &vm.sched_rsp);
-
 pub(crate) static PREEMPT_STATE: VmField<RefCell<crate::preempt::State>> =
     VmField::new(|vm| vm.preempt.get_or_init(|| RefCell::new(crate::preempt::State::new())));
 
@@ -380,12 +373,12 @@ mod tests {
     use super::*;
 
     /// Each OS thread gets its own `Vm`, and a field's address is stable
-    /// for the thread's lifetime (the switch stubs bake `SCHED_RSP`'s in).
+    /// for the thread's lifetime (code generation bakes some of them in).
     #[test]
     fn one_vm_per_os_thread_with_stable_fields() {
-        let here = SCHED_RSP.with(|c| c.as_ptr() as usize);
-        assert_eq!(here, SCHED_RSP.with(|c| c.as_ptr() as usize));
-        let there = std::thread::spawn(|| SCHED_RSP.with(|c| c.as_ptr() as usize))
+        let here = REGEXP_GLOBAL_TIMEOUT.with(|c| c.as_ptr() as usize);
+        assert_eq!(here, REGEXP_GLOBAL_TIMEOUT.with(|c| c.as_ptr() as usize));
+        let there = std::thread::spawn(|| REGEXP_GLOBAL_TIMEOUT.with(|c| c.as_ptr() as usize))
             .join()
             .unwrap();
         assert_ne!(here, there);

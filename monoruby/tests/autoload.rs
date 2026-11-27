@@ -17,7 +17,7 @@
 //! that retirement is reversible, are easy to get subtly wrong and
 //! stay invisible until many threads race on one file.
 //!
-//! These spawn the real binary: green threads and a file `require` are
+//! These spawn the real binary: threads and a file `require` are
 //! both process-level, so an in-process `run_test` cannot reach them.
 //! The expectations are differential — each case asks the reference
 //! CRuby what it answers and requires the same answer — because the

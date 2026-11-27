@@ -7,11 +7,11 @@ use jitgen::{AbstractState, JitContext};
 //
 // Thread class
 //
-// monoruby threads are cooperative green threads multiplexed on the one
-// OS thread by the scheduler (src/scheduler.rs). `Thread.new` queues the
-// body; it starts running the first time any thread reaches a blocking
-// point (`sleep`, `#join`, `Thread.pass`, ...). Blocking APIs park the
-// calling thread on the scheduler instead of blocking the process.
+// Each monoruby thread is a kernel thread of its own, and the threads
+// take turns under the GVL (src/scheduler.rs, src/gvl.rs). `Thread.new`
+// starts the kernel thread and hands it the first slice. Blocking APIs
+// park the calling thread with the GVL released instead of blocking the
+// process.
 //
 // Ruby-level surface that is pure bookkeeping (name, thread/fiber-local
 // storage, `Process::Waiter` for `Process.detach`) stays in
@@ -169,7 +169,7 @@ fn handle_interrupt(
 /// permit, still does). Deferred interrupts fire at block exit, taking
 /// precedence over the block's own exception (as `handle_interrupt`).
 ///
-/// The green-thread analogue of CRuby's `mutex_lock_uninterruptible`
+/// The analogue of CRuby's `mutex_lock_uninterruptible`
 /// (the `rb_mutex_sleep` re-acquire): `Thread::Mutex#sleep` wraps its
 /// ensure-side `lock` in this so a `ConditionVariable#wait`er killed
 /// after being signaled still re-acquires the mutex before dying.
@@ -412,7 +412,7 @@ pub(crate) extern "C" fn thread_alloc_func(class_id: ClassId, _: &mut Globals) -
 ///
 /// - new(*args) {|*args| ... } -> Thread
 ///
-/// Creates a green thread running the block, queues it, and immediately
+/// Creates a thread running the block, starts it, and immediately
 /// yields one time slice so the body starts before `new` returns (up to
 /// its first park). CRuby starts a new thread concurrently right away;
 /// deferring the first slice to "whenever anything next blocks" leaves a
@@ -455,7 +455,7 @@ fn thread_new(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _pc: BytecodeP
 ///
 /// The queueing half of `Thread.new`: requires a block (ThreadError
 /// otherwise), refuses a live or already-initialized receiver, then
-/// installs the body and queues the green thread. Records the block's
+/// installs the body and starts the thread. Records the block's
 /// definition site for `#to_s` (CRuby shows `file:line` there).
 #[monoruby_builtin]
 fn thread_initialize(
@@ -787,8 +787,8 @@ fn join(
 /// `block` returns is a wake from elsewhere: the fiber parks again, with
 /// the time left recomputed (CRuby's thread_join_sleep does the same).
 /// One taken means the target is on its way out: the native join waits
-/// out that moment — in the 1:1 model the fiber can run before the
-/// exiting thread is marked dead.
+/// out that moment — the fiber can run before the exiting thread is
+/// marked dead.
 fn join_through_scheduler(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -956,22 +956,22 @@ fn thread_backtrace(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Bytec
         // Skip this builtin's own frame.
         super::kernel::collect_backtrace(globals, vm.cfp(), 1, None, 64, true)
     } else if let Some(exec) = self_.as_thread_inner().resume_exec {
-        // SAFETY: one OS thread — a parked thread's executor is
-        // quiescent until the scheduler resumes it, so its frame chain
-        // cannot change under us.
+        // SAFETY: we hold the GVL — a parked thread's executor is
+        // quiescent until it gets the GVL back, so its frame chain cannot
+        // change under us.
         let cfp = unsafe { exec.as_ref() }.cfp();
         super::kernel::collect_backtrace(globals, cfp, 0, None, 64, true)
     } else if self_ == scheduler::main_thread(vm)
         && let Some(exec) = scheduler::main_exec_ptr()
     {
-        // The parked main thread: its executor is published to the
-        // scheduler while green threads run on its behalf.
-        // SAFETY: as above — main is parked while a green thread runs.
+        // Main without the GVL: its root executor is published whenever
+        // it lets go of the lock.
+        // SAFETY: as above — main is quiescent while we hold the GVL.
         let cfp = unsafe { exec.as_ref() }.cfp();
         super::kernel::collect_backtrace(globals, cfp, 0, None, 64, true)
     } else {
-        // Runnable-but-not-current (ready queue): the context is mid
-        // switch — report no frames rather than guess.
+        // Runnable-but-not-current, waiting for the GVL with no context
+        // published — report no frames rather than guess.
         vec![]
     };
     Ok(Value::array_from_vec(frames))
@@ -990,8 +990,7 @@ fn thread_alive(_: &mut Executor, _: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// ### Thread#native_thread_id
 ///
 /// The id of the kernel thread this thread runs on (`gettid(2)`;
-/// `pthread_threadid_np` on Darwin), nil once it is dead. Green threads
-/// share the interpreter's kernel thread and so report the same id.
+/// `pthread_threadid_np` on Darwin), nil once it is dead.
 ///
 /// [https://docs.ruby-lang.org/en/master/Thread.html#method-i-native_thread_id]
 #[monoruby_builtin]
@@ -1296,7 +1295,7 @@ mod tests {
             res
             "#,
         );
-        // The mspec TimeoutAction shape: a watchdog green thread dumps
+        // The mspec TimeoutAction shape: a watchdog thread dumps
         // every thread's backtrace, including the parked main thread's.
         run_test_once(
             r#"
@@ -1734,8 +1733,8 @@ mod tests {
 
     #[test]
     fn native_offload_flock_and_fifo() {
-        // Kernel-blocking syscalls must park only the calling green
-        // thread, not the process (native worker offload,
+        // Kernel-blocking syscalls must hold up only the calling thread,
+        // not the process (they run with the GVL released,
         // doc/threads.md §9). Both of these hang the whole
         // interpreter without it.
         run_test_once(
@@ -1776,7 +1775,7 @@ mod tests {
     #[test]
     fn preempt_busy_main_lets_thread_run() {
         // Timeslice preemption: a busy-looping main thread must not
-        // starve a runnable green thread forever. This also probes the
+        // starve a runnable thread forever. This also probes the
         // JIT captured-local protocol: `done` is captured by the thread
         // block, so the loop condition must re-read the (heap) frame
         // slot every iteration — a stale register cache would spin
@@ -1832,8 +1831,8 @@ mod tests {
 
     #[test]
     fn preempt_sleeper_wakes_under_busy_main() {
-        // A green thread's expired `sleep` must be noticed even though
-        // main never parks (the pass path promotes due sleepers).
+        // A thread's expired `sleep` must be noticed even though main
+        // never parks.
         run_test_once(
             r#"
             r = []
@@ -1849,7 +1848,7 @@ mod tests {
     #[test]
     fn thread_gc_while_main_parked_inside_fiber() {
         // Main parks *inside a fiber* (`sleep` in an Enumerator body); a
-        // green thread then runs and triggers GC. The scheduler used to
+        // thread then runs and triggers GC. The scheduler used to
         // publish the parking (fiber) executor as `main_exec`, so the GC
         // marked only the fiber's frame chain — every object referenced
         // solely from the main thread's root frames (here `arr`, and the
@@ -1882,10 +1881,10 @@ mod tests {
     #[test]
     fn thread_block_param_of_cross_thread_frame() {
         // Reading a `&block` parameter (lazily materialized by monoruby)
-        // from inside a green thread: the parameter's lexical home is a
+        // from inside a thread: the parameter's lexical home is a
         // heap-promoted frame owned by the *main* thread's frame chain.
         // Used to abort the whole process on `parent_fiber.unwrap()` while
-        // searching the green thread's own chain for it (issue #950).
+        // searching the thread's own chain for it (issue #950).
         run_test_once(
             r#"
             def go(&block)
@@ -2031,7 +2030,7 @@ mod tests {
             v.inspect
             "#,
         );
-        // Write-ready set through the green path.
+        // Write-ready set while another thread is alive.
         run_test_once(
             r#"
             r, w = IO.pipe
@@ -2340,9 +2339,8 @@ mod tests {
         );
     }
 
-    /// `Monitor` in the thread model under test (the fuller set is
-    /// tests/monitor.rs, which only the default model runs): other
-    /// threads are kept out, a timed `wait` answers false and a signaled
+    /// `Monitor` (the fuller set is tests/monitor.rs): other threads are
+    /// kept out, a timed `wait` answers false and a signaled
     /// one true, each with the monitor held again.
     #[test]
     fn monitor_excludes_and_waits() {
@@ -2392,8 +2390,8 @@ mod tests {
 
     #[test]
     fn thread_nested_fiber_inside_thread() {
-        // A fiber created inside a green thread keeps its own resume
-        // chain across scheduler switches.
+        // A fiber created inside a thread keeps its own resume chain
+        // across GVL handoffs.
         // NOTE: resume(arg) with a one-param fiber block hits a
         // pre-existing (master) destructure bug, so this test passes the
         // value through the yield instead.
@@ -2768,8 +2766,8 @@ mod tests {
     #[test]
     fn thread_killed_or_raised_before_it_starts() {
         // A kill / raise queued on a thread whose body has not run yet
-        // decides how the thread dies (FIFO, as dispatch would); under the
-        // 1:1 model the spawner still holds the GVL when it queues them.
+        // decides how the thread dies (FIFO); the spawner still holds the
+        // GVL when it queues them.
         run_test_once(
             r#"
             r = []
@@ -2804,20 +2802,17 @@ mod tests {
             a << t.native_thread_id
             "#,
         );
-        // Each 1:1 thread has a kernel thread of its own (green threads
-        // all share the interpreter's).
-        if crate::scheduler::native::enabled() {
-            run_test_once(
-                r#"
-                t = Thread.new { sleep }
-                Thread.pass until t.status == "sleep"
-                r = t.native_thread_id != Thread.current.native_thread_id
-                t.kill
-                t.join
-                r
-                "#,
-            );
-        }
+        // Each thread has a kernel thread of its own.
+        run_test_once(
+            r#"
+            t = Thread.new { sleep }
+            Thread.pass until t.status == "sleep"
+            r = t.native_thread_id != Thread.current.native_thread_id
+            t.kill
+            t.join
+            r
+            "#,
+        );
     }
 
     /// A fork child is a new process, and the forking thread is its
@@ -2935,8 +2930,7 @@ mod tests {
     fn ignore_deadlock_waits_for_a_signal_instead_of_aborting() {
         // The flag's purpose: every thread waits forever, and a signal
         // handler is what wakes one of them — here it runs while main is
-        // parked (inside the 1:1 park's EINTR return, or the green
-        // scheduler's idle wait). Forked, so a regression (the detector
+        // parked (inside the park's EINTR return). Forked, so a regression (the detector
         // aborting, or the handler never running) fails by timeout
         // rather than wedging the harness.
         run_test_once(
@@ -2978,12 +2972,7 @@ mod tests {
         // signal to the main kernel thread (the others block it), whose
         // `poll` returns EINTR; the holder hands the GVL over at its
         // next poll point, and main runs the handler before going back
-        // to sleep — CRuby's timing, not the end of the sleep. 1:1
-        // model only: the green scheduler leaves the signal for main's
-        // next poll after the sleep (doc/threads.md §10).
-        if !crate::scheduler::native_enabled() {
-            return;
-        }
+        // to sleep — CRuby's timing, not the end of the sleep.
         run_test_once(
             r#"
             r, w = IO.pipe
@@ -3052,7 +3041,7 @@ mod tests {
 
     #[test]
     fn a_child_spawned_from_a_thread_starts_with_an_empty_signal_mask() {
-        // A non-main kernel thread of the 1:1 model blocks the
+        // A non-main kernel thread blocks the
         // asynchronous signals; a child it spawns must not inherit that
         // mask (CRuby's children start with an empty one). `sleep` keeps
         // whatever mask it is given, so with the mask inherited the TERM
@@ -3080,15 +3069,6 @@ mod tests {
 
     #[test]
     fn closing_a_popen_io_does_not_hold_the_gvl() {
-        // Only the 1:1 model has a GVL to hand over: in the M:1 green
-        // model `scheduler::without_gvl` runs its closure inline, so a
-        // waitpid stops the process there by design (`Process.wait` is the
-        // same) and the order below is legitimately reversed. `bin/test`
-        // re-runs this module under `MONORUBY_THREAD_MODEL=green`, so skip
-        // it there rather than assert the other model's behaviour.
-        if std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green") {
-            return;
-        }
         // `IO#close` on a popen stream waits for the child. That wait
         // lasts as long as the child runs, so it has to happen outside
         // the GVL: with the GVL held, every other Ruby thread stopped for
@@ -3122,9 +3102,8 @@ mod tests {
     #[test]
     fn interrupt_a_thread_blocked_in_a_kernel_wait() {
         // `Thread#kill` / `#raise` reach a thread blocked in a syscall
-        // that polls nothing (`flock`, a FIFO `open`): the green model
-        // discards the pool ticket, the 1:1 model sends the unblocking
-        // signal to the kernel thread (EINTR, then delivery).
+        // that polls nothing (`flock`, a FIFO `open`): the unblocking
+        // signal reaches the kernel thread (EINTR, then delivery).
         run_test_once(
             r#"
             require 'tmpdir'
@@ -3287,8 +3266,8 @@ mod tests {
     /// The frame the eviction walk cannot rewrite: `t` is inside compiled
     /// `m` with nothing above it but its loop, so when the timeslice tick
     /// takes it off at the loop's safepoint poll its innermost frame is
-    /// `m` itself. Main redefines `+` while `t` waits for the GVL (or the
-    /// scheduler, in the green model); on the way back the poll finds
+    /// `m` itself. Main redefines `+` while `t` waits for the GVL; on the
+    /// way back the poll finds
     /// `m`'s body evicted (`executor::POLL_DEOPT`) and `m` resumes in the
     /// interpreter, where both the loop's `+= 1` and the final `+` are
     /// the new method. Without that exit `m` finishes its compiled body

@@ -336,7 +336,7 @@ fn fiber_yield(
 }
 
 /// Out-of-line error path for the inlined `Fiber.yield`: yielding with
-/// no parent fiber (the main fiber, a green thread's root, or a
+/// no parent fiber (the main fiber, a thread's root, or a
 /// transferred fiber) raises FiberError instead of switching through a
 /// null parent pointer.
 pub(crate) extern "C" fn fiber_yield_no_parent(vm: &mut Executor) -> Option<Value> {

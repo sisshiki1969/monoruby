@@ -22,7 +22,7 @@ impl Fiber {
 /// The executor a Fiber object runs on: fibers created by `Fiber.new` (and
 /// the enumerator internals) own theirs; the per-thread *root* Fiber object
 /// (`Fiber.current` at a thread's root context) aliases the already-running
-/// root executor, which is owned by the embedder (main) or the green-thread
+/// root executor, which is owned by the embedder (main) or the thread's
 /// control block.
 #[derive(Debug)]
 pub enum FiberHandle {
@@ -73,7 +73,7 @@ impl Drop for FiberInner {
 impl alloc::GC<RValue> for FiberInner {
     fn mark(&self, alloc: &mut alloc::Allocator<RValue>) {
         // A root handle merely aliases an executor that is marked through
-        // its owner (the embedder's main executor / the green thread's
+        // its owner (the embedder's main executor / the thread's
         // control block) — and may already be gone for a dead thread.
         if let FiberHandle::Owned(handle) = &self.handle {
             handle.mark(alloc);

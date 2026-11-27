@@ -1,7 +1,7 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// Ractor is emulated on green threads (builtins/ractor.rb): the API
+// Ractor is emulated on threads (builtins/ractor.rb): the API
 // surface a program uses to get work done behaves as in CRuby, without
 // parallelism or object isolation.
 

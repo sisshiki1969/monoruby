@@ -5,16 +5,17 @@ monoruby のスレッド機構(`thread` ブランチ系列 #941–#962)の現状
 
 | ファイル | 内容 |
 |---|---|
-| `monoruby/src/scheduler.rs` | グリーンスレッド・スケジューラ本体 |
+| `monoruby/src/scheduler.rs` | スレッド registry、割り込み、終了処理(§3・§6) |
+| `monoruby/src/scheduler/native.rs` | カーネルスレッドの起動・park・GVL の受け渡し(§12) |
+| `monoruby/src/gvl.rs` | Global VM Lock |
 | `monoruby/src/preempt.rs` | タイムスライス・プリエンプションのタイマ(§8) |
-| `monoruby/src/native_pool.rs` | カーネルブロッキング syscall のネイティブ・オフロード(§9) |
+| `monoruby/src/native_pool.rs` | fd で待てないカーネルブロッキング操作(`NativeOp`、§9) |
 | `monoruby/src/value/rvalue/thread.rs` | `ThreadInner`(スレッド制御ブロック)と状態機械 |
 | `monoruby/src/value/rvalue/fiber.rs` | `FiberInner`(Fiber 制御ブロック) |
 | `monoruby/src/builtins/thread.rs` | Thread クラスのネイティブ・ビルトイン |
 | `monoruby/src/builtins/fiber.rs` | Fiber クラスのビルトイン + JIT インライン `Fiber.yield` |
-| `monoruby/src/codegen/arch/{x86_64,aarch64}/invoker.rs` | コンテキストスイッチのスタブ(両アーキ) |
 | `monoruby/builtins/startup.rb` | Mutex / Queue / SizedQueue / ConditionVariable(純 Ruby)、Thread の簿記系メソッド |
-| `monoruby/src/builtins/io.rs` | `blocking_io_region` / `IO.select` のグリーンパス |
+| `monoruby/src/builtins/io.rs` | `blocking_io_region` / `IO.select` のスレッド対応パス |
 
 関連ドキュメント:
 [scheduler_state_diagram.md](scheduler_state_diagram.md) —
@@ -22,39 +23,37 @@ Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。
 
 ## 0. 全体像
 
-> **2026-09-30 以降の既定は §12 の 1:1 モデル**(Ruby `Thread` 1 つ = カーネル
-> スレッド 1 つ、GVL で直列化)。本節〜§11 が述べる M:1 グリーンスレッドは
-> `MONORUBY_THREAD_MODEL=green` で選べる旧モデルで、以下の記述はその前提で読む。
-> Fiber、非ブロッキング IO、プリエンプション(§8)、GC 統合(§6)の説明は
-> 両モデルに共通する。
+> 2026-11 まで `MONORUBY_THREAD_MODEL=green` で選べた M:1 グリーンスレッド
+> (1 本の OS スレッドで全 `Thread` を多重化し、専用スタブでスタックを切り替える
+> スケジューラ)は削除した。以下は 1:1 モデルだけを述べる。
 
-- **M:1 グリーンスレッド**。Ruby の `Thread` は 1 本の OS スレッド上で多重化される。
-  真の並列性はない(GVL 型でもない — そもそも VM を回す OS スレッドが 1 本)。
-  カーネルブロッキング syscall のオフロード(§9)には別の短命 OS スレッドを使うが、
-  それらは Ruby ヒープにも VM にも触れない。
-- **切替の 2 系統**:
+- **1:1 + GVL**。Ruby の `Thread` 1 つにカーネルスレッド 1 つ(§12)。インタプリタの
+  共有状態(ヒープ、`Globals`、JIT、インラインキャッシュ)に触れるのは Global VM
+  Lock(`gvl.rs`)を持つスレッドだけなので、一度に Ruby を走らせるのは 1 スレッド。
+  fd で待てないカーネル待ちも、呼び出したスレッドが GVL を手放して実行する(§9・§12.7)。
+- **GVL の受け渡しの 2 系統**:
   1. **ブロッキング地点**。`sleep` / `Thread.stop` / `#join` / `Thread.pass` /
-     ブロックする IO / 同期プリミティブの待機で、実行中のスレッドが自発的に
-     スケジューラへ制御を返す(協調型)。
+     ブロックする IO / 同期プリミティブの待機で、実行中のスレッドが GVL を手放す。
   2. **タイマ駆動プリエンプション**(§8、#962)。生存スレッドが 2 本以上あるとき、
      10 ms ごとに専用タイマ OS スレッドが GC poll フラグにプリエンプトビットを立て、
      走行中のスレッドが次のセーフポイント(callee-entry / ループバックエッジ)で
-     強制的に `Thread.pass` 相当を行う。busy-loop するスレッドも CPU を譲る。
-- **どちらの切替も VM のセーフポイントでしか起きない**。この不変条件が設計全体を貫く:
-  - 切替は必ずビルトイン内のブロッキング地点か、GC が起きうるのと同じセーフポイントで
-    起きる。よってサスペンド中のスレッドのフレームは常に GC-complete(§6・§3.4)。
-    プリエンプションが安全なのはこのため — 「GC が起きうる場所でしか切り替わらない」
-    ので register write-back を含めて GC と全く同じ扱いになる(§8)。
+     `Thread.pass` 相当(GVL を先頭の待ち手へ渡す)を行う。busy-loop するスレッドも
+     CPU を譲る。
+- **どちらの受け渡しも VM のセーフポイントでしか起きない**。この不変条件が設計全体を貫く:
+  - GVL の解放は必ずビルトイン内のブロッキング地点か、GC が起きうるのと同じ
+    セーフポイントで起きる。よって GVL を持たないスレッドのフレームは常に
+    GC-complete(§3.1)。プリエンプションが安全なのはこのため — 「GC が起きうる
+    場所でしか手放さない」ので register write-back を含めて GC と全く同じ扱いになる(§8)。
   - ビルトインは他スレッドに対して**アトミック**(ビルトイン内では自分のブロッキング/
-    poll 地点以外で切り替わらない — GVL 下で CRuby が C 関数に与える保証と同じ)。
+    poll 地点以外で GVL を手放さない — CRuby が C 関数に与える保証と同じ)。
   - ただし**純 Ruby コードのアトミック性はプリエンプションで失われた**。2 つの
-    非ブロッキング文の間に他スレッドが割り込みうる。かつて純 Ruby の Mutex / Queue /
-    ConditionVariable が check-then-act 競合なしに書けていた根拠はこれだったので、
-    プリエンプション導入に合わせて park permit とロックで作り直してある(§5)。
+    非ブロッキング文の間に他スレッドが割り込みうる。純 Ruby の Mutex / Queue /
+    ConditionVariable は park permit とロックで書いてある(§5)。
 
 ## 1. Fiber(前提となる既存機構)
 
-Thread は Fiber の機構(スタック切替)を土台にしている。まず Fiber 側の構造:
+Fiber はスレッドの中でスタックを切り替える機構。スレッドとは独立だが、
+スレッド root の扱い(§2)と GC(§3.1)で関わる:
 
 - `FiberInner { handle: Box<Executor>, proc: Proc, stack: Option<NonNull<u8>> }`
 - 各 Fiber は **256 KiB の専用マシンスタック**(最下位ページは `mprotect(PROT_NONE)` の
@@ -76,135 +75,81 @@ Thread は Fiber の機構(スタック切替)を土台にしている。まず 
 ## 2. Thread の構造
 
 `ThreadInner`(`value/rvalue/thread.rs`、`ObjTy::THREAD` / `THREAD_CLASS = 59`)は
-FiberInner の拡張形で、RValue セルに収まらないため union 内では `Box` 化されている:
+RValue セルに収まらないため union 内では `Box` 化されている:
 
 ```
 handle:        Option<Box<Executor>>   // main スレッドのみ None(Executor は埋め込み側所有)
 proc / args:   本体ブロックと Thread.new の引数
-stack:         専用 256 KiB スタック(初回起動時に遅延確保)
-state:         Created | Runnable | Sleeping | Joining | IoWaiting | Dead
-resume_exec:   park した実行コンテキスト(スレッド root、またはスレッド内で park した nested Fiber)
+state:         Created | Runnable | Sleeping | Joining | IoWaiting | Blocking | Dead
+resume_exec:   GVL を手放している間の実行コンテキスト(スレッド root、またはスレッド内で park した nested Fiber)
 result / exception:  終了結果(#join / #value が参照)
 joiners:       このスレッドを #join で待っているスレッド
 pending:       未配送の非同期割り込み(Kill | Raise(err))
 killed:        kill 配送済みフラグ(終了時の unwind をクリーンな死として扱う)
 masks:         Thread.handle_interrupt のマスクスタック(§6)
-park_blocking: 直近の park がブロッキング操作だったか(#status のポーリング用)
 park_permit:   park permit。running な対象への #wakeup/#run が立て、次の park が即戻る(§5・§8)
 last_status:   $? / Process.last_status をスレッドごとに保持(#972)
+parker / park_indefinite / park_fds:  park の wake パイプと状態(§12.3・§12.4)
+blocking_tid / blocking_ubf:  GVL を手放したカーネル待ちへの割り込み先(§12.7)
+native_tid:    Thread#native_thread_id
 ```
 
-`state` の状態遷移図(各遷移とスケジューラ実装の対応表つき)は
-[scheduler_state_diagram.md §1](scheduler_state_diagram.md#1-thread-の状態遷移)
-([SVG](thread_state_diagram.svg))。
+`state` の状態遷移図は
+[scheduler_state_diagram.md §1](scheduler_state_diagram.md#1-thread-の状態遷移)。
 
 重要な設計判断: **スレッド root の `parent_fiber` は常に `None`**。
 このため `Fiber.yield` をスレッド本体で呼ぶと、main fiber と同じ既存のエラー経路
-(Rust 側 / JIT インライン側とも)が**無変更で**正しく FiberError を出す。
-スレッドの切替は `parent_fiber` を使わず、専用スタブ(§3)で行う。
+(Rust 側 / JIT インライン側とも)が正しく FiberError を出す。
 
-注: `priority` / `native_thread_id` / fiber-local / thread-variable / `ignore_deadlock` は
-`ThreadInner` のフィールドではなく、すべて startup.rb の純 Ruby 側で
-インスタンス変数(`@priority` / `@fiber_locals` / `@thread_variables` 等)として実装される(§4)。
+注: `priority` / fiber-local / thread-variable は `ThreadInner` のフィールドではなく、
+startup.rb の純 Ruby 側でインスタンス変数(`@priority` / `@fiber_locals` /
+`@thread_variables` 等)として実装される(§4)。
 
-## 3. スケジューラ
+## 3. スレッド registry
 
-`src/scheduler.rs`。インタプリタ・インスタンス(`vm::Vm`、`src/vm.rs`)が持つシングルトン
-(`SCHEDULER: RefCell<Scheduler>`)。`Vm` は現状 OS スレッドごとに 1 つ遅延生成されるので、
-「OS スレッドごとのシングルトン」という性質は変わっていない。
+`src/scheduler.rs`。インタプリタ・インスタンス(`vm::Vm`、`src/vm.rs`)が持つ
+`SCHEDULER: RefCell<Scheduler>`。GVL のホルダだけが触るので `RefCell` で足りる
+(借用を GVL の解放をまたいで保持しない・借用中に Ruby アロケーションをしない、が規律)。
 
 ```
 threads:          生存スレッドの registry(main 含む)— GC ルート
-ready:            実行可能キュー(FIFO)
-sleepers:         (Option<Instant>, Thread)  — sleep / タイムアウト付き join・IO 待ち
-io_waiters:       (fd, poll events, Thread) — fd 待ち(§7)
-current / main
-main_exec:        scheduler_run 実行中のみ有効な main の Executor ポインタ(GC 用)
-in_scheduler:     scheduler_run のイベントループ実行中か(main_exec の有効期間)
-machinery:        スケジューラ自身の機構(dispatch ループ / fd ポーリング)が
-                  main コンテキストで走行中か — プリエンプション抑止マーカー(§8)
-pending_reports:  遅延した report_on_exception のテキスト(machinery 中に生成し後で flush)
+current / main:   current は GVL ホルダ(acquire のたびに書き換える)
+main_exec:        main が GVL を手放す直前に公開する root Executor(GC 用、§3.1)
+pending_reports:  遅延した report_on_exception のテキスト(終了処理で生成し後で flush)
+pending_unblocks: fiber scheduler 経由の joiner への unblock の積み残し
 flushing_reports: flush_pending_reports の再入ラッチ
+native_joins:     カーネルスレッドの JoinHandle(terminate_all で join)
+terminating:      terminate_all が kill 中のスレッド(GC ルート、#2027)
+ignore_deadlock:  Thread.ignore_deadlock
 ```
 
-### 3.1 トポロジ: main のスタック上で回るイベントループ
+起動・park・GVL の受け渡しは `scheduler/native.rs`(§12)。`scheduler.rs` の
+エントリポイント(`spawn` / `sleep_woken` / `pass` / `join` / `wait_fds` /
+`without_gvl` / `terminate_all` / `fork_child_reset_threads`)はそこへ委ねる。
 
-スケジューラループ(`scheduler_run`)は **main スレッドのコンテキストでしか実行されない**:
+**本体の終了**: `native::run_body` は本体ブロックの戻り直後に、スレッド自身の
+コンテキストで終了フック(`scheduler::thread_body_exit`)を走らせる — 握ったままの
+Mutex を解放し(`Thread#__unlock_on_exit`)、fiber scheduler 経由で `#join` している
+fiber に `unblock` を送る(CRuby の `thread_start_func_2` 末尾に相当。Ruby を実行するので
+park もありうる)。その後 `finalize` が結果 / 例外を記録し、joiner を起こし、registry から
+外し、report_on_exception をキューし、必要なら main へ例外を転送する。
 
-- **main が park するとき**: 自分のスタック上で `scheduler_run` を普通の関数として呼ぶ。
-  ループは main が Runnable に戻るまで green thread を dispatch し、戻ったら return する。
-- **green thread が park するとき**: 起床条件を登録してから、プロセス(正確には OS
-  スレッド)グローバルなスロット `SCHED_RSP` に保存されたスケジューラ・コンテキストへ
-  switch する。つまり制御はループ中の pending な dispatch 呼び出しから「返って」くる。
-- **本体が終了したとき**: `thread_invoker` のエピローグがまずスレッド自身のコンテキストで
-  終了フック(`scheduler::thread_body_exit`)を走らせ — 握ったままの Mutex を解放し
-  (`Thread#__unlock_on_exit`)、fiber scheduler 経由で `#join` している fiber に
-  `unblock` を送る(CRuby の `thread_start_func_2` 末尾に相当。Ruby を実行するので
-  park もありうる)— それから `rsp_save = -1`(Terminated)をマークして同じく
-  スケジューラへ switch し、ループが finalize する。1:1 モデルでは `native::run_body` が
-  同じフックを本体の戻り直後に呼ぶ。
-
-ループが制御を手放す直前に必ず自分のコンテキストを `SCHED_RSP` へ保存するので、
-スロットは 1 個で足りる(green thread は `scheduler_run` を呼ばないため、
-ループのインスタンスは常に高々 1 つ)。
-
-`SCHED_RSP` は **インタプリタごと**(`vm::Vm` のフィールド `Cell<u64>`。`Vm` は `Box` 上に
-あるのでアドレスは動かない)。各インタプリタの `Codegen` が自分のスロットのアドレスを
-スタブに焼き込む(poll ワードと同じ構図)。
-テストハーネスのように複数のインタプリタが別 OS スレッドで並走しても衝突しない。
-
-### 3.2 コンテキストスイッチのスタブ(×2 アーキ)
-
-`codegen/arch/{x86_64,aarch64}/invoker.rs` に 3 種。いずれも `parent_fiber` に触らない:
-
-| スタブ | 役割 |
-|---|---|
-| `thread_invoker` | 初回起動。スケジューラ・コンテキストを `SCHED_RSP` に保存 → 新スタックへ切替 → フレーム構築 → 本体実行。終了時は終了フック `thread_body_exit` を呼んでから `rsp_save=-1` をマークして `SCHED_RSP` へ復帰 |
-| `switch_to_scheduler(cur, val)` | park。現コンテキストを `cur.rsp_save` へ保存し `SCHED_RSP` へ switch。`val` はスケジューラ側の resume 呼び出しの戻り値になる |
-| `scheduler_resume(exec, val)` | 再開。ループのコンテキストを `SCHED_RSP` へ保存し `exec.rsp_save` へ switch。`val`(u64)は park 側の戻り値。**0 を渡すとエラー再開**(§6) |
-
-`parent_fiber` を使わないため、スレッド内にネストした Fiber の resume チェーンは
-スケジューラ切替をまたいでも壊れない(`resume_exec` は「park した実行コンテキスト」
-そのものを指すので、nested Fiber の中で park してもそこへ直接戻る)。
-
-### 3.3 ブロッキング API の流れ
-
-`sleep(dur)` / `join(target, timeout)` / `pass()` / `wait_fd(s)` は全て同型:
-
-1. 短い `RefCell` 借用で自分を適切な待機構造(sleepers / joiners / io_waiters / ready)に
-   登録し、state を更新する(借用をスイッチをまたいで保持しない・借用中に Ruby
-   アロケーションをしない、が規律)。
-2. green thread なら `park_switch`(`resume_exec` を記録して `switch_to_scheduler`)。
-   main なら `scheduler_run` を呼び、戻ったら `take_main_pending()` で
-   割り込みの配送を受ける。
-3. 起床後、呼び出し元のループで条件(join 対象死亡 / タイムアウト / fd ready)を再検査する。
-   スプリアス起床は常に許容される設計。
-
-park の直前には `park_permit` を確認し、立っていればクリアして即戻る(§5)。
-アイドル時(ready が空)のループは:
-- `io_waiters` があれば全 fd を `poll(2)`(タイムアウトは直近の deadline、なければ無限)
-- fd 待ちがなく deadline だけなら `nanosleep`
-- どちらもなければ **デッドロック**: CRuby と同じく fatal
-  `No live threads left. Deadlock?` を main に投げる
-  (fd 待ちは外部入力で解決しうるのでデッドロック扱いしない)。
-- どちらの待機も EINTR で VM ポーリング地点(`execute_gc`)を経由するので、
-  シグナル(SIGTERM 等)への応答性は保たれる。
-
-### 3.4 GC との統合
+### 3.1 GC との統合
 
 - **registry が GC ルート**: `Root::mark`(executor.rs)から `scheduler::mark` が呼ばれ、
   全 Thread オブジェクト(→ `ThreadInner::mark` → 各スレッドの Executor の CFP チェーン)
   をマークする。詳細は `doc/gc.md` §8。
-- **main のフレーム**: GC のトリガが green thread 側だと、main のフレームは current の
-  チェーンから辿れない。`scheduler_run` 実行中は `main_exec` ポインタを公開し、
-  `in_scheduler` フラグが立っている間だけそれを deref してマークする。
-- 切替はセーフポイントのみなので、サスペンド中のどのスレッドのフレームも GC-complete。
+- **main のフレーム**: GC のトリガが main 以外だと、main のフレームは current の
+  チェーンから辿れない。main は GVL を手放す直前に root Executor を `main_exec` に
+  公開し、main が current でない間だけそれを deref してマークする(§12.5)。
+- GVL の解放はセーフポイントのみなので、GVL を持たないどのスレッドのフレームも
+  GC-complete。
 
 ## 4. Thread API の実装状況
 
 ネイティブ(`builtins/thread.rs`、`init`):
-`Thread.new/start/fork`(本体はキューされ、どこかのスレッドが最初にブロックした時点で
-初実行される)、`Thread.current/main/list/pass/stop`、
+`Thread.new/start/fork`(カーネルスレッドを起動し、生成直後の `Thread.pass` で
+最初のタイムスライスを渡す)、`Thread.current/main/list/pass/stop`、
 `Thread.kill(th)` / `Thread.exit`、`Thread.handle_interrupt` / `Thread.pending_interrupt?`、
 `#join(timeout)` / `#value`(終了例外を再 raise)、`#status`("run" / "sleep" / false / nil)、
 `#alive?` / `#stop?`、`#wakeup` / `#run` / `#__wakeup_permit`(§5)、
@@ -222,14 +167,13 @@ Ruby 側(startup.rb、`class Thread`):
 - `#priority` / `#priority=`(-3..3 にクランプして `@priority` に保存するのみ。実際の
   スケジューリングには影響しない)
 - `#native_thread_id`(走っているカーネルスレッドの id。Linux は `gettid(2)`、Darwin は
-  `pthread_threadid_np`。死後は `nil`。green では全スレッドがインタプリタのカーネル
-  スレッドを共有するので同じ id、1:1 では各スレッド固有)
+  `pthread_threadid_np`。死後は `nil`。各スレッド固有)
 - `#report_on_exception`(インスタンスのみ)
-- `Thread.ignore_deadlock` / `=`(クラス変数に丸めるだけ。デッドロック検出器自体は止めない)
+- `Thread.ignore_deadlock` / `=`(真偽値に丸めて `Scheduler::ignore_deadlock` へ。検出器を止める、§12.4)
 - `Process::Waiter`(`Process.detach` 用。native `Thread.new` はブロック必須なので
   `allocate` ベースで生成)
 
-`Kernel#sleep` は他に生存スレッドがいるときだけスケジューラ経由になる
+`Kernel#sleep` は他に生存スレッドがいるときだけ park(GVL を手放す)になる
 (無引数 sleep は `#wakeup` まで park)。単独スレッド時は従来の nanosleep ループ。
 
 ## 5. 同期プリミティブ(純 Ruby)+ プリエンプション下での正しさ
@@ -259,8 +203,7 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
 - park は `Thread.stop`(または timeout 付きは `Kernel.sleep`)、
   unpark は上記 `#wakeup` / `#__wakeup_permit` を使う。`Mutex#sleep` の timeout 付き park は
   `Thread.__sleep(sec)`: `Kernel#sleep` と同じ待ちで、戻り値が「起こされた(true)/ 時間切れ
-  (false)」(`scheduler::sleep_woken`。1:1 モデルは `park` の戻り値、green は
-  `ThreadInner::sleep_timed_out`)。`Mutex#sleep` は CRuby(`rb_mut_sleep`)と同じく時間切れなら
+  (false)」(`scheduler::sleep_woken`、`park` の戻り値)。`Mutex#sleep` は CRuby(`rb_mut_sleep`)と同じく時間切れなら
   nil、起こされたら経過秒を返し、`ConditionVariable#wait` は引数の `sleep` の戻り値をそのまま返す。
 - `Mutex#sleep` / `ConditionVariable#wait` は unlock → park → **ensure で re-lock**。
   `#kill` / `#raise` が park 中に配送されても(§6 の unwind は ensure を実行するので)
@@ -299,8 +242,7 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   閉じる)。`system` は `Process.wait(spawn(...))`、バッククォートは
   `IO.popen(cmd) { |io| io.read }` と同じ経路(`builtins::spawn`)で子を作る(#2221)ので、
   バッククォートは stdout のパイプを読み切ってからフックに渡す(stderr は子がそのまま継承)。
-  待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く
-  (M:1 グリーンモデルでは `without_gvl` が素通しなので、そこは従来どおり止まる)。
+  待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く。
 - **Monitor**(`builtins/monitor.rb`)は CRuby の `ext/monitor/monitor.c` を Ruby で書いたもので、
   Mutex + 所有 **Fiber**(`@owner`)+ 進入回数(`@count`)。`@count` を読み書きするのは所有者
   だけ、`@owner` が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
@@ -329,15 +271,17 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
 
 ## 6. 非同期割り込み(`Thread#raise` / `#kill`)
 
-割り込みは対象の `ThreadInner.pending` にキューされ、スケジューラが配送する:
+割り込みは対象の `ThreadInner.pending` にキューされ、対象スレッド自身が配送地点
+(`deliver_pending_now`)で受け取る:
 
-- **park 中の対象**: 起こして(Runnable 化)、dispatch 時に
-  「park していた Executor に `set_error` してから `scheduler_resume(exec, 0)`」。
-  park 側の `park_switch` は戻り値 `None`(=0)を見て `Err(vm.take_error())` を返すので、
+- **park 中の対象**: `wake_parked` で起こす(wake パイプに 1 byte)。対象は `park` から
+  戻り、`sleep` / `join` / `wait_fds` の出口の `deliver_pending_now` が `Err` を返すので、
   例外は**ブロックしていたまさにその地点**から unwind する(ensure 実行)。
-  この「0-resume = エラー再開」が予約済みの配送経路。
-- **走行中の対象**: プリエンプション(§8)が対象を次のセーフポイントで `pass` に落とし、
-  そこで pending が配送される。busy-loop 中のスレッドにも `#kill` / `#raise` が届く。
+- **GVL を手放したカーネル待ちの対象**: `interrupt_blocking` がそのカーネルスレッドに
+  `SIGVTALRM` を送り、syscall を `EINTR` で戻す(§12.7)。
+- **走行中・GVL 待ちの対象**: プリエンプション(§8)が対象を次のセーフポイントで
+  `pass` に落とし、その出口で pending が配送される。busy-loop 中のスレッドにも
+  `#kill` / `#raise` が届く。
 - **kill の unwind**: `Throw`(タグは新規生成した Object なのでどの `catch` にも
   一致しない)として配送する。monoruby の unwinder は `Throw` を rescue 節
   (`rescue Exception` 含む)を素通しにしつつ ensure 節を実行する —
@@ -350,7 +294,6 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
 - **自分自身が対象**: その場で raise(kill なら kill-unwind、main の kill は
   `SystemExit` = プロセス終了)。
 - **未起動(Created)の対象**: 本体を実行せずに死ぬ。
-- **park 中の main**: `scheduler_run` から戻った直後に `take_main_pending()` が配送する。
 - **`Thread.handle_interrupt`**: マスク(`ThreadInner::masks`)にマッチする割り込みは
   即配送せず保留し、マスク境界(handle_interrupt ブロックの出入り)で配送する。
 
@@ -360,7 +303,7 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
 (EINTR → VM ポーリング → 再開)という単一のチョークポイントに集約されている
 (SA_RESTART なしのシグナルハンドラ、EINTR を握り潰さない独自 read/write プリミティブ。
 fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` に統合され削除)。
-グリーンスレッド統合はこの上に載る:
+スレッド対応はこの上に載る:
 
 - **`blocking_io_region(vm, globals, io, events, f)`**(builtins/io.rs):
   fd を扱う 13 のビルトイン(read 系 / write 系 / `IO.copy_stream` の両側)を包む。
@@ -368,14 +311,14 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
   2. read 系は先にバッファ(ungetc pushback / BufReader 内残データ)を確認し、
      あれば fd を見ずに実行(バッファがあるのに fd 未 ready で park すると自己デッドロック)。
   3. ゼロタイムアウト `poll` で readiness を確認し、未 ready なら
-     `scheduler::wait_fd(fd, events)` で park(§3.3)。起床後に再検査。
-  4. ready なら操作本体 `f()` を実行(直前に他スレッドは走れないので、
-     readiness が横取りされる競合はない)。
-- **スケジューラ側**: `io_waiters` に登録された fd 群をアイドル時に一括 `poll(2)` し、
-  revents が立ったスレッドを起こす(POLLERR/HUP/NVAL も起床 → 本体が実 errno を出す)。
-  `#kill` / `#raise` は fd 待ちのスレッドも起こす。
-- **`IO.select`**: グリーンパスでは与えられた全 fd を `wait_fds` で待つ
-  (timeout は deadline として sleepers に併載)。非 IO オブジェクトは `#to_io` で変換。
+     `scheduler::wait_fd(fd, events)` で park(§12.3)。起床後に再検査。
+  4. ready なら操作本体 `f()` を実行(GVL を持ったままなので、直前に他スレッドは
+     走れず、readiness が横取りされる競合はない)。
+- **park 側**: `native::park` が自分の wake パイプと待ち fd 群を `poll(2)` する
+  (POLLERR/HUP/NVAL でも戻り → 本体が実 errno を出す)。`#kill` / `#raise` は
+  wake パイプ経由で fd 待ちのスレッドも起こす。
+- **`IO.select`**: 他スレッドがいるときは与えられた全 fd を `wait_fds` で待つ
+  (timeout は park の deadline)。非 IO オブジェクトは `#to_io` で変換。
   全セット空 + timeout なしは CRuby 同様「status "sleep" で永眠(kill/wakeup 可能)」。
   単独スレッド時は `select(2)`(EINTR → ポーリング → 再試行)。fd 集合は最大 fd に
   合わせて伸びるビット列(`FdSet`、CRuby の `rb_fdset_t` 相当)で、`FD_SETSIZE` の
@@ -385,7 +328,7 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
     辿って(各要素を再変換して)作る。CRuby の `select_internal` と同じ 2 回走査で、
     待っている間に他スレッドやトラップが Array を変えても、消えた要素には触れない。
   - 何が ready かは他スレッドがいるときも `select(2)` が決める(CRuby と同じ)。
-    グリーンパスはゼロタイムアウトの `select(2)` で判定し、何もなければ `wait_fds`
+    他スレッドがいるときはゼロタイムアウトの `select(2)` で判定し、何もなければ `wait_fds`
     (`poll(2)`)で眠って、起きたら判定し直す。`poll(2)` の revents をそのまま答えに
     しないのは、hangup / error を read・write・error のどれに数えるかが `select(2)` と
     `poll(2)` で違い、OS でも違うため(macOS の `poll(2)` は `POLLHUP` と一緒に
@@ -394,16 +337,17 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
     から外し(外さないと空回りする)、以後は 100 ms ごとに `select(2)` を聞き直す。
 - **ソケット**: TCP の `connect` は非ブロッキング発行(`EINPROGRESS`)→ `POLLOUT` を
   `wait_fd` で待って `SO_ERROR` 確認、`accept` はリスナ fd を恒久 non-blocking にして
-  `POLLIN` の park-retry ループで受ける(いずれも native worker ではなくスケジューラの
-  fd ポーラで処理)。DNS(`getaddrinfo`)は CRuby 同様インラインでブロックする。
-- **poll できないカーネルブロッキング**(flock、FIFO の open)は native worker に
-  オフロードする(§9)。
+  `POLLIN` の park-retry ループで受ける(いずれも fd で park)。DNS(`getaddrinfo`)は
+  GVL を手放して実行する(§12.7)。
+- **poll できないカーネルブロッキング**(flock、FIFO の open)は GVL を手放して
+  実行する(§9)。
 
 ### mid-operation の would-block エミュレーション
 
 入口の readiness チェックだけでは、「利用可能なデータを消費し、さらに要求する」操作
 (例: パイプ上の `read(n)` で n が到着済みバイト数を超える、行が複数チャンクに分かれて
-届く `gets`、パイプ容量を超える `write`)の 2 チャンク目以降がプロセス全体をブロックする。
+届く `gets`、パイプ容量を超える `write`)の 2 チャンク目以降が GVL を持ったまま
+ブロックし、他の全スレッドを止める。
 これを防ぐため、他に生存スレッドがいる間は `f()` の実行中だけ fd を一時的に
 `O_NONBLOCK` にする(`NonblockGuard`、drop で元のフラグへ復元):
 
@@ -428,7 +372,7 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
 バックエンド・スレッドローカルシングルトンに一切触れずに解消する。
 
 プリエンプションは正確に **「全スレッドが次のセーフポイントで `Thread.pass` を
-呼んだかのように」** 振る舞う — 既存の協調切替機構をそのまま再利用する。
+呼んだかのように」** 振る舞う — `Thread.pass` と同じ GVL の受け渡しを再利用する。
 
 ### 8.1 タイマ
 
@@ -490,12 +434,7 @@ poll ワードは **GC・シグナルと同じ 1 つの `u32`** で、8bit×4 �
 6. `if preempt && scheduler::preempt_ok() { scheduler::pass(vm, globals)? }`。
    `pass` の `Err`(kill/raise がこのスレッドに配送された)は `set_error` + `None` で浮上。
 
-`preempt_ok()` = `!machinery && main.is_some() && has_other_live_threads()`。
-`machinery` マーカー(§3 の Scheduler フィールド)は、スケジューラ自身の機構
-(dispatch ループ / fd ポーリング)が main コンテキストで走る間 true・dispatch された
-スレッドの Ruby コードが走る間だけ false。よってプリエンプションは resume されたスレッドの
-コード中でだけ発火する(`in_scheduler` はこの役に立たない — dispatch 中のスレッド走行中も
-true のままだから)。
+`preempt_ok()` = `main.is_some() && has_other_live_threads()`。
 
 ### 8.5 安全性(CRuby 互換)
 
@@ -515,63 +454,45 @@ true のままだから)。
 - `MONORUBY_PREEMPT_STRESS=1` — 全 poll 地点で切替を試みる(`gc-stress` のスケジューリング版。
   「ここで切り替わるはずがない」系の潜在状態バグを炙り出す拷問モード)。
 
-## 9. ネイティブ syscall オフロード(`native_pool.rs`, #962)
+## 9. fd で待てないカーネル待ち(`native_pool.rs`, #962)
 
-poll(2) で readiness を待てるもの(ソケット等)はスケジューラの fd ポーラで扱えるが、
-**待つべき fd を持たないカーネルブロッキング syscall** はグリーンスレッドの単一 OS
-スレッドをそのままブロックしてしまう。これらだけを別の短命 OS スレッドへ逃がす。
-(green モデルの話。1:1 モデルでは同じ `NativeOp` を呼び出したカーネルスレッド自身が
-GVL を手放して実行し、pool は使わない — §12.7。)
+poll(2) で readiness を待てるもの(ソケット等)は fd で park するが(§7)、
+**待つべき fd を持たないカーネルブロッキング操作** は、呼び出したカーネルスレッドが
+GVL を手放して実行する(`native_pool::run_blocking` → `native::run_blocking`、§12.7)。
+GVL を持ったまま実行すると、その間ほかの全スレッドが止まる。
 
-- **オフロード対象**(`NativeOp`):
+- **対象**(`NativeOp`、生 fd / フラグ / `CString` パス / マーシャル済み C 引数だけを
+  運び、Ruby ヒープに触れない):
   - `flock(2)` のブロッキング取得(`File#flock`)。`LOCK_NB` / `LOCK_UN` は
     カーネルでブロックしないのでインライン実行。
   - **FIFO** に対するブロッキング `open(2)`(相手が開くまでブロックする)。事前に
-    `stat` して FIFO のときだけオフロードし、それ以外の open はインライン。
+    `stat` して FIFO のときだけ GVL を手放し、それ以外の open はインライン。
   - `fcntl(2)` の**待つコマンド**(`NativeOp::Fcntl`): `F_SETLKW`(および Linux の
     `F_OFD_SETLKW`)は record lock が空くまでカーネルで待つ。`IO#fcntl` に String
     (packed `struct flock`)を渡す形だけが対象で、待たないコマンドは
     インライン実行のまま(`F_GETLK` は文字列バッファに書き戻すため、なおさら
-    インラインでなければならない)。待つコマンドは構造体を読むだけなので、
-    ジョブは自分のコピーを持ち、結果を書き戻す必要がない。
-  - **blocking 指定された FFI 呼び出し**(`NativeOp::Ffi`)。上 2 つと違い走るのは
-    Ruby プログラムが選んだ任意の C なので、「生データのみ」の規律は fiddle 側で
-    担保する: `FfiWorkerCall` は不死の descriptor のアドレスとマーシャル済み C 引数
-    だけを持ち、`run` は Ruby ヒープに触れない。ワーカーは生の 64bit 結果を返し、
-    インタプリタ側スレッドが `bits_to_value` で box する。
-    - **opt-in**: `Fiddle.___prepare` の flags(`2 = BLOCKING`)で宣言する。
-      FFI では `attach_function ..., blocking: true`、sqlite3 ブリッジでは
-      `attach_function ..., blocking: true`。
-    - **本当にブロックする関数だけに付ける**。オフロード往復はワーカーが温まっていて
-      40µs 前後(condvar 受け渡し + park/wake)。CPU 密な green thread がいると再開は
-      タイムスライス 1 回分待たされる。**行単位で呼ばれる関数に付けてはならない**
-      (`sqlite3_step` を blocking にすると 2000 行の SELECT が ~2ms → ~80ms になる)。
-- **ワーカープール**: `submit` はジョブをキューに積み、**park 中のワーカーがいれば
-  それに渡す**(往復は thread spawn ではなく condvar の受け渡しになる)。
-  ワーカーが全員塞がっているときだけ新しく生やす —— カーネルでブロック中の
-  ワーカーは何分も戻らないことがあり、その後ろにキューイングしたら §9 が避けたい
-  ストールそのものになるため。ワーカーは 10 秒 idle で終了する。
-- **fork(2) の子ではワーカーは生き残らない**。子は `idle` カウントと親のキュー、
-  親宛ての `results` / `orphans` を受け継ぐので、`Process._fork` / `Process.daemon` の
-  子側で `native_pool::ForkLocks::reset_child` がそれを捨てる(捨てないと、子の最初の
-  `submit` が「idle ワーカーが拾う」と信じて永久に待つ)。
-  そのロック自体も fork をまたいで**フォークするスレッドが**先に取る
-  (`native_pool::prepare_fork`、`pthread_atfork` の prepare/parent/child を手で書いた
-  もの)。ワーカーがロックを握った瞬間に fork すると、そのワーカーのいない子は
-  誰も解放しないロックを受け継ぎ、最初の `lock()` で永久に止まる。
-  `do_spawn` も同じ扱いにしてある(その子は exec するだけでこれらのロックを取らないが、
-  「すべての fork(2) は pool を静止させてから」という不変条件を揃えておく)。
-- **同じ危険はプロセスグローバルなロック全部にある** —— 識別子テーブル
+    インラインでなければならない)。
+  - **blocking 指定された FFI 呼び出し**(`NativeOp::Ffi`)。走るのは Ruby
+    プログラムが選んだ任意の C なので、「生データのみ」の規律は fiddle 側で担保する:
+    `FfiWorkerCall` は不死の descriptor のアドレスとマーシャル済み C 引数だけを持ち、
+    `run` は Ruby ヒープに触れない。生の 64bit 結果を GVL を取り直した側が
+    `bits_to_value` で box する。opt-in で、`Fiddle.___prepare` の flags
+    (`2 = BLOCKING`)で宣言する。
+  - 拡張の `call_blocking`(`NativeOp::Ext`)。
+- **`EINTR`**: syscall はシグナル(main の trap、または割り込みの `SIGVTALRM`)で
+  `EINTR` を返し、呼び出し側が GVL の下で poll point と `deliver_pending_now` を
+  済ませてから再発行する(冪等な待ちなので)。FFI / 拡張は再発行しない(§12.7)。
+- **fork(2) とプロセスグローバルなロック** —— 識別子テーブル
   (`id_table::ID`)、正規表現のコンパイルキャッシュ(`REGEX_CACHE` / `NATIVE_CACHE`)、
-  標準ストリームのバッファ(`STDIN_BUF` / `STDOUT_BUF` / `STDERR_BUF`)。monoruby 自身の
-  スレッドは green なのでインタプリタスレッドが自分と競合することはないが、複数の
-  インタプリタを別 OS スレッドで走らせる embedder(テストハーネスはテストスレッドごとに
-  1 つ走らせる)では、fork の瞬間に別スレッドがどれかを握っていることがある。実際に
+  標準ストリームのバッファ(`STDIN_BUF` / `STDOUT_BUF` / `STDERR_BUF`)、GVL の状態。
+  Ruby スレッドはそれぞれカーネルスレッドで、複数のインタプリタを別 OS スレッドで走らせる
+  embedder(テストハーネスはテストスレッドごとに 1 つ走らせる)もあるので、fork の瞬間に
+  別スレッドがどれかを握っていることがある。実際に
   `forking_while_a_thread_keeps_offloading` の子が `File.open` → `IdentId::get_id` で
   止まった(識別子テーブルの `RwLock` を別スレッドが握っていた)。`crate::fork::prepare`
-  がこれらすべてを pool のロックと一緒に、固定順で、フォークするスレッド上で取る
+  がこれらすべてを固定順で、フォークするスレッド上で取る
   (どのパスもこれらを入れ子では取らないので、この順で他スレッドとデッドロックしない)。
-  親は guard を drop、子は `ForkGuards::reset_child` で pool とタイマの状態を捨てつつ
+  親は guard を drop、子は `ForkGuards::reset_child` でタイマの状態を捨てつつ
   解放する。`Process._fork` / `Process.daemon` / `do_spawn` の 3 箇所の `fork(2)` は
   すべてここを通る。`fork::tests` に、別 OS スレッドが intern し続ける中で 200 回 fork
   する再現テストがある(修正前は最初の 10 秒で子が止まる)。
@@ -584,92 +505,53 @@ GVL を手放して実行し、pool は使わない — §12.7。)
   `fork::ForkableRwLock`(`AtomicPtr<RwLock<T>>` の間接参照)にし、子は自分が持つ
   guard 越しにデータを `mem::take` で取り出し、guard を `forget` して、新しい lock を
   差し込む。受け継いだ lock はロックされたまま leak し、二度と触らない
-  (`preempt::ForkState` がタイマの mutex にしているのと同じ)。`Mutex`(ストリーム、
-  pool)は Apple では pthread、Linux では futex で、所有者による子での unlock は
+  (`preempt::ForkState` がタイマの mutex にしているのと同じ)。`Mutex`(ストリーム)は Apple では pthread、Linux では futex で、所有者による子での unlock は
   誰も起こさない普通の unlock なので、そのまま drop する。
-- **完了パイプは子で作り直す**(`replace_pipe`)。`fork(2)` が複製するのは fd テーブルで
-  あってパイプではないので、親子が同じバッファを読み書きすることになる。親の waiter が
-  取るはずだった完了バイトを子の `drain` が飲んでしまうと、その waiter は結果が
-  `results` に載ったまま永久に park する —— 親側には異常が何もないのに復帰できない。
-  子で継承端を close しても影響するのは子の fd テーブルだけなので、親のパイプは無傷。
-- **ワーカーは Ruby ヒープにも VM のスレッドローカルにも触れない**。`NativeOp` は生 fd /
-  フラグ / `CString` パスだけを運ぶ(ヒープ参照を持たない)。共有状態はプロセスグローバル:
-  `results`(`Mutex<HashMap<ticket, Completion{ret, errno}>>`)、`orphans`、`NEXT_ID`。
-- **完了通知は eventfd ではなく pipe(2)**。各インタプリタ OS スレッドが `thread_local` に
-  自己パイプ(read/write)を遅延生成し、ワーカーは結果を `results` に置いてから提出元の
-  write 端へ 1 バイト書く。read 端はスケジューラの**通常の fd ポーラ**に登録される
-  (スケジューラは `native_pool` を一切知らない)。
-- **flow**(`run_blocking`): `submit(op)` → チケット取得 → `try_take` で完了を回収、
-  未完なら `scheduler::wait_fd(read端, POLLIN)` で park(他 green thread に譲り、main が
-  park しているなら `poll(2)` で寝る)→ 起床で pipe を `drain` → 再試行。パイプは複数
-  waiter で共有なので、未充足の waiter は再 park する。
-- **キャンセル**: park 中に kill/raise が来て `wait_fd` が `Err` を返したら、チケットを
-  `discard`(結果が既に届いていれば除去、まだなら `orphans` に入れてワーカーの結果を
-  到着時に捨てる)しエラーを伝播する。ワーカー本体はそのまま無害に完走させる
-  (可搬なキャンセル syscall がないため)。
 
 ## 10. 既知の制限と今後
 
-1. (green)**park 中の main には trap ハンドラが届かない** — 他スレッドが 1 つでも
-   生きていると main の `sleep` / `join` はスケジューラループの中で待ち、そこは
-   `signal_delivery_ok` の入口深さガードが配送を拒むので、ハンドラは main が
-   起きた後の最初の poll まで遅れる。1:1 モデルは解消済み(§12.8)。
-2. (解消済み)`Thread` のサブクラスは Ruby の `initialize` オーバーライドを実行する
-   —— `class MyThread < Thread; def initialize(*a); ...; super; end; end` は CRuby と
-   一致する。
-3. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`native_thread_id` は
-   実カーネル tid(green では全員同じ)。`ThreadGroup` との相互作用は未実装。`Thread.ignore_deadlock` は両モデルで検出器を止める(§12.4)。
-4. (green)ネイティブオフロード(§9)の往復は、ワーカープール化後も 40µs 前後ある
-   (park/wake の往復そのもの)。1:1 モデルには往復がない(§12.7)。`sqlite3_step` のように**行単位で呼ばれる**関数は
-   依然オフロードできず、busy_timeout 待ちは他の green thread を止める。これを
-   外すには往復を無くす方向(呼び出しをインラインで試し、ブロックしそうなときだけ
-   逃がす等)が要る。対象操作は flock / FIFO open / blocking 指定 FFI /
-   `fcntl` の待つコマンドで、まだ増やす余地はある。
-5. 真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
+1. `Thread#priority` は保存のみ(スケジューリングに影響しない)。`ThreadGroup` との
+   相互作用は未実装。
+2. 真の並列化は別の話(Ractor 型の分離が現アーキテクチャ —
    インタプリタ・インスタンスごとの ALLOC / CODEGEN / SCHEDULER — と整合的)。
-   1:1 モデル(§12)でも GVL の下で一度に走る Ruby スレッドは 1 つ。
+   GVL の下で一度に走る Ruby スレッドは 1 つ。
+3. `sqlite3_step` のように行単位で呼ばれる関数は blocking 指定しない(GVL の
+   受け渡しが呼び出しごとに乗る)ので、busy_timeout 待ちの間は他スレッドが止まる。
 
 (解決済み: `Thread.handle_interrupt` マスキング、mid-operation の IO ブロック(§7 の
 would-block エミュレーション)、タイムスライス・プリエンプション(§8)、
-カーネルブロッキング syscall のオフロード(§9)、オフロードのワーカープール化と
-`fcntl(F_SETLKW)` 対応(§9)。)
+カーネルブロッキング操作(§9)、`Thread` サブクラスの `initialize` オーバーライド、
+park 中の main への trap ハンドラ配送(§12.8)。)
 
 ## 11. テスト
 
 - `builtins/thread.rs` の `#[cfg(test)]`: CRuby 4.0.2 との差分テスト
   (インターリーブ順序、status ポーリング、kill/raise 意味論、同期プリミティブ、
   thread+IO の各パターン、IO.select エッジ、fiber-local / thread-variable、
-  `native_offload_flock_and_fifo`(flock / FIFO open がグリーンスレッドだけをブロックし
-  プロセス全体を止めないことの検証)ほか)。
+  `native_offload_flock_and_fifo`(flock / FIFO open が呼び出したスレッドだけを
+  ブロックし他スレッドを止めないことの検証)ほか)。
 - ruby/spec: `bin/spec` またはリポジトリ外の spec/mspec で
   `core/thread` / `core/mutex` / `core/queue` / `core/sizedqueue` /
   `core/conditionvariable` / `core/io` を実行。
   かつてスペックランナーをハングさせた `core/io/copy_stream_spec.rb` と
   `core/io/select_spec.rb` は完走・全パスする。
 
-## 12. 1:1 モデル(既定、`scheduler/native.rs`)
+## 12. カーネルスレッドと GVL(`scheduler/native.rs`)
 
-M:1 から 1:1 への移行(`reports/thread_1to1_migration_plan_2026-09-29.md` の P2)。
-Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる。P7(2026-09-30)で
-**これが既定**になり、環境変数 `MONORUBY_THREAD_MODEL=green` で旧 M:1 green
-(§3)を選べる(`native` は既定を明示するだけ)。両モードは同じバイナリに共存し、
-`scheduler.rs` の各エントリポイント(`spawn` / `sleep` / `pass` / `join` /
-`wait_fds` / `terminate_all` / `fork_child_reset_threads`、および wake の分岐)が
-先頭で `native::enabled()` を見て分岐する。
+Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる(移行計画は
+`reports/thread_1to1_migration_plan_2026-09-29.md`)。2026-09-30 に既定になり、
+2026-11 に M:1 グリーンスレッドのスケジューラと切替スタブを削除して唯一の
+モデルになった。
 
-### 12.1 何を共有し、何を置き換えるか
+### 12.1 registry と GVL
 
-- **共有**: §3 の registry(`threads` / `main` / `current` / `main_exec` /
-  `pending_reports`)は `Vm` の中にそのまま置く。GVL(`gvl.rs`)を持つスレッド
-  だけが触るので、`RefCell` のままで足りる。`current` は「GVL ホルダ」そのもので、
-  acquire のたびに書き換える(`native::acquire`)。`ready` / `sleepers` /
-  `io_waiters` / `machinery` / `SCHED_RSP` は使わない — GVL の FIFO 待ち行列が
-  ready キューの代わりになる。
-- **置き換え**: コンテキストスイッチ。green thread が `switch_to_scheduler` で
-  スケジューラループへ飛ぶところを、native thread は **GVL を手放して自分の
-  wake パイプ(`Parker`)+ 待ち fd を `poll(2)` する**(`native::park`)。
-  green で ready キューに積む操作(`wakeup` / joiner 起床 / 割り込み / deadline)
-  は、パイプへ 1 byte 書く `unpark` になる。
+- §3 の registry(`threads` / `main` / `current` / `main_exec` / `pending_reports`)は
+  `Vm` の中に置く。GVL(`gvl.rs`)を持つスレッドだけが触るので `RefCell` で足りる。
+  `current` は「GVL ホルダ」そのもので、acquire のたびに書き換える
+  (`native::acquire`)。GVL の FIFO 待ち行列が実行可能キューの役をする。
+- 待つスレッドは **GVL を手放して自分の wake パイプ(`Parker`)+ 待ち fd を
+  `poll(2)` する**(`native::park`)。起こす操作(`wakeup` / joiner 起床 / 割り込み)は
+  状態を `Runnable` にしてパイプへ 1 byte 書く `unpark`。
 
 ### 12.2 スレッドの一生(`native::spawn` → `thread_main`)
 
@@ -677,15 +559,13 @@ Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる。P7(2026
    し、`Parker` を作り、`std::thread::Builder`(8 MiB スタック)でカーネルスレッドを
    起動。起動側は新スレッドが **GVL の待ち行列に並ぶまで** spin(`Gvl::is_waiting`)
    してから戻る。続く `Thread.pass` = `Gvl::yield_now` が新スレッドへロックを
-   渡すので、green の「eager first slice」(生成直後に本体が最初の park まで走る)
-   と同じ順序になる。
+   渡すので、生成直後に本体が最初の park まで走る。
 2. カーネルスレッド側(`thread_main`): `vm::adopt` で起動側の `Vm` を自分の
    `CURRENT` にし、`poll_flag::adopt` でポールワードを共有し、非同期シグナルを
    `pthread_sigmask` でブロック(→ プロセス向けシグナルはカーネルが main に配る)。
    GVL を取り、`Executor::invoke_proc` で本体ブロックを **自分のカーネルスタック上で**
    実行(`init_stack_limit` で main と同じ 1 MiB 予算、`enter_root_svar_scope`)。
-   `thread_invoker` などのスタック切替スタブは使わない。
-3. 終了: `set_terminated` → `finalize`(§2 と共通: 結果 / 例外の記録、joiner の
+3. 終了: 終了フック(§3)→ `set_terminated` → `finalize`(結果 / 例外の記録、joiner の
    起床、registry からの除去、report_on_exception のキュー、main への転送)。
    その後は Thread オブジェクトに触らず GVL を `release` → `unregister` →
    `vm::unadopt`。
@@ -707,7 +587,7 @@ park(cur, state, fds, deadline):        // GVL を持って呼ぶ
 持っているので、park 側が GVL を取り直した時点でパイプに新しい byte は来ない。
 drain してから次の park に入るため、古い byte で空振りすることはない。
 `sleep` は `woken || deadline` まで park を繰り返し(EINTR は継続)、`join` は
-green と同じループ(flush → 割り込み配送 → dead 判定 → park)、`wait_fds` は
+ループ(flush → 割り込み配送 → dead 判定 → park)、`wait_fds` は
 1 回 park して呼び出し側の再チェックに任せる。`pass` は `Gvl::yield_now`: 状態
 ロックの下で先頭の待ち手にロックを渡す**のと同時に**自分を待ち行列の末尾に並べる
 (`release` → `acquire` の 2 段ではない)。2 段だと間に待ち行列が空になる瞬間があり、
@@ -715,17 +595,15 @@ green と同じループ(flush → 割り込み配送 → dead 判定 → park)�
 の ping-pong(と、待っている間に相手の compiled frame を evict する §12.9)は
 「譲った側が次の順番にいる」ことを前提にしている。
 
-fd 待ちには green に無い起床経路が 1 つ要る: 別スレッドがその fd を `close` した
-とき、green のポーラは `POLLNVAL` で即座に気付くが、`poll(2)` 中のカーネルスレッドは
-(カーネルが元のファイルを見続けるので)起きない。`FileDescriptor::drop` →
+fd 待ちには起床経路がもう 1 つ要る: 別スレッドがその fd を `close` したとき、
+`poll(2)` 中のカーネルスレッドは(カーネルが元のファイルを見続けるので)起きない。`FileDescriptor::drop` →
 `scheduler::fd_closing(fd)` が、その fd を `park_fds` に持つ `IoWaiting` スレッドを
 unpark し、起きた側は stream が閉じているのを見て `IOError`(CRuby の
 `rb_thread_fd_close` 相当)。
 
 ### 12.4 デッドロック検出と停止
 
-green はスケジューラループが「走れるものが無い」を検知したが、1:1 ではループが
-無いので **park の入口で** 判定する: 自分が deadline も fd も無い park に入ろうと
+スケジューラループは無いので **park の入口で** 判定する: 自分が deadline も fd も無い park に入ろうと
 していて、他の生存スレッドがすべて同じ状態(`park_indefinite`)なら
 `fatal "No live threads left. Deadlock?"`。main 自身なら即 `Err`、他スレッドなら
 main の `pending` に `Raise(fatal)` を積んで unpark する。判定は park の入口だけ
@@ -735,12 +613,10 @@ GVL 待ちや `without_gvl` 中のスレッドは `Runnable` なのでデッド�
 
 `Thread.ignore_deadlock = true` は検出器を止める(`Scheduler::ignore_deadlock`、
 `check_deadlock` の先頭で見る)。用途は「全員が永遠に待ち、trap ハンドラが誰かを
-起こす」プログラムで、1:1 モデルでは §12.8 によりそのハンドラが park 中の main
-で走り、起こされた main は park から戻る(ハンドラは park 状態のまま走るので、
-自分への `wakeup` / `Queue#push` も起床として数える)。green はループの
-「何も走れない」分岐で fatal の代わりにシグナルを待ち(`idle_wait_for_signal`)、
-届いたら入口深さガードを外してその場でハンドラを走らせる
-(`deliver_signals_from_idle`: 切替中のコンテキストが無い唯一の待ち地点)。単独の `Thread.stop` は CRuby と同じく `ThreadError`
+起こす」プログラムで、§12.8 によりそのハンドラが park 中の main で走り、
+起こされた main は park から戻る(ハンドラは park 状態のまま走るので、
+自分への `wakeup` / `Queue#push` も起床として数える)。単独の `Thread.stop` は
+CRuby と同じく `ThreadError`
 (stopping only thread)で、純 Ruby の Mutex / ConditionVariable の待ちは
 `Thread.__stop`(検査なし)を使うので、`Queue#pop` 単独は従来どおり fatal。
 
@@ -749,14 +625,14 @@ GVL 待ちや `without_gvl` 中のスレッドは `Runnable` なのでデッド�
 dead になったカーネルスレッドを `join` してから戻る — インタプリタ(`Vm`)より
 長生きするカーネルスレッドを残さないため。
 
-### 12.5 GC / fork / まだ green と同じもの
+### 12.5 GC / fork / プロセス終了
 
 - GC はホルダだけが起こす。他スレッドは全員 safepoint で park 中なので、
   `Scheduler::mark` が `threads` 経由で各 `Executor` を、`main_exec` 経由で
-  main の root executor を辿れる(`in_scheduler` は最初の publish で常時 true。
-  ただし 1:1 では `main_exec` を deref するのは **main が current でないとき
-  だけ** — main が走っているときは main の executor はコレクタ自身のルートで、
-  `Executor::init` の途中で publish した後に移動した古いポインタかもしれない)。
+  main の root executor を辿れる(`main_exec` を deref するのは **main が current
+  でないときだけ** — main が走っているときは main の executor はコレクタ自身の
+  ルートで、`Executor::init` の途中で publish した後に移動した古いポインタかも
+  しれない)。
   JIT コードとの関係は §12.9。
 - `fork`: `fork::prepare` が GVL の状態ロックを fork をまたいで保持する
   (`Gvl::prepare_fork`)。fork の瞬間に別のカーネルスレッドが `acquire` / `release`
@@ -764,48 +640,39 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
   永久に止まるので、その瞬間を作らない。子はそのガード経由で「登録 1、待機者なし、
   fork したスレッドが保持」にリセットする(`GvlForkGuard::reset_child`)。子では
   fork したスレッドだけが残り **main になる**(`s.main = cur`)。他のスレッドは
-  dead になり `Thread.list` と実行キューからも消える(両モデル)。wake パイプの
+  dead になり `Thread.list` からも消える。wake パイプの
   作り直し(fd テーブル共有のため)、ブロックしていたシグナルの解除、
   `native_thread_id` の更新(新しいプロセスなので tid が変わる)。main 以外の
-  スレッドから fork しても同じで、そのスレッドが子の main になる(両モデル)。
+  スレッドから fork しても同じで、そのスレッドが子の main になる。
   `fork { ... }` の子はブロックが終わったら(または例外で抜けたら)main スレッドの
   終了として扱い、下のプロセス終了シーケンスを通ってから exit する
   (`Globals::exit_forked_child`: at_exit → 未捕捉例外の報告 → finalizer →
   ストリーム flush。`exit` の status はそのまま、ハンドラ内の `exit` が優先、
   シグナル例外はそのシグナルで死ぬ)。以前は `std::process::exit` 直行で
   at_exit も finalizer も走らなかった。
-- プロセス終了の順序は CRuby と同じで両モデル共通: `at_exit` ハンドラ →
-  `terminate_all`(残りスレッドを kill し ensure を走らせ、1:1 ではカーネルスレッドを
+- プロセス終了の順序は CRuby と同じ: `at_exit` ハンドラ →
+  `terminate_all`(残りスレッドを kill し ensure を走らせ、カーネルスレッドを
   join)→ `ObjectSpace` の finalizer(`Executor::run_at_exit_handlers` /
   `run_finalizers`)。
 - ブロッキング IO は §7 の経路(fd 待ちを `wait_fds` で park)をそのまま使う。
   park が GVL を手放すので、fd 待ちの間は他のスレッドが走る。
   `has_other_live_threads` が偽なら従来どおり本当にブロックする。fd で待てない
   カーネル待ちは §12.7。
-- シグナル配送・`Thread#backtrace`(park 中の `resume_exec`)・割り込みマスクの
-  意味論は green と同じコードを使う。`SCHED_CALL_DEPTH` はカーネルスレッドごとの
-  TLS になり、swap は不要。
+- `Thread#backtrace` は park 中の `resume_exec`(main は `main_exec`)を読む。
 
 ### 12.6 テスト
 
-`cargo test --lib` は native(既定)と `MONORUBY_THREAD_MODEL=green` の両方で
-全件通る。CI(`bin/test`)は通常の nextest(native)に続けて、スレッドに関わる
-ユニットテスト(`builtins::{thread,socket,process,io,file,fiber,fiddle}` /
-`gvl` / `vm` / `fork`、約 700 件・30 秒程度。`file` / `fiddle` は flock / FFI の
-カーネル待ちのため)を `MONORUBY_THREAD_MODEL=green` でもう一度走らせ、
-両方のプロファイルを 1 つのカバレッジレポートに合算する。green でしか通らない
-経路(`scheduler.rs` のイベントループ、`scheduler_run`、`Parker` を使わない
-park)はこの 2 回目の実行で計測される。
+スレッドのテストは `builtins::{thread,socket,process,io,file,fiber,fiddle}` /
+`gvl` / `vm` / `fork` のユニットテストと、`tests/` の実バイナリを起動する
+テスト(`exit_order.rs` など)。CI(`bin/test`)は通常の nextest で全部走らせる。
 
 ### 12.7 GVL を手放す区間(`scheduler::without_gvl`、P3)
 
 fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SETLKW)` /
 `waitpid` / `getaddrinfo` / `blocking: true` の FFI 呼び出し / 拡張の
-`call_blocking` — は、green では native pool(§9)に投げて完了パイプで park
-していた。1:1 モデルでは **呼び出したカーネルスレッド自身が GVL を手放して**
-実行する(`native::without_gvl`)。pool もパイプも往復コスト(約 40 µs)も
-なくなり、`native_pool::run_blocking` は `native::enabled()` なら
-`native::run_blocking` に委ねる(`run_op` はそのまま呼び出し側で走る)。
+`call_blocking` — は、**呼び出したカーネルスレッド自身が GVL を手放して**
+実行する(`native::without_gvl`)。`native_pool::run_blocking` は
+`native::run_blocking` に委ね、`run_op` は呼び出し側で 1 回だけ発行する。
 
 - **区間の約束**: クロージャはインタプリタに触れない(`Value` / `Globals` 禁止、
   raw fd・整数・自前バッファのみ)。GVL 側の手続きは park と同じで、
@@ -833,19 +700,15 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   trap 不可の予約シグナルになっている。非 main のカーネルスレッドは
   `block_async_signals` でほぼ全シグナルをブロックするが、このシグナルだけは
   通す。ハンドラの登録は最初の `native::spawn` で 1 回。
-- **`EINTR` の扱い**: `native::run_blocking` は `run_op(op, retry_eintr =
-  false)` で呼ぶので、`flock` / `open` / `fcntl` は `EINTR` を呼び出し側に
-  返す。呼び出し側は GVL を取り直してから poll point(`execute_gc`: main の
+- **`EINTR` の扱い**: `run_op` は `flock` / `open` / `fcntl` の `EINTR` を
+  呼び出し側に返す。呼び出し側は GVL を取り直してから poll point(`execute_gc`: main の
   trap ハンドラ)と `deliver_pending_now`(kill / raise の配送)を実行し、
   配送がなければ同じ syscall をもう一度発行する(いずれも冪等な待ち)。
   FFI / 拡張の呼び出しは再発行しない(`NativeOp::retries_eintr`)。
   戻ってきた `EINTR` は C 側の流儀に任せ、戻った後で配送する。
   `waitpid` は既存の `EINTR` ループ(poll point → 再試行)がそのまま使える。
-- **green は不変**: `scheduler::without_gvl` は green ではただ `f()` を呼ぶ
-  (プロセスがブロックする。スレッドのない CRuby と同じ)。`waitpid` /
-  `getaddrinfo` はもともと green でもインラインだった。
-- **まだ pool 側に残るもの**: §7 の `blocking_io_region`(fd 待ち)は
-  両モードで park 経路のまま。読み取りバッファを GVL の内外で分けて
+- **fd 待ちは park**: §7 の `blocking_io_region`(fd 待ち)は park 経路の
+  まま。読み取りバッファを GVL の内外で分けて
   `read(2)` 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
   ので、fd 待ちの間に他スレッドが走る目的はすでに達している。
 
@@ -855,10 +718,9 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   `block_async_signals` で非同期シグナルをブロックしているので、プロセス宛の
   シグナルはカーネルが main のカーネルスレッドに配る。ハンドラは SIGNAL レーンを
   立てるだけで、変換(trap ハンドラの呼び出し / `Interrupt` 等への変換)は
-  main の poll で行う。1:1 モデルの `signal_delivery_ok` は「current が main か」
-  だけを見る: green の入口深さガード(`SCHED_CALL_DEPTH`)は保存中のコンテキスト
-  の上でハンドラを走らせないためのもので、コンテキストを保存しない 1:1 には
-  守るものがない。したがって main は **自分の park(`poll` の `EINTR`)や
+  main の poll で行う。`signal_delivery_ok` は「current が main か」だけを
+  見る(スレッドはコンテキストを保存して切り替わらないので、保存中の
+  コンテキストの上でハンドラを走らせる心配はない)。したがって main は **自分の park(`poll` の `EINTR`)や
   `without_gvl` の `EINTR` の直後の poll でもハンドラを走らせ**、その後 sleep の
   残りや待ちを続ける(CRuby と同じタイミング)。
 - **ホルダは GVL を譲る**。main 以外がホルダのときに poll でシグナル保留を見たら、
@@ -870,13 +732,13 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   (待っていた `pass` / park / `without_gvl` の戻りで `deliver_pending_now`)、
   park 中(`wake_parked` → unpark)、`without_gvl` 中(`interrupt_blocking` →
   `SIGVTALRM` → `EINTR`、§12.7)。`handle_interrupt` のマスクと
-  `pending_interrupt?` は green と同じキュー(§6)。
+  `pending_interrupt?` は §6 の割り込みキューをそのまま使う。
 
 ### 12.9 JIT コードと GVL(P5)
 
 JIT コードの生成・パッチ・実行はすべて GVL の下で起きるので、複数のカーネル
-スレッドが同じコードページを同時に触ることはない。それでも 1 つの OS スレッドで
-回っていた green と違う点が 3 つある。
+スレッドが同じコードページを同時に触ることはない。それでも、すべてが 1 つの
+OS スレッドで回っていれば起きない点が 3 つある。
 
 - **命令ストリームの可視性**。ホルダがコードを書いて(コンパイル、BOP 再定義の
   entry 巻き戻し、salvage のバージョン語の書き換え)手放した後、次のホルダは
@@ -896,7 +758,7 @@ JIT コードの生成・パッチ・実行はすべて GVL の下で起きる�
   (`jit_pages_executable_for_this_thread`)。プラットフォームの既定が書き込み可
   だと、最初の JIT 命令でフォールトし、フラグは既に「書ける」と言っているので
   遅延フリップも助けない。darwin の CI ジョブは `bin/test` を通すので、この
-  経路は native モードの 2 回目の nextest で実機検証される。
+  経路は nextest で実機検証される。
 - **BOP 再定義と他スレッドのフレーム**。`def Integer#+` を実行したスレッド以外は
   全員コンパイル済みフレームを持ったまま止まっている。`check_bop_redefine` は
   自分の CFP 鎖に加えて `scheduler::suspended_executors` が返す各スレッドの鎖
@@ -905,9 +767,9 @@ JIT コードの生成・パッチ・実行はすべて GVL の下で起きる�
   やシグナルで **poll** から手放したフレーム — は poll 自身から抜ける:
   `execute_gc` が自 iseq の `bop_evictions` を跨いで比べ、動いていれば
   `POLL_DEOPT` を返し、コンパイル済み poll のコールドパスがそれを見て deopt
-  する。green も同じ穴を持っていたので両モデル共通の修正。詳細は
+  する。詳細は
   `doc/chain_deopt.md` §10.1。
 
-これらは `cargo test --lib`(既定 = native、§12.6)と、
+これらは `cargo test --lib` と、
 `MONORUBY_PREEMPT_STRESS=1` を重ねた同じフィルタで検証する。gc-stress は
-手動ワークフロー(`gc-stress.yml`)で、native モードは同じ環境変数を足して回す。
+手動ワークフロー(`gc-stress.yml`)で回す。

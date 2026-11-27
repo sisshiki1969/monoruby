@@ -8,7 +8,8 @@
 
 use std::process::Command;
 
-fn run(model: &str) -> String {
+#[test]
+fn at_exit_then_thread_ensure_then_finalizers() {
     let script = r#"
         t = Thread.new do
           sleep
@@ -22,24 +23,16 @@ fn run(model: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_monoruby"))
         .env_remove("RUBYOPT")
         .env_remove("RUBYLIB")
-        .env("MONORUBY_THREAD_MODEL", model)
         .args(["--disable=gems", "-e", script])
         .output()
         .expect("spawn monoruby");
     assert!(
         out.status.success(),
-        "{model}: {}",
+        "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-#[test]
-fn at_exit_then_thread_ensure_then_finalizers_green() {
-    assert_eq!(run("green"), "at_exit thread finalizer ");
-}
-
-#[test]
-fn at_exit_then_thread_ensure_then_finalizers_native() {
-    assert_eq!(run("native"), "at_exit thread finalizer ");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "at_exit thread finalizer "
+    );
 }

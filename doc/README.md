@@ -63,11 +63,10 @@ Two things to know before reading:
 | [`safepoint.md`](safepoint.md) | JA | reference | The one mechanism GC, preemption and signal delivery all go through. Read this before any of the three below. |
 | [`gc.md`](gc.md) | JA | reference | The collector as it actually is — non-moving, single-threaded, stop-the-world, generational — plus the `GC` module's real numbers. |
 | [`signal.md`](signal.md) | JA | reference | Deferred signal delivery: set a flag, convert it to a Ruby exception or a `Signal.trap` handler at the next safepoint. |
-| [`threads.md`](threads.md) | JA | reference | Threads: §12 the default 1:1 model (kernel threads under the GVL); §0–§11 the M:1 green scheduler still behind `MONORUBY_THREAD_MODEL=green`, Fibers, non-blocking IO and time-slice preemption. |
+| [`threads.md`](threads.md) | JA | reference | Threads: the 1:1 model (kernel threads under the GVL, §12), the thread registry, Fibers, non-blocking IO, interrupts and time-slice preemption. The M:1 green scheduler was removed in 2026-11. |
 | [`scheduler_state_diagram.md`](scheduler_state_diagram.md) | JA | reference | `ThreadState` and `FiberState` transitions — the companion diagrams to `threads.md`. |
 
 Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagram.svg),
-[`thread_state_diagram.svg`](thread_state_diagram.svg),
 [`gc_state_transitions.svg`](gc_state_transitions.svg),
 [`gc_write_barrier.svg`](gc_write_barrier.svg).
 

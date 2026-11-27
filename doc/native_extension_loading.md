@@ -110,8 +110,9 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
   `setjmp` で作り、C 呼び出しの境界（builtin trampoline の直下、JIT
   フレームを跨がない場所）で必ず受けてから `set_error` に変換する設計が
   要る。C 側のリソース解放は `rb_ensure` に頼る CRuby 流儀に従わせる。
-- **GVL がなく green thread。** `rb_thread_call_without_gvl` を
-  `NativeOp` オフロードに写像する。`rb_thread_create` 等は対象外にする。
+- **(当時は)GVL がなく green thread。** `rb_thread_call_without_gvl` を
+  `NativeOp` オフロードに写像する(現在は 1:1 モデルで GVL を外して呼ぶ、
+  `doc/threads.md` §12.7)。`rb_thread_create` 等は対象外にする。
 - **レイアウト前提マクロ。** `RSTRING_PTR` / `RARRAY_PTR` は lazy
   materialize + pin、`RTYPEDDATA` は co-allocation で吸収し、`RARRAY_PTR[i] =`
   の lvalue 書き込みは諦める（旧稿 §4）。

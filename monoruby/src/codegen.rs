@@ -59,18 +59,6 @@ pub(crate) type BlockInvoker = extern "C" fn(
 
 pub(crate) type BindingInvoker = extern "C" fn(&mut Executor, &mut Globals, Lfp) -> Option<Value>;
 
-/// First activation of a green thread: the executor passed first IS the
-/// thread's own executor (its `rsp_save` holds the fresh stack top); the
-/// calling scheduler context is saved into the `SCHED_RSP` slot.
-pub(crate) type ThreadInvoker = extern "C" fn(
-    &mut Executor,
-    &mut Globals,
-    &ProcData,
-    Value,
-    *const Value,
-    usize,
-) -> Option<Value>;
-
 pub(crate) type FiberInvoker = extern "C" fn(
     &mut Executor,
     &mut Globals,
@@ -1184,9 +1172,6 @@ pub struct Codegen {
     /// without the `parent_fiber` write.
     pub(crate) transfer_fiber: extern "C" fn(*mut Executor, &mut Executor, Value) -> Option<Value>,
     pub(crate) yield_fiber: extern "C" fn(*mut Executor, Value) -> Option<Value>,
-    pub(crate) thread_invoker: ThreadInvoker,
-    pub(crate) switch_to_scheduler: extern "C" fn(*mut Executor, Value) -> Option<Value>,
-    pub(crate) scheduler_resume: extern "C" fn(*mut Executor, u64) -> Option<Value>,
     pub(crate) startup_flag: bool,
     /// The compiles abandoned because the compiler panicked
     /// (`compiler::contain_compile_panic`). The test harness reads it
@@ -1570,9 +1555,6 @@ impl Codegen {
         let resume_fiber = jit.resume_fiber();
         let transfer_fiber = jit.transfer_fiber();
         let yield_fiber = jit.yield_fiber();
-        let thread_invoker = jit.thread_invoker();
-        let switch_to_scheduler = jit.switch_to_scheduler();
-        let scheduler_resume = jit.scheduler_resume();
 
         #[cfg(target_arch = "x86_64")]
         let nil_pair = {
@@ -1629,9 +1611,6 @@ impl Codegen {
             resume_fiber,
             transfer_fiber,
             yield_fiber,
-            thread_invoker,
-            switch_to_scheduler,
-            scheduler_resume,
             startup_flag: false,
             contained_panics: 0,
             late_direct_calls: Vec::new(),
@@ -2113,8 +2092,7 @@ impl Codegen {
     /// `set_bop_redefine` arms the flag and this consumes it.
     ///
     /// The other threads' frames are converted too: each one is suspended
-    /// under this thread's feet (a green thread until the scheduler
-    /// switches to it, a kernel thread until it gets the GVL), and its
+    /// under this thread's feet (until it gets the GVL), and its
     /// compiled callers would otherwise resume the inlined operator the
     /// definition just replaced. Only *callers* are convertible — a frame
     /// is rewritten through the return address its callee holds — so a

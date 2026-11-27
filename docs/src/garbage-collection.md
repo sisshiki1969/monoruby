@@ -27,7 +27,7 @@ Collections are requested by setting a single per-thread `alloc_flag`, and *perf
 - **malloc pressure** — a custom `#[global_allocator]` tracks off-heap allocation (String/Array backing stores etc.) and requests a GC when it outgrows an adaptive threshold, so heavy malloc traffic can't outrun the heap-cell trigger.
 - **Explicit** — `GC.start`.
 
-Safepoint polls (`compare alloc_flag; conditionally call gc`) are emitted at **callee entry and loop back-edges** in both the VM tier and JIT code. The same poll also drives green-thread preemption and pending-signal delivery (see [Threads and Fibers](threads-and-fibers.md)). Rooting is **precise**: roots are explicitly enumerated — the executor's frame chain, temporary-value stack, the green-thread scheduler's thread registry, pending exceptions, and global state — never conservatively scanned off the machine stack; JIT code spills live registers before a safepoint call.
+Safepoint polls (`compare alloc_flag; conditionally call gc`) are emitted at **callee entry and loop back-edges** in both the VM tier and JIT code. The same poll also drives thread preemption (the GVL handoff) and pending-signal delivery (see [Threads and Fibers](threads-and-fibers.md)). Rooting is **precise**: roots are explicitly enumerated — the executor's frame chain, temporary-value stack, the thread registry, pending exceptions, and global state — never conservatively scanned off the machine stack; JIT code spills live registers before a safepoint call.
 
 ## Controlling the GC
 

@@ -286,9 +286,10 @@ fn fiddle_call_inner(
 
 /// Perform the libffi call and return the raw result, normalised to 64 bits.
 ///
-/// Kept separate from boxing so the same call can happen on a worker thread,
-/// which must not touch the Ruby heap: the worker produces these bits, and
-/// the interpreter thread turns them into a Value with [`bits_to_value`].
+/// Kept separate from boxing so the same call can run without the GVL,
+/// where it must not touch the Ruby heap: the call produces these bits, and
+/// the caller, holding the GVL again, turns them into a Value with
+/// [`bits_to_value`].
 /// Floating-point returns travel as `f64::to_bits`, everything else as the
 /// value widened to `i64` exactly the way its arm boxed it before.
 ///
@@ -391,13 +392,12 @@ struct PreparedFn {
     /// exactly the calls that are already the most common in a real binding
     /// (`sqlite3_column_text`, `sqlite3_column_name`, `sqlite3_errmsg`).
     ret_as_string: bool,
-    /// Run this call on a worker thread instead of inline.
+    /// Run this call with the GVL released.
     ///
-    /// A C function that blocks in the kernel would otherwise freeze the
-    /// whole interpreter: green threads share one OS thread, so nothing else
-    /// runs until it returns. Declaring the call blocking sends it to
-    /// `native_pool` and parks the calling green thread on the completion
-    /// pipe, exactly like `File#flock`.
+    /// A C function that blocks in the kernel would otherwise keep every
+    /// other Ruby thread waiting for the GVL until it returns. Declaring the
+    /// call blocking sends it through `native_pool::run_blocking`, exactly
+    /// like `File#flock`.
     blocking: bool,
 }
 
@@ -410,11 +410,11 @@ const PREPARE_RETURN_STRING: i64 = 1;
 const PREPARE_BLOCKING: i64 = 2;
 const PREPARE_KNOWN_FLAGS: i64 = PREPARE_RETURN_STRING | PREPARE_BLOCKING;
 
-/// A prepared call packaged for a worker thread.
+/// A prepared call packaged to run without the GVL.
 ///
 /// Holds only C-level data: the address of the leaked descriptor and the
-/// already-marshalled arguments. The libffi `Arg` pointer array is built on
-/// the worker, pointing into that thread's own copy of `args`.
+/// already-marshalled arguments. The libffi `Arg` pointer array is built
+/// by `run`, pointing into this call's own copy of `args`.
 pub(crate) struct FfiWorkerCall {
     site: *const PreparedFn,
     args: SmallVec<[CArg; PREPARED_INLINE_ARGS]>,
@@ -430,8 +430,8 @@ pub(crate) struct FfiWorkerCall {
 unsafe impl Send for FfiWorkerCall {}
 
 impl FfiWorkerCall {
-    /// Perform the call. Runs on a worker thread — must not touch the Ruby
-    /// heap or any interpreter thread-local.
+    /// Perform the call. Runs without the GVL — must not touch the Ruby
+    /// heap or any interpreter state.
     pub(crate) fn run(&self) -> i64 {
         // SAFETY: see the `Send` justification above.
         let pf: &PreparedFn = unsafe { &*self.site };
@@ -605,11 +605,10 @@ fn fiddle_invoke(
         };
         c_args.push(value_to_carg(vm, globals, v, ty)?);
     }
-    // A call the binding declared blocking runs on a worker thread while this
-    // green thread parks, so one slow C call does not freeze every other
-    // thread on this interpreter. The round trip costs tens of microseconds
-    // (see `native_pool`), which is why it is opt-in per function rather than
-    // the default.
+    // A call the binding declared blocking runs with the GVL released, so
+    // one slow C call does not hold up every other thread on this
+    // interpreter. Releasing and retaking the lock is not free, which is why
+    // it is opt-in per function rather than the default.
     if pf.blocking {
         let bits = native_pool::run_blocking(
             vm,
@@ -620,7 +619,7 @@ fn fiddle_invoke(
             }),
         )?
         .ret;
-        // SAFETY: the worker has returned, so the pointer a string return
+        // SAFETY: the call has returned, so the pointer a string return
         // yields is whatever the C function produced — the same contract the
         // inline path relies on.
         return Ok(unsafe { bits_to_value(bits, pf.ret_code, pf.ret_as_string) });
@@ -1648,9 +1647,9 @@ mod tests {
         ));
     }
 
-    // The point of the blocking flag: green threads share one OS thread, so a
-    // C call that blocks inline freezes every one of them. Offloaded, the
-    // others keep running. Measured by how far a busy thread gets while a
+    // The point of the blocking flag: a C call that blocks with the GVL held
+    // freezes every other thread. With the GVL released, the others keep
+    // running. Measured by how far a busy thread gets while a
     // 250ms C sleep is in flight -- inline it must not advance at all.
     #[test]
     fn fiddle_blocking_yields_to_other_threads() {
@@ -1686,8 +1685,8 @@ mod tests {
         ));
     }
 
-    // Everything a call can return has to survive the trip through a worker
-    // thread, which hands back raw bits for the interpreter thread to box.
+    // Everything a call can return has to survive the GVL-less path, which
+    // hands back raw bits for the caller to box.
     #[test]
     fn fiddle_blocking_return_types() {
         run_test_no_result_check(&format!(
@@ -1712,7 +1711,7 @@ mod tests {
             raise "double" unless (Fiddle.___invoke(d, 1024.0) - 32.0).abs < 1e-9
             raise "float"  unless (Fiddle.___invoke(f, "2.5", nil) - 2.5).abs < 1e-6
             raise "void"   unless Fiddle.___invoke(v, Fiddle.___malloc(8)).nil?
-            # A String argument hands over its own buffer; the worker holds
+            # A String argument hands over its own buffer; the call holds
             # that raw pointer while this frame keeps the String alive.
             raise "string arg" unless Fiddle.___invoke(len, "hello world") == 11
 
@@ -1729,8 +1728,8 @@ mod tests {
         ));
     }
 
-    // A thread parked on a worker must still be interruptible: the ticket is
-    // discarded and the worker's late result dropped, rather than the thread
+    // A thread inside a blocking call must still be interruptible: the
+    // unblocking signal ends the C call's sleep, rather than the thread
     // being stuck until the C call happens to return.
     #[test]
     fn fiddle_blocking_is_interruptible() {

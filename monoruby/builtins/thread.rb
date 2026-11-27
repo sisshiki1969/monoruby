@@ -7,13 +7,12 @@
 # (doc/hidden_ivars.md). Every instance variable in this file is one.
 
 class Thread
-  # monoruby threads are cooperative green threads multiplexed on the one
-  # OS thread by the native scheduler (src/scheduler.rs). The native side
+  # monoruby threads are kernel threads under a GVL (src/scheduler.rs,
+  # src/scheduler/native.rs). The native side
   # provides: Thread.new / .start / .fork (queue a body), .current /
   # .main / .list / .pass / .stop, and #join / #value / #status /
   # #alive? / #stop? / #wakeup / #run. Blocking APIs park the calling
-  # thread on the scheduler; a body starts running the first time any
-  # thread reaches a blocking point.
+  # thread with the GVL released.
   #
   # This Ruby side keeps only the pure-bookkeeping surface: a name,
   # thread-/fiber-local storage, and an interrupt-mask no-op (real
@@ -392,7 +391,7 @@ class Thread
   # (`Errno::ECHILD`) yields nil, matching CRuby. This is what keeps Open3's
   # `wait_thr.value` / `wait_thr.join` working.
   class ::Process::Waiter < Thread
-    # The native Thread.new requires a block (it queues a green thread);
+    # The native Thread.new requires a block (it starts a thread);
     # a Waiter is an inert shell around one specific child pid, so build
     # it via allocate. `Process.detach` is the only way to one: CRuby
     # undefines `new` on the class.
@@ -412,7 +411,7 @@ class Thread
       @__pid = pid
       self[:pid] = pid
       # Reap the child as soon as it exits, not only at #value/#join time:
-      # a real green thread parks on a pidfd (pollable process handle)
+      # a real thread parks on a pidfd (pollable process handle)
       # and collects the status when it fires, so detached children never
       # linger as zombies that a later `Process.wait(-1)` would reap by
       # accident (CRuby's detach thread gives the same guarantee).

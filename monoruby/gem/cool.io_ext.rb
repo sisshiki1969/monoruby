@@ -11,8 +11,8 @@
 #
 # The event loop is `IO.select` over the enabled IO watchers with a
 # timeout cut to the next timer, the next stat poll and `run_once`'s own
-# timeout, on monoruby's green threads (a blocked select parks the calling
-# thread). What the extension does that this mirrors:
+# timeout (a blocked select parks the calling thread and releases the
+# GVL). What the extension does that this mirrors:
 #
 # - The loop's bookkeeping lives in the loop object's `@watchers` (watcher
 #   => true) and `@active_watchers` (a count of enabled watchers), which

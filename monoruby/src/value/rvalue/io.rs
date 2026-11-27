@@ -20,9 +20,9 @@ use super::*;
 /// interleaves in the wrong order. A `Mutex` rather than a `thread_local!`
 /// for the same reason across the test harness, which runs one
 /// interpreter per OS thread over the same standard descriptors. Ruby
-/// `Thread`s are green threads multiplexed on one OS thread, so this is
-/// uncontended in normal use, and the guard is never held across a
-/// context switch (each call locks, works, and returns).
+/// `Thread`s of one interpreter take turns under its GVL, so this is
+/// uncontended in normal use, and the guard is never held across a GVL
+/// release (each call locks, works, and returns).
 static STDIN_BUF: LazyLock<Mutex<IoReader<StdFd>>> =
     LazyLock::new(|| Mutex::new(IoReader::new(StdFd::new(0))));
 /// The standard input's `cbuf` (see `FileDescriptor::cbuf`), process-wide
@@ -61,9 +61,9 @@ fn stderr_buf() -> MutexGuard<'static, IoWriter<StdFd>> {
 /// the flush its own exit performs. Held by the forking thread instead,
 /// each lock is owned in both processes by a thread that exists there.
 /// (A thread blocked in a `read(2)` on stdin holds that lock for the
-/// wait, so a fork elsewhere in the process waits with it; monoruby's
-/// own threads are green, on one OS thread, so this concerns only an
-/// embedder running several interpreters.)
+/// wait, so a fork elsewhere in the process waits with it; a Ruby
+/// thread waits for stdin with the GVL released and the lock not held,
+/// so this concerns only an embedder running several interpreters.)
 pub(crate) struct ForkLocks {
     _stdin: MutexGuard<'static, IoReader<StdFd>>,
     _stdout: MutexGuard<'static, IoWriter<StdFd>>,
@@ -180,8 +180,8 @@ fn drain_err(
 /// Descriptors 0, 1 and 2 are never in the set, because no
 /// `FileDescriptor` ever closes them ([`fd_is_kept_open`]).
 ///
-/// One set per interpreter (`vm::OWNED_FDS`): in the 1:1 thread model
-/// several OS threads open and wrap descriptors of the same process.
+/// One set per interpreter (`vm::OWNED_FDS`): its threads are OS threads
+/// that open and wrap descriptors of the same process.
 use crate::vm::OWNED_FDS;
 
 /// Whether `fd` is one of the three standard descriptors, which an IO
@@ -247,7 +247,7 @@ fn signal_pending() -> bool {
 
 /// Whether an io error out of the primitives below is one of the two
 /// restartable interrupts: `Interrupted` (EINTR with a signal pending) or
-/// `WouldBlock` (EAGAIN on an fd the green-thread scheduler put in
+/// `WouldBlock` (EAGAIN on an fd the IO builtins put in
 /// non-blocking mode). Both are surfaced as internal marker errors that
 /// the IO builtins intercept and restart; see [`interrupt_marker`].
 fn is_interrupt_kind(kind: std::io::ErrorKind) -> bool {
@@ -280,9 +280,9 @@ fn map_read_err(e: std::io::Error, f: impl FnOnce(String) -> MonorubyErr) -> Mon
     }
 }
 
-/// RAII guard for the green-thread scheduler's blocking-IO emulation: put
-/// `fd` into non-blocking mode so that a read/write that would block the
-/// whole OS process returns `EAGAIN` instead (surfaced upward as the
+/// RAII guard for the blocking-IO emulation of `blocking_io_region`: put
+/// `fd` into non-blocking mode so that a read/write that would block
+/// with the GVL held returns `EAGAIN` instead (surfaced upward as the
 /// would-block marker), and restore the original file-status flags on
 /// drop. The restore keeps the non-blocking mode from leaking to child
 /// processes spawned later and to other processes sharing the open file
@@ -1176,8 +1176,7 @@ impl IoInner {
     /// it. The stream is `Closed` when this returns and the child lives
     /// only in the returned value, so the caller can reap it with
     /// [`reap_child`] from *outside* the GVL — which is the point: that
-    /// wait lasts as long as the child does, and in the 1:1 thread model
-    /// holding the GVL across it stops every other Ruby thread for the
+    /// wait lasts as long as the child does, and holding the GVL across it stops every other Ruby thread for the
     /// duration (closing a `sleep 30` child's IO froze them for 30 s).
     pub fn close_detaching_child(&mut self, store: &Store) -> Result<Option<u32>> {
         if self.is_closed() {
@@ -1544,7 +1543,7 @@ impl IoInner {
 
     /// Whether a read can be satisfied without touching the fd: ungetc
     /// pushback or bytes already sitting in the internal BufReader. Used
-    /// by the green-thread IO scheduler to skip the fd-readiness park.
+    /// by `blocking_io_region` to skip the fd-readiness park.
     pub fn has_buffered_data(&self) -> bool {
         if self.pushback_len() > 0 || self.char_pending_len() > 0 {
             return true;
@@ -1886,7 +1885,7 @@ impl IoInner {
         // On a restartable interrupt (`Interrupted`/`WouldBlock` out of the
         // read helpers), bytes already consumed from the fd are pushed back
         // so that the retried read (after a `Signal.trap` handler ran, or
-        // after the green thread was parked until the fd became ready)
+        // after the thread was parked until the fd became ready)
         // returns them first and no data is lost. `pushback` is `None` for
         // Stdin, which has no pushback cell — an interrupted stdin read may
         // drop the partial data, like the pre-existing ungetc limitation

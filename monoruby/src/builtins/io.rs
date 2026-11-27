@@ -2586,9 +2586,9 @@ fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
 /// delivered before the syscall (re-)entered the kernel, so it can never
 /// EINTR it, and the operation could otherwise block forever with the
 /// signal sitting in the bitmap (same reasoning as `Kernel#sleep`).
-/// Additionally, for fd-backed operations: when other green
-/// threads are live and the operation would block (fd not ready, nothing
-/// buffered), park the current thread on the scheduler's fd poller so
+/// Additionally, for fd-backed operations: when other threads are live
+/// and the operation would block (fd not ready, nothing
+/// buffered), park the current thread on the fd with the GVL released so
 /// the other threads run in the meantime, instead of blocking the whole
 /// process. Readiness is re-checked after every wake (spurious wakeups
 /// and error/hangup revents fall through to `f`, which surfaces the real
@@ -2598,10 +2598,10 @@ fn bump_lineno(globals: &mut Globals, mut io: Value) -> Result<()> {
 /// available data and then needs more (e.g. `read(n)` beyond what a pipe
 /// holds) blocking the process mid-way. To cover the middle of the
 /// operation too, `f` runs with the fd in temporary non-blocking mode
-/// (`NonblockGuard`) while other green threads are live: a kernel entry
+/// (`NonblockGuard`) while other threads are live: a kernel entry
 /// that would block returns `EAGAIN`, the primitives push back what was
 /// already consumed and surface the internal would-block marker, and the
-/// thread parks on the fd poller before restarting `f`. With no other
+/// thread parks on the fd before restarting `f`. With no other
 /// live threads the marker can still surface — from an fd left
 /// permanently non-blocking by `read_nonblock`/`write_nonblock` — and is
 /// waited out with a plain (signal-interruptible) `poll(2)`, matching
@@ -2737,7 +2737,7 @@ pub(crate) fn blocking_io_region<T>(
         };
         let res = f(&globals.store);
         // Restore the fd's blocking mode *before* parking: while this
-        // thread is parked, other green threads (or a spawned child) may
+        // thread is parked, other threads (or a spawned child) may
         // use the same fd and must see it in its original mode.
         drop(guard);
         match res {
@@ -2764,8 +2764,8 @@ pub(crate) fn blocking_io_region<T>(
 }
 
 /// Wait until `fd` reports one of `events`, blocking the whole process —
-/// used when a would-block interrupt surfaces with no other green threads
-/// to run (an fd left permanently non-blocking by `read_nonblock` /
+/// used when a would-block interrupt surfaces with no other threads to
+/// run (an fd left permanently non-blocking by `read_nonblock` /
 /// `write_nonblock`). Signal-interruptible: `EINTR` (and a signal already
 /// pending on entry) runs the VM poll point, then re-polls.
 pub(crate) fn wait_fd_single(
@@ -4414,8 +4414,8 @@ fn io_fileno(
 /// `F_GETLK`, as in CRuby.
 ///
 /// `F_SETLKW` waits in the kernel for the lock, with no fd to poll, so
-/// it runs on a native worker while this green thread parks (see
-/// `native_pool`); every other command is immediate and runs inline.
+/// it runs with the GVL released (see `native_pool`); every other command
+/// is immediate and runs inline.
 ///
 /// [https://docs.ruby-lang.org/ja/latest/method/IO/i/fcntl.html]
 #[monoruby_builtin]
@@ -7673,10 +7673,10 @@ fn ensure_io_open(self_val: Value) -> Result<()> {
 /// `POLLIN`/`POLLPRI`/`POLLOUT`) and a timeout in milliseconds. Returns the
 /// revents from the kernel, or 0 on timeout. Closed / invalid fds raise
 /// `IOError: closed stream`.
-/// Green-thread-aware fd wait for the `IO#wait*` family: when other green
-/// threads are live, park on the scheduler's fd poller (deadline-bounded)
-/// instead of issuing a process-blocking poll(2) — a plain poll freezes
-/// every other green thread for the whole timeout, and the peer this wait
+/// Thread-aware fd wait for the `IO#wait*` family: when other threads are
+/// live, park on the fd with the GVL released (deadline-bounded) instead
+/// of issuing a poll(2) under the GVL — a plain poll freezes every other
+/// thread for the whole timeout, and the peer this wait
 /// is waiting *for* is typically one of them (e.g. net/protocol's
 /// `rbuf_fill` waiting on a spec's in-process server thread). Returns the
 /// ready revents, 0 on timeout.

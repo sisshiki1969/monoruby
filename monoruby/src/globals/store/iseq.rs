@@ -1554,7 +1554,7 @@ impl ISeqInfo {
                 // class-guard-chain dispatch word) recorded by `set_jit_slot`;
                 // it is leaked for the process lifetime, so the pointer is always
                 // valid to write, and the write races nothing (method-table
-                // mutation is not a green-thread yield point).
+                // mutation happens under the GVL).
                 unsafe { *(slot_addr as *mut u64) = 0 };
             }
             self.jit_slot.clear();

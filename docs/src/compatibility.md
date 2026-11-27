@@ -90,9 +90,8 @@ Both dashboards come from the same workflow shape
 The audit that cut the skip list down from coarse file-level exclusions to
 that handful is written up in [ruby/spec hang
 countermeasures](design/ruby_spec_skip_tags.md). The structural hangs are
-gone under either thread model: a blocking read releases the GVL (1:1) or
-parks the calling thread on the scheduler's fd poller (M:1) instead of
-blocking the process, so specs like `core/io/copy_stream_spec.rb` and
+gone: a blocking read parks the calling thread on an fd poll with the GVL
+released instead of blocking the process, so specs like `core/io/copy_stream_spec.rb` and
 `core/io/select_spec.rb` run to completion.
 
 ## Running the specs yourself
@@ -115,9 +114,8 @@ A few behaviours differ by design rather than by omission:
   implementation](design/gc.md).
 - **Threads are real kernel threads behind a GVL.** Each Ruby `Thread` is an
   OS thread that holds a global lock while it runs Ruby, releasing it at
-  safepoints and around blocking syscalls; the older M:1 green scheduler,
-  with time-slice preemption, is still there behind
-  `MONORUBY_THREAD_MODEL=green`. See [Thread / Fiber / non-blocking IO /
+  safepoints (with 10 ms time-slice preemption) and around blocking
+  syscalls. See [Thread / Fiber / non-blocking IO /
   preemption](design/threads.md).
 
 C extensions are no longer on this list. Since October 2026 monoruby ships a

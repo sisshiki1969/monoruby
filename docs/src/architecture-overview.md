@@ -47,7 +47,7 @@ Ruby source is parsed by [prism](https://github.com/ruby/prism) (consumed as the
 | Value representation (64-bit tagged union) | [Value Representation](value-representation.md) | — |
 | JIT compiler (TraceIR / AsmIR / register allocation) | [JIT Compiler](jit-compiler.md) | [`jit.md`](design/jit.md), [`lir.md`](design/lir.md), [`regalloc_separation.md`](design/regalloc_separation.md) |
 | Garbage collection (generational mark-and-sweep) | [Garbage Collection](garbage-collection.md) | [`gc.md`](design/gc.md) |
-| Green threads and fibers | [Threads and Fibers](threads-and-fibers.md) | [`threads.md`](design/threads.md) |
+| Threads and fibers | [Threads and Fibers](threads-and-fibers.md) | [`threads.md`](design/threads.md) |
 | Stack frames and method calls | [Stack Frames and Method Calls](stack-frames-and-method-calls.md) | [`stack_frame.md`](design/stack_frame.md), [`method_args.md`](design/method_args.md) |
 | Exception handling | [Exception Handling](exception-handling.md) | [`exception_handling.md`](design/exception_handling.md) |
 | aarch64 (Apple Silicon) backend | [aarch64 Backend](aarch64-backend.md) | [`arch_difference.md`](design/arch_difference.md) |

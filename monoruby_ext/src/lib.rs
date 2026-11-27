@@ -157,7 +157,7 @@ fn api_float_new(f: f64) -> MrValue {
 pub struct Sym(MrSym);
 
 /// The interpreter, for the duration of one call into the extension.
-/// Methods that run Ruby (or park the green thread) take `&mut self`, so
+/// Methods that run Ruby (or release the GVL) take `&mut self`, so
 /// a borrow handed out by `&self` — a String's bytes — cannot be held
 /// across them.
 pub struct Ctx {
@@ -687,9 +687,9 @@ impl Ctx {
 
     // ---- threads -------------------------------------------------------
 
-    /// Run `f` on a worker thread while this green thread parks. `f` must
-    /// not touch Ruby; it may use anything it captured (the closure lives
-    /// in this frame, which stays put).
+    /// Run `f` with the GVL released, so the other Ruby threads keep
+    /// running. `f` must not touch Ruby; it may use anything it captured
+    /// (the closure lives in this frame, which stays put).
     pub fn call_blocking<F: FnOnce() -> i64>(&mut self, f: F) -> Result<i64> {
         unsafe extern "C" fn thunk<F: FnOnce() -> i64>(arg: *mut c_void) -> i64 {
             // SAFETY: `arg` is the `Option<F>` below, taken exactly once.
@@ -698,8 +698,8 @@ impl Ctx {
         }
         let mut slot: Option<F> = Some(f);
         let mut out = 0i64;
-        // SAFETY: a live context; `slot` and `out` outlive the call — the
-        // green thread parks here until the worker is done.
+        // SAFETY: a live context; `slot` and `out` outlive the call, which
+        // runs `thunk` on this kernel thread and returns once it is done.
         let rc = unsafe {
             (self.api().call_blocking)(
                 self.raw,

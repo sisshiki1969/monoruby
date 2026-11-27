@@ -150,7 +150,7 @@ fn sleep_is_interrupted_by_signals() {
 
 #[test]
 fn bare_sleep_blocks_until_a_signal_raises() {
-    // Argument-less `sleep` with no other live green thread must block
+    // Argument-less `sleep` with no other live thread must block
     // like CRuby's: a plain trap handler runs and the sleep *resumes*
     // (CRuby sleeps straight through it), and only an interrupt that
     // raises — here the converted SIGTERM SignalException — ends it.

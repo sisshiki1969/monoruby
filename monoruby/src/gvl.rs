@@ -1,11 +1,10 @@
 //! The Global VM Lock.
 //!
-//! In the 1:1 thread model each Ruby `Thread` is a kernel thread, and
-//! the interpreter's shared state (the heap, `Globals`, the JIT, the
-//! inline caches) is touched only by the thread that holds this lock.
-//! The lock is released at exactly the places a green thread switches
-//! today — safepoints and blocking regions — so a thread that does not
-//! hold it always has GC-complete frames.
+//! Each Ruby `Thread` is a kernel thread, and the interpreter's shared
+//! state (the heap, `Globals`, the JIT, the inline caches) is touched
+//! only by the thread that holds this lock. The lock is released only at
+//! safepoints and blocking regions, so a thread that does not hold it
+//! always has GC-complete frames.
 //!
 //! Fairness matters more than throughput here: a holder that releases
 //! and immediately re-acquires would starve everyone else (the classic

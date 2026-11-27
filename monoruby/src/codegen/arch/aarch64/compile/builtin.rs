@@ -31,7 +31,7 @@ impl Codegen {
     /// method's own LR is saved: the invoker's a64_push_callee_save stashes the
     /// *post-blr* x30, not ours, so we restore the real return address after the
     /// fiber resumes back here.
-    /// A yield with no parent fiber (main fiber / a green thread's root)
+    /// A yield with no parent fiber (main fiber / a thread's root)
     /// must not reach the switch stub — it would load SP through a null
     /// `parent_fiber` — so route it to the error helper instead (returns
     /// None with a FiberError set; the inline's handle_error picks it up).

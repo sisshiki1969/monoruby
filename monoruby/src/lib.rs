@@ -113,8 +113,8 @@ const STRING_INLINE_CAP: usize = 32;
 /// enclosing native stack still leaves ≥1 MiB of headroom for the Rust
 /// frames of builtins running beneath the deepest Ruby frame.
 const MAIN_STACK_SIZE: usize = 1024 * 1024;
-/// Ruby-frame stack budget for fiber / green-thread contexts, whose stacks
-/// are fixed 256 KiB allocations (`FIBER_STACK_SIZE` / `THREAD_STACK_SIZE`)
+/// Ruby-frame stack budget for fiber contexts, whose stacks
+/// are fixed 256 KiB allocations (`FIBER_STACK_SIZE`)
 /// with a guard page at the bottom: a 64 KiB Ruby budget leaves ~192 KiB of
 /// Rust headroom below the limit before the guard page can be hit.
 const FIBER_STACK_BUDGET: usize = 64 * 1024;

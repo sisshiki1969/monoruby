@@ -26,32 +26,27 @@ pub(crate) enum InterruptTiming {
     Never,
 }
 
-/// Green-thread control block.
+/// Thread control block.
 ///
-/// monoruby threads are cooperative green threads multiplexed on the one
-/// OS thread (see scheduler.rs). Each thread owns a dedicated machine
-/// stack and an `Executor` — exactly like a `FiberInner` — but is
-/// scheduled by the global scheduler instead of an explicit
-/// resume/yield parent chain. `parent_fiber` of a thread root is always
-/// `None`, so `Fiber.yield` at a thread's root takes the pre-existing
-/// "can't yield from main fiber" error paths unchanged.
+/// Each Ruby thread runs on a kernel thread of its own under the GVL
+/// (see scheduler.rs) with an `Executor` of its own. `parent_fiber` of a
+/// thread root is always `None`, so `Fiber.yield` at a thread's root
+/// takes the "can't yield from main fiber" error paths.
 #[derive(Debug)]
 pub struct ThreadInner {
     /// The thread's own VM context. `None` for the main thread, whose
     /// `Executor` is owned by the embedder (marked via the scheduler's
-    /// live `main_exec` pointer while green threads run).
+    /// `main_exec` pointer while another thread holds the GVL).
     handle: Option<Box<Executor>>,
     /// The body block. `None` for the main thread and for bare
     /// `Thread.allocate` shells (e.g. `Process::Waiter`).
     proc: Option<Proc>,
     /// Arguments passed to `Thread.new`, delivered to the body block.
     args: Vec<Value>,
-    /// Dedicated machine stack, lazily allocated at first activation.
-    stack: Option<std::ptr::NonNull<u8>>,
     pub(crate) state: ThreadState,
-    /// The executor context the scheduler must resume — the thread root,
-    /// or a fiber nested inside the thread that parked on its behalf.
-    /// Only valid while parked.
+    /// The executor context the thread is suspended in while it does not
+    /// hold the GVL — the thread root, or a fiber nested inside the thread
+    /// that parked on its behalf. Only valid while parked.
     pub(crate) resume_exec: Option<std::ptr::NonNull<Executor>>,
     /// Body result (threads terminated normally).
     pub(crate) result: Option<Value>,
@@ -82,17 +77,12 @@ pub struct ThreadInner {
     /// Depth of `Thread.__uninterruptible` sections. While non-zero, ALL
     /// asynchronous interrupts (including kill, which `handle_interrupt`
     /// cannot mask) are deferred: nothing is delivered at parks and a
-    /// queued interrupt does not wake this thread. The green-thread
-    /// analogue of CRuby's `mutex_lock_uninterruptible` (the
+    /// queued interrupt does not wake this thread. The analogue of
+    /// CRuby's `mutex_lock_uninterruptible` (the
     /// `rb_mutex_sleep` re-acquire), used by `Thread::Mutex#sleep` so a
     /// `ConditionVariable#wait`er killed after being signaled still
     /// re-acquires the mutex before dying.
     pub(crate) uninterruptible: u32,
-    /// Whether the thread's current/last park was a *blocking* operation
-    /// (sleep / join / fd wait / queue pop) as opposed to `Thread.pass`.
-    /// Consulted when delivering a pending interrupt masked
-    /// `:on_blocking`.
-    pub(crate) park_blocking: bool,
     /// Park permit: set by `Thread#wakeup` / `#run` when the target is
     /// *running* (not parked); consumed by the next park, which then
     /// returns immediately. Closes the classic lost-wakeup window under
@@ -101,32 +91,20 @@ pub struct ThreadInner {
     /// Mutex / ConditionVariable / Queue in builtins/startup.rb all park
     /// through patterns that need this.
     pub(crate) park_permit: bool,
-    /// Green scheduler only: the thread's last timed park ended because
-    /// its deadline came (`wake_due_sleepers`), not because something
-    /// woke it. Cleared when a sleep starts; `scheduler::sleep_woken`
-    /// reads it back. (The 1:1 model learns the same from its `park`.)
-    pub(crate) sleep_timed_out: bool,
     /// `$?` / `Process.last_status` for this thread. CRuby keeps the
     /// last child status per thread, so a fresh thread sees `nil` until
     /// it reaps a child of its own.
     pub(crate) last_status: Option<Value>,
-    /// This thread's own `SCHED_CALL_DEPTH` while it is not running.
-    /// The counter is a thread-local on the OS thread, but its RAII
-    /// guards sit on this green thread's stack and stay alive across a
-    /// park, so the scheduler swaps the counter through here at every
-    /// context switch. See `scheduler::SCHED_CALL_DEPTH`.
-    pub(crate) sched_call_depth: u32,
-    /// The 1:1 model's wake pipe (`scheduler::native`): what a parked
-    /// kernel thread polls and a waker writes to. `None` in the green
-    /// model, and until the thread's first park.
+    /// The wake pipe (`scheduler::native`): what a parked kernel thread
+    /// polls and a waker writes to. `None` until the thread's first park.
     pub(crate) parker: Option<crate::scheduler::native::Parker>,
-    /// 1:1 model: the current park has no deadline and no fd — only
+    /// The current park has no deadline and no fd — only
     /// another thread can end it (the deadlock check's input).
     pub(crate) park_indefinite: bool,
-    /// 1:1 model: the fds the current `IoWaiting` park polls, so that
+    /// The fds the current `IoWaiting` park polls, so that
     /// closing one of them can wake the thread (`native::fd_closing`).
     pub(crate) park_fds: Vec<i32>,
-    /// 1:1 model: the kernel thread this thread is running on while it
+    /// The kernel thread this thread is running on while it
     /// is inside a GVL-less region (`scheduler::without_gvl`: a syscall
     /// or foreign call that blocks in the kernel). `Some` only for the
     /// region's duration; an interrupt sends the unblocking signal
@@ -139,7 +117,7 @@ pub struct ThreadInner {
     /// CRuby's `rb_threadptr_interrupt` does. `Some` only for the
     /// call's duration.
     pub(crate) blocking_ubf: Option<crate::scheduler::Ubf>,
-    /// 1:1 model: the id of the kernel thread this thread runs on
+    /// The id of the kernel thread this thread runs on
     /// (`Thread#native_thread_id`), recorded when the body is
     /// dispatched and refreshed in a fork child. The main thread's is
     /// the creating kernel thread's.
@@ -148,18 +126,17 @@ pub struct ThreadInner {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadState {
-    /// Not yet activated (no stack, body not started).
+    /// Not yet activated (body not started).
     Created,
-    /// Runnable: in the ready queue, or the currently running thread.
+    /// Runnable: holding the GVL, or waiting for it.
     Runnable,
-    /// Parked in `Kernel#sleep` / `Thread.stop` (deadline in the
-    /// scheduler's sleeper list; `None` deadline = until woken).
+    /// Parked in `Kernel#sleep` / `Thread.stop`.
     Sleeping,
     /// Parked in `#join` / `#value` waiting on another thread.
     Joining,
-    /// Parked waiting for fd readiness (scheduler `io_waiters`).
+    /// Parked waiting for fd readiness.
     IoWaiting,
-    /// 1:1 model only: inside a GVL-less kernel wait
+    /// Inside a GVL-less kernel wait
     /// (`scheduler::without_gvl` — `flock`, a FIFO `open`, `waitpid`).
     /// Sleeping as far as Ruby is concerned (`#status` "sleep",
     /// `#stop?`), but not parked: there is no parker to wake, an
@@ -168,22 +145,6 @@ pub(crate) enum ThreadState {
     Blocking,
     /// Terminated (body returned, raised, or was killed).
     Dead,
-}
-
-const THREAD_STACK_SIZE: usize = 1024 * 256;
-
-impl Drop for ThreadInner {
-    fn drop(&mut self) {
-        use std::alloc::*;
-        if let Some(stack) = self.stack {
-            let layout = Layout::from_size_align(THREAD_STACK_SIZE, 4096).unwrap();
-            unsafe {
-                libc::mprotect(stack.as_ptr() as _, 4096, libc::PROT_WRITE);
-                dealloc(stack.as_ptr(), layout);
-            }
-            self.stack = None;
-        }
-    }
 }
 
 impl alloc::GC<RValue> for ThreadInner {
@@ -227,13 +188,12 @@ impl alloc::GC<RValue> for ThreadInner {
 }
 
 impl ThreadInner {
-    /// A schedulable green thread with a body.
+    /// A thread with a body, not started yet.
     pub(crate) fn new(proc: Proc, args: Vec<Value>) -> Self {
         Self {
             handle: Some(Box::new(Executor::default())),
             proc: Some(proc),
             args,
-            stack: None,
             state: ThreadState::Created,
             resume_exec: None,
             result: None,
@@ -244,11 +204,8 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             uninterruptible: 0,
-            park_blocking: false,
             park_permit: false,
-            sleep_timed_out: false,
             last_status: None,
-            sched_call_depth: 0,
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
@@ -274,7 +231,6 @@ impl ThreadInner {
             handle: None,
             proc: None,
             args: vec![],
-            stack: None,
             state: ThreadState::Runnable,
             resume_exec: None,
             result: None,
@@ -285,11 +241,8 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             uninterruptible: 0,
-            park_blocking: false,
             park_permit: false,
-            sleep_timed_out: false,
             last_status: None,
-            sched_call_depth: 0,
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
@@ -307,7 +260,6 @@ impl ThreadInner {
             handle: None,
             proc: None,
             args: vec![],
-            stack: None,
             state: ThreadState::Dead,
             resume_exec: None,
             result: None,
@@ -318,11 +270,8 @@ impl ThreadInner {
             killed: false,
             masks: vec![],
             uninterruptible: 0,
-            park_blocking: false,
             park_permit: false,
-            sleep_timed_out: false,
             last_status: None,
-            sched_call_depth: 0,
             parker: None,
             park_indefinite: false,
             park_fds: vec![],
@@ -371,31 +320,6 @@ impl ThreadInner {
 
     pub(crate) fn handle(&mut self) -> &mut Executor {
         self.handle.as_mut().unwrap()
-    }
-
-    /// Whether the body has terminated (mirrors `FiberState::Terminated`).
-    pub(crate) fn body_terminated(&self) -> bool {
-        matches!(
-            self.handle.as_deref().map(|h| h.fiber_state()),
-            Some(FiberState::Terminated)
-        )
-    }
-
-    /// Allocate the dedicated stack and point the executor at its top.
-    /// Must be called exactly once, at first activation.
-    pub(crate) fn initialize_stack(&mut self) {
-        use std::alloc::*;
-        assert!(self.stack.is_none());
-        let layout = Layout::from_size_align(THREAD_STACK_SIZE, 4096).unwrap();
-        unsafe {
-            let stack_bottom = alloc(layout);
-            libc::mprotect(stack_bottom as _, 4096, libc::PROT_NONE);
-            let stack_top = stack_bottom.add(THREAD_STACK_SIZE);
-            self.stack = Some(std::ptr::NonNull::new(stack_bottom).unwrap());
-            let handle = self.handle.as_mut().unwrap();
-            handle.save_rsp(stack_top);
-            handle.set_stack_limit(stack_top);
-        }
     }
 
     pub(crate) fn take_error(&mut self) -> MonorubyErr {

@@ -4,8 +4,8 @@ use monoruby::tests::*;
 // The native offload path (`src/native_pool.rs`) and its first new
 // caller: `IO#fcntl` with a String argument — the packed `struct flock`
 // the record-locking commands take. `F_SETLKW` waits in the kernel with
-// no fd to poll, so it runs on a native worker while the calling green
-// thread parks; every other command is immediate and runs inline, with
+// no fd to poll, so it runs with the GVL released on the calling kernel
+// thread; every other command is immediate and runs inline, with
 // the kernel writing back into the String for `F_GETLK` (issue #1345).
 
 // Every lock file below is named after the running process. The lock
@@ -106,11 +106,11 @@ fn lock_errors_and_ofd_locks() {
     ));
 }
 
-/// A green thread waiting for a record lock must not stop the others:
+/// A thread waiting for a record lock must not stop the others:
 /// the wait happens on a native worker (`native_pool`), not on the
 /// interpreter thread.
 #[test]
-fn a_blocked_lock_wait_lets_other_green_threads_run() {
+fn a_blocked_lock_wait_lets_other_threads_run() {
     run_test_once(&format!(
         r#"{FLOCK_PRELUDE}
         path = "/tmp/monoruby_fcntl_lock_live_#{{Process.pid}}"
@@ -202,8 +202,8 @@ fn forking_while_a_thread_keeps_offloading() {
         b = "/tmp/monoruby_forkrace_child_#{Process.pid}"
         File.write(a, "x")
         File.write(b, "x")
-        # A green thread offloading continuously, so a worker is live
-        # across the forks below.
+        # A thread waiting in the kernel continuously, so a GVL-less
+        # wait is live across the forks below.
         churn = File.open(a, "r+")
         stop = false
         t = Thread.new do

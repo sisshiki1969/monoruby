@@ -22,8 +22,8 @@ use std::path::PathBuf;
 
 /// `-D` flags for the amalgamation.
 const DEFINES: &[(&str, Option<&str>)] = &[
-    // Serialized threading: monoruby runs one interpreter per OS thread and
-    // a green thread may hand a connection over, so the library must not
+    // Serialized threading: each Ruby thread is a kernel thread, and a
+    // connection may be used from several of them, so the library must not
     // assume single-threaded use.
     ("SQLITE_THREADSAFE", Some("1")),
     // `column_database_name` / `_table_name` / `_origin_name`, which

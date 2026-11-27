@@ -1563,7 +1563,7 @@ impl Codegen {
     }
 
     /// `Fiber.yield`: call `yield_fiber(vm, value)` (value already in rsi).
-    /// A yield with no parent fiber (main fiber / a green thread's root)
+    /// A yield with no parent fiber (main fiber / a thread's root)
     /// must not reach the switch stub — it would load rsp through a null
     /// `parent_fiber` — so route it to the error helper instead (returns
     /// None with a FiberError set; the inline's handle_error picks it up).
