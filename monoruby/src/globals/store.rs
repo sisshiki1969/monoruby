@@ -1241,13 +1241,34 @@ impl Store {
     /// walk the storage instead of calling `each` (#2219). Without the
     /// bootstrap (`MONORUBY_SKIP_STARTUP`) there is no Ruby `each` to
     /// compare with, and the answer is yes.
+    /// Memoized per class_version, as `hash_method` is.
+    #[inline]
     pub(crate) fn array_each_is_basic(&self, class_id: ClassId) -> bool {
-        let Some(basic) = self.array_each_fid else {
-            return true;
+        let version = Globals::class_version();
+        if let Some((v, answer)) = self[class_id].each_basic_at()
+            && v == version
+        {
+            return answer;
+        }
+        self.resolve_array_each_is_basic(class_id, version)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn resolve_array_each_is_basic(&self, class_id: ClassId, version: u32) -> bool {
+        let answer = match self.array_each_fid {
+            Some(basic) => {
+                self.check_method_for_class_with_version(class_id, IdentId::EACH, version)
+                    .and_then(|e| e.func_id())
+                    == Some(basic)
+            }
+            None => true,
         };
-        self.check_method_for_class(class_id, IdentId::EACH)
-            .and_then(|e| e.func_id())
-            == Some(basic)
+        // Not memoized before the bootstrap has recorded `Array#each`.
+        if self.array_each_fid.is_some() {
+            self[class_id].set_each_basic_at(version, answer);
+        }
+        answer
     }
 
     /// The Ruby `Class#new` trampoline's `FuncId`, if the bootstrap ran.

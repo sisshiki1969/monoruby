@@ -524,6 +524,12 @@ pub struct ClassInfo {
     ///
     hash_method_at: std::cell::Cell<Option<(u32, Option<FuncId>)>>,
     ///
+    /// Version-stamped memo of `Store::array_each_is_basic`: as of
+    /// class_version `.0`, whether `each` resolves to the builtin
+    /// `Array#each`.
+    ///
+    each_basic_at: std::cell::Cell<Option<(u32, bool)>>,
+    ///
     /// Version-stamped memo of `Store::is_identity_key_class`: as of
     /// class_version `.0`, whether an instance inherits both
     /// `Kernel#hash` and `Kernel#eql?`.
@@ -698,6 +704,7 @@ impl ClassInfo {
             eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
+            each_basic_at: std::cell::Cell::new(None),
             identity_key_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
@@ -731,6 +738,7 @@ impl ClassInfo {
             eq_method_at: std::cell::Cell::new(None),
             match_method_at: std::cell::Cell::new(None),
             hash_method_at: std::cell::Cell::new(None),
+            each_basic_at: std::cell::Cell::new(None),
             identity_key_at: std::cell::Cell::new(None),
             default_copy_at: std::cell::Cell::new(None),
             instance_singleton: false,
@@ -839,6 +847,14 @@ impl ClassInfo {
 
     pub(super) fn set_hash_method_at(&self, version: u32, fid: Option<FuncId>) {
         self.hash_method_at.set(Some((version, fid)));
+    }
+
+    pub(super) fn each_basic_at(&self) -> Option<(u32, bool)> {
+        self.each_basic_at.get()
+    }
+
+    pub(super) fn set_each_basic_at(&self, version: u32, answer: bool) {
+        self.each_basic_at.set(Some((version, answer)));
     }
 
     pub(super) fn identity_key_at(&self) -> Option<(u32, bool)> {

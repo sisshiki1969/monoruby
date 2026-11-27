@@ -315,7 +315,9 @@ impl<T: Copy + PartialEq> RecursionStack<T> {
     /// Remove *id*: normally the top of the stack, but a Fiber switch
     /// inside a walk can finish an inner walk under an outer one.
     fn remove(&mut self, id: &T) {
-        if let Some(pos) = self.0.iter().rposition(|x| x == id) {
+        if self.0.last() == Some(id) {
+            self.0.pop();
+        } else if let Some(pos) = self.0.iter().rposition(|x| x == id) {
             self.0.remove(pos);
         }
     }
@@ -343,9 +345,6 @@ where
 }
 
 thread_local! {
-    /// How many [`exec_recursive_outer`] calls are running; the one that
-    /// finds it 0 is the outermost.
-    static OUTER_RECURSION_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The id of the tag an inner recursion threw to unwind to the
     /// outermost call, while that throw is in flight.
     static OUTER_RECURSION_TAG: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
@@ -367,36 +366,54 @@ thread_local! {
 /// different depths still hash to the same value (the spec requirement
 /// that `car.hash == similar_car.hash` when one wraps the other and one
 /// is directly self-cyclic).
+//
+// Inlined, so that `f`'s `Result` (large in its `Err`) is written straight
+// into the caller's instead of being copied out; the rare paths are out of
+// line.
+#[inline(always)]
 pub(crate) fn exec_recursive_outer<T, F>(id: u64, f: F, on_recursive: T) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
-    let depth = OUTER_RECURSION_DEPTH.get();
-    let on_stack = HASH_RECURSION_GUARD.with(|g| !g.borrow_mut().insert(id));
-    if on_stack {
-        // Inner recursion: unwind to the outermost call. The tag is a
-        // fresh object, so no `catch` of the program's can take it; the
-        // throw in flight holds it.
-        let tag = Value::object(OBJECT_CLASS);
-        OUTER_RECURSION_TAG.set(Some(tag.id()));
-        return Err(MonorubyErr::throw(tag, Value::nil()));
-    }
-    OUTER_RECURSION_DEPTH.set(depth + 1);
+    // The guard set is this function's alone, so the call that finds it
+    // empty is the outermost.
+    let Some(outermost) = HASH_RECURSION_GUARD.with(|g| {
+        let mut g = g.borrow_mut();
+        let outermost = g.0.is_empty();
+        g.insert(id).then_some(outermost)
+    }) else {
+        return Err(throw_to_outermost());
+    };
     let result = f();
     HASH_RECURSION_GUARD.with(|g| {
         g.borrow_mut().remove(&id);
     });
-    OUTER_RECURSION_DEPTH.set(depth);
-    if depth == 0 {
-        let tag = OUTER_RECURSION_TAG.take();
-        if let Err(err) = &result
-            && let MonorubyErrKind::Throw(t, _) = err.kind()
-            && Some(t.id()) == tag
-        {
-            return Ok(on_recursive);
-        }
+    // Rebuilt rather than passed on, so that only an error is moved.
+    match result {
+        Ok(v) => Ok(v),
+        Err(err) if outermost && is_throw_to_outermost(&err) => Ok(on_recursive),
+        Err(err) => Err(err),
     }
-    result
+}
+
+/// Inner recursion: unwind to the outermost [`exec_recursive_outer`].
+/// The tag is a fresh object, so no `catch` of the program's can take
+/// it; the throw in flight holds it.
+#[cold]
+#[inline(never)]
+fn throw_to_outermost() -> MonorubyErr {
+    let tag = Value::object(OBJECT_CLASS);
+    OUTER_RECURSION_TAG.set(Some(tag.id()));
+    MonorubyErr::throw(tag, Value::nil())
+}
+
+/// Whether *err*, reaching the outermost [`exec_recursive_outer`], is the
+/// throw an inner one started.
+#[cold]
+#[inline(never)]
+fn is_throw_to_outermost(err: &MonorubyErr) -> bool {
+    let tag = OUTER_RECURSION_TAG.take();
+    matches!(err.kind(), MonorubyErrKind::Throw(t, _) if Some(t.id()) == tag)
 }
 
 /// Execute `f` with recursion protection for paired operations (==, <=>, eql?).

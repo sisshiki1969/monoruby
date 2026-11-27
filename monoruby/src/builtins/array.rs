@@ -4194,6 +4194,7 @@ fn each_basic(_: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 /// overrides it), run Enumerable's method instead of the storage walk
 /// (#2219); `None` while `each` is the builtin one. `max_args` is how
 /// many arguments the method takes at most, the ones given passed on.
+#[inline(always)]
 fn enumerable_unless_basic_each(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -4201,10 +4202,22 @@ fn enumerable_unless_basic_each(
     name: &str,
     max_args: usize,
 ) -> Result<Option<Value>> {
-    let self_val = lfp.self_val();
-    if globals.store.array_each_is_basic(self_val.class()) {
+    if globals.store.array_each_is_basic(lfp.self_val().class()) {
         return Ok(None);
     }
+    enumerable_with_each(vm, globals, lfp, name, max_args)
+}
+
+#[cold]
+#[inline(never)]
+fn enumerable_with_each(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    lfp: Lfp,
+    name: &str,
+    max_args: usize,
+) -> Result<Option<Value>> {
+    let self_val = lfp.self_val();
     let name = IdentId::get_id(name);
     let Some(fid) = globals
         .store
