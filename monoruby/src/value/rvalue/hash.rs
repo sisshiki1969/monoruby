@@ -696,15 +696,6 @@ impl HashmapInner {
         self.as_mut().clear()
     }
 
-    /// See [`HashRefMut::clear_during_iteration`].
-    pub(crate) fn clear_during_iteration(
-        &mut self,
-        vm: &mut Executor,
-        globals: &mut Globals,
-    ) -> Result<()> {
-        self.as_mut().clear_during_iteration(vm, globals)
-    }
-
     pub fn shift(
         &mut self,
         vm: &mut Executor,

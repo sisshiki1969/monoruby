@@ -5516,10 +5516,6 @@ pub(super) fn encoding_object_ascii_compatible(globals: &Globals, enc: Value) ->
     }
 }
 
-fn is_ascii_compatible_encoding(name: &str) -> bool {
-    is_ascii_compatible_name(name.as_bytes())
-}
-
 /// `rb_enc_asciicompat` by canonical encoding name.
 fn is_ascii_compatible_name(name: &[u8]) -> bool {
     !matches!(
