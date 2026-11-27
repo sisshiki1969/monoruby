@@ -347,24 +347,30 @@ impl Globals {
         Err(MonorubyErr::cant_load(file_name))
     }
 
-    /// `$LOAD_PATH` as strings: String entries verbatim, non-String
+    /// `$LOAD_PATH` as paths: String entries verbatim, non-String
     /// entries through the `#to_path` / `#to_str` protocol (CRuby's
-    /// `rb_get_path` per entry); unconvertible entries are skipped.
-    pub(crate) fn load_path_entries(&mut self, vm: &mut Executor) -> Vec<String> {
+    /// `rb_get_path` per entry); unconvertible entries are skipped. An
+    /// entry is the bytes it holds, whether they are text of its
+    /// encoding or not (#2244).
+    pub(crate) fn load_path_entries(&mut self, vm: &mut Executor) -> Vec<PathBuf> {
+        let path = |v: Value| -> Option<PathBuf> {
+            let s = v.is_rstring_inner()?;
+            Some(PathBuf::from(std::ffi::OsStr::from_bytes(s.as_bytes())))
+        };
         let raw: Vec<Value> = self.load_path.as_array().iter().copied().collect();
         raw.into_iter()
             .filter_map(|v| {
-                if let Some(s) = v.is_str() {
-                    return Some(s.to_string());
+                if let Some(p) = path(v) {
+                    return Some(p);
                 }
                 let pathed = crate::coerce::check_funcall(vm, self, v, IdentId::TO_PATH)
                     .ok()?
                     .unwrap_or(v);
-                if let Some(s) = pathed.is_str() {
-                    return Some(s.to_string());
+                if let Some(p) = path(pathed) {
+                    return Some(p);
                 }
                 let s = crate::coerce::check_funcall(vm, self, pathed, IdentId::TO_STR).ok()??;
-                Some(s.is_str()?.to_string())
+                path(s)
             })
             .collect()
     }
@@ -376,16 +382,21 @@ impl Globals {
         cand: &std::path::Path,
         canon_dirs: &[PathBuf],
     ) -> Option<PathBuf> {
-        let suffix = format!("/{}", cand.display());
+        // Bytes: an entry under a directory whose name is not UTF-8
+        // counts as well (#2244).
+        let suffix = [b"/".as_slice(), cand.as_os_str().as_bytes()].concat();
         for v in self.loaded_features.as_array().iter() {
-            let Some(e) = v.is_str() else { continue };
+            let Some(e) = v.is_rstring_inner() else {
+                continue;
+            };
+            let e = e.as_bytes();
             if e.len() > suffix.len() && e.ends_with(&suffix) {
                 let prefix = &e[..e.len() - suffix.len()];
                 if canon_dirs
                     .iter()
-                    .any(|d| d.as_os_str().as_bytes() == prefix.as_bytes())
+                    .any(|d| d.as_os_str().as_bytes() == prefix)
                 {
-                    return Some(PathBuf::from(e));
+                    return Some(PathBuf::from(std::ffi::OsStr::from_bytes(e)));
                 }
             }
         }
@@ -417,7 +428,7 @@ impl Globals {
     fn built_extension_on_load_path(
         &self,
         cand: &std::path::Path,
-        entries: &[String],
+        entries: &[PathBuf],
     ) -> Option<PathBuf> {
         // What mkmf names the extension (`RbConfig::CONFIG["DLEXT"]`,
         // `startup.rb`): `.so`, and `.bundle` on macOS — not
@@ -444,7 +455,7 @@ impl Globals {
     fn built_gem_file_on_load_path(
         &self,
         cand: &std::path::Path,
-        entries: &[String],
+        entries: &[PathBuf],
     ) -> Option<PathBuf> {
         entries.iter().find_map(|lib| {
             let lib_path = std::path::Path::new(lib);
@@ -496,7 +507,7 @@ impl Globals {
     fn search_candidate(
         &mut self,
         cand: &std::path::Path,
-        entries: &[String],
+        entries: &[PathBuf],
         bundler_priority: bool,
     ) -> Option<PathBuf> {
         // Pin monoruby's own C-extension replacement stubs ahead of
@@ -680,8 +691,8 @@ impl Globals {
                 .as_array()
                 .iter()
                 .filter_map(|entry| {
-                    let prefix = PathBuf::from(entry.is_str()?);
-                    canonicalized_path.strip_prefix(&prefix).ok()
+                    let prefix = std::ffi::OsStr::from_bytes(entry.is_rstring_inner()?.as_bytes());
+                    canonicalized_path.strip_prefix(prefix).ok()
                 })
                 .next()
                 .unwrap_or_else(|| canonicalized_path.file_name().unwrap().as_ref());
@@ -752,7 +763,7 @@ impl Globals {
             return Ok((body, path, false));
         }
         for lib in self.load_path_entries(vm) {
-            if lib.is_empty() {
+            if lib.as_os_str().is_empty() {
                 continue;
             }
             let lib = std::path::Path::new(&lib);

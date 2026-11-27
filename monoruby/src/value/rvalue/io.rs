@@ -2440,7 +2440,7 @@ impl IoInner {
                         }
                     }
                 }
-                let mut at_sep = false;
+                let mut eof = false;
                 loop {
                     if let Some(l) = limit
                         && buf.len() >= l
@@ -2451,20 +2451,23 @@ impl IoInner {
                         break;
                     }
                     match self.read1_preserving(&buf)? {
-                        None => break,
+                        None => {
+                            eof = true;
+                            break;
+                        }
                         Some(b) => {
                             buf.push(b);
                             if buf.ends_with(b"\n\n") {
-                                at_sep = true;
                                 break;
                             }
                         }
                     }
                 }
-                if at_sep {
+                if !eof {
                     // Swallow any further blank lines so the stream is
                     // positioned at the start of the next paragraph
-                    // (CRuby's swallow(io, '\n')).
+                    // (CRuby's `if (rspara && c != EOF) swallow(fptr,
+                    // '\n')`: after a line the limit cut, too, #2247).
                     loop {
                         match self.read1_preserving(&buf)? {
                             Some(b'\n') => continue,
@@ -2602,7 +2605,7 @@ impl IoInner {
             }
         }
         let end: Option<&[u8]> = if paragraph { Some(b"\n\n") } else { sep };
-        let mut at_sep = false;
+        let mut eof = false;
         loop {
             if let Some(l) = limit
                 && buf.len() >= l
@@ -2613,19 +2616,21 @@ impl IoInner {
                 break;
             }
             match self.read1_universal(&buf)? {
-                None => break,
+                None => {
+                    eof = true;
+                    break;
+                }
                 Some(b) => {
                     buf.push(b);
                     if let Some(e) = end
                         && buf.ends_with(e)
                     {
-                        at_sep = true;
                         break;
                     }
                 }
             }
         }
-        if paragraph && at_sep {
+        if paragraph && !eof {
             loop {
                 match self.read1_universal(&buf)? {
                     Some(b'\n') => continue,
@@ -2717,6 +2722,72 @@ impl IoInner {
                 None => break,
                 Some(b) => buf.push(b),
             }
+        }
+        if let Some(lf) = lf
+            && !eof
+        {
+            self.skip_units(lf, &buf)?;
+        }
+        Ok(Some(buf))
+    }
+
+    /// [`Self::getline`] with a limit on a stream that converts what it
+    /// reads to an internal encoding. CRuby's `rb_io_getline` reads the
+    /// converted characters there, so `limit` counts bytes of the
+    /// *converted* line, rounded up to a whole character, and a line is
+    /// never cut inside a character of the external encoding `ext`
+    /// (#2247). This reads whole characters of `ext` until the bytes
+    /// they convert to (`conv_len` of each) reach `limit`, or the line
+    /// ends with `sep` (the separator in `ext`), and answers the bytes
+    /// read, which the caller converts as it does any line.
+    ///
+    /// `lf` is paragraph mode's line feed in `ext`: line feeds ahead of
+    /// the line are skipped, and so are those after it unless the stream
+    /// ended — after a line the limit cut, too (`if (rspara && c !=
+    /// EOF) swallow(fptr, '\n')`).
+    pub fn getline_conv_limit(
+        &mut self,
+        sep: Option<&[u8]>,
+        lf: Option<&[u8]>,
+        limit: usize,
+        ext: Encoding,
+        mut conv_len: impl FnMut(&[u8]) -> usize,
+    ) -> Result<Option<Vec<u8>>> {
+        if let Some(lf) = lf {
+            self.skip_units(lf, &[])?;
+        }
+        let mut buf = Vec::new();
+        let mut len = 0;
+        let mut eof = false;
+        while len < limit {
+            let start = buf.len();
+            loop {
+                match self.read1_preserving(&buf)? {
+                    None => {
+                        eof = true;
+                        break;
+                    }
+                    Some(b) => buf.push(b),
+                }
+                if !matches!(precise_mbclen(ext, &buf, start), PreciseLen::NeedMore) {
+                    break;
+                }
+            }
+            if buf.len() > start {
+                len += conv_len(&buf[start..]);
+            }
+            if eof {
+                break;
+            }
+            if let Some(s) = sep
+                && !s.is_empty()
+                && buf.ends_with(s)
+            {
+                break;
+            }
+        }
+        if buf.is_empty() {
+            return Ok(None);
         }
         if let Some(lf) = lf
             && !eof

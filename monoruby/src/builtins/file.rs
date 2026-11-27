@@ -1583,14 +1583,19 @@ fn umask(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
 /// [https://docs.ruby-lang.org/ja/latest/method/File/s/fnmatch.html]
 #[monoruby_builtin]
 fn fnmatch(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
-    let pattern = lfp.arg(0).coerce_to_string(vm, globals)?;
-    let path_str = to_path_str(vm, globals, lfp.arg(1))?;
+    let pattern = lfp.arg(0).coerce_to_rstring(vm, globals)?;
+    let path = to_path_rstring(vm, globals, lfp.arg(1))?;
     let flags = if let Some(arg2) = lfp.try_arg(2) {
         arg2.num2long(vm, globals)? as u32
     } else {
         0
     };
-    let result = super::fnmatch::fnmatch(&pattern, &path_str, flags);
+    // Both read as characters of their compatible encoding
+    // (`rb_enc_compatible`); two that have none never match.
+    let Some(enc) = pattern.compatible_encoding(&path) else {
+        return Ok(Value::bool(false));
+    };
+    let result = super::fnmatch::fnmatch(pattern.as_bytes(), path.as_bytes(), enc, flags);
     Ok(Value::bool(result))
 }
 
