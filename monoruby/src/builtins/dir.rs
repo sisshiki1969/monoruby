@@ -312,45 +312,46 @@ fn seg_flags(flags: i64) -> u32 {
 struct PathPair {
     /// Filesystem path (used for directory reads / existence checks).
     path: PathBuf,
-    /// The user-facing match string, built verbatim from the pattern:
-    /// `.` / `..` components and doubled slashes are preserved exactly
-    /// as written (CRuby glob output).
-    full: String,
+    /// The user-facing match, built verbatim from the pattern: `.` /
+    /// `..` components and doubled slashes are preserved exactly as
+    /// written (CRuby glob output). Bytes, as the file names in it are.
+    full: Vec<u8>,
 }
 
 impl PathPair {
-    fn new(path: PathBuf, full: String) -> Self {
+    fn new(path: PathBuf, full: Vec<u8>) -> Self {
         Self { path, full }
     }
 
     /// Append one output component with a separator (unless at the
     /// very start or just after the absolute root). A preceding
     /// [`Self::extra_slash`] shows through as a doubled `/`.
-    fn push_out(&mut self, name: &str) {
-        if !(self.full.is_empty() || self.full == "/") {
-            self.full.push('/');
+    fn push_out(&mut self, name: &[u8]) {
+        if !(self.full.is_empty() || self.full == b"/") {
+            self.full.push(b'/');
         }
-        self.full.push_str(name);
+        self.full.extend_from_slice(name);
     }
 
-    fn push(&mut self, name: &str) {
-        self.path.push(name);
+    fn push(&mut self, name: &[u8]) {
+        use std::os::unix::ffi::OsStrExt;
+        self.path.push(std::ffi::OsStr::from_bytes(name));
         self.push_out(name);
     }
 
     fn parent(&mut self) {
         self.path.pop();
-        self.push_out("..");
+        self.push_out(b"..");
     }
 
     fn current(&mut self) {
-        self.push_out(".");
+        self.push_out(b".");
     }
 
     /// An interior empty pattern segment (`a//b`): the extra `/` is
     /// preserved in the output verbatim.
     fn extra_slash(&mut self) {
-        self.full.push('/');
+        self.full.push(b'/');
     }
 }
 
@@ -358,7 +359,7 @@ impl PathPair {
 enum PathComponent {
     /// A literal name or single-level glob pattern (matched with
     /// [`super::fnmatch::match_segment`]).
-    Name(String),
+    Name(Vec<u8>),
     /// `..` — go up one directory.
     Parent,
     /// `.` — stay in current directory.
@@ -400,8 +401,8 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     {
         Some(
             base.coerce_to_path_rstring(vm, globals)?
-                .to_str()?
-                .to_string(),
+                .as_bytes()
+                .to_vec(),
         )
     } else {
         None
@@ -413,7 +414,7 @@ fn glob(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> R
     // single-String form ("nul-separated glob pattern is deprecated")
     // and the Array form ("path name contains null byte"), matching
     // CRuby.
-    let patterns: Vec<(String, crate::value::Encoding)> = if pat_val.is_array_ty() {
+    let patterns: Vec<(Vec<u8>, crate::value::Encoding)> = if pat_val.is_array_ty() {
         pat_val
             .as_array_inner()
             .iter()
@@ -461,8 +462,8 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     {
         Some(
             base.coerce_to_path_rstring(vm, globals)?
-                .to_str()?
-                .to_string(),
+                .as_bytes()
+                .to_vec(),
         )
     } else {
         None
@@ -473,7 +474,7 @@ fn glob2(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> 
     // (single-String NUL message); with several it behaves like the
     // Array form.
     let single = pat_val.len() == 1;
-    let patterns: Vec<(String, crate::value::Encoding)> = pat_val
+    let patterns: Vec<(Vec<u8>, crate::value::Encoding)> = pat_val
         .iter()
         .map(|v| {
             let s = glob_pattern(vm, globals, *v)?;
@@ -511,8 +512,8 @@ fn validate_sort(globals: &Globals, arg: Option<Value>) -> Result<bool> {
 
 /// A single-String glob pattern containing a NUL byte. CRuby reports
 /// this with a glob-specific (deprecation) message.
-fn reject_single_pattern_nul(s: &str) -> Result<()> {
-    if s.contains('\0') {
+fn reject_single_pattern_nul(s: &[u8]) -> Result<()> {
+    if s.contains(&0) {
         return Err(MonorubyErr::argumenterr(
             "nul-separated glob pattern is deprecated",
         ));
@@ -522,77 +523,89 @@ fn reject_single_pattern_nul(s: &str) -> Result<()> {
 
 /// An Array element / multi-argument glob pattern containing a NUL byte.
 /// CRuby reports this with the generic string→path null-byte message.
-fn reject_array_pattern_nul(s: &str) -> Result<()> {
-    if s.contains('\0') {
+fn reject_array_pattern_nul(s: &[u8]) -> Result<()> {
+    if s.contains(&0) {
         return Err(MonorubyErr::argumenterr("path name contains null byte"));
     }
     Ok(())
 }
 
-/// Coerce one glob pattern, keeping its encoding for the result tags.
-/// An ASCII-incompatible pattern encoding raises CRuby's
-/// `Encoding::CompatibilityError` ("… UTF-16BE and US-ASCII").
+/// Coerce one glob pattern, keeping its bytes and the encoding it is
+/// read in, which tags the results too. An ASCII-incompatible pattern
+/// encoding raises CRuby's `Encoding::CompatibilityError` ("… UTF-16BE
+/// and US-ASCII"); a US-ASCII one stands for the file-system encoding,
+/// or BINARY when that is US-ASCII as well (`rb_glob`'s `enc`).
 fn glob_pattern(
     vm: &mut Executor,
     globals: &mut Globals,
     v: Value,
-) -> Result<(String, crate::value::Encoding)> {
+) -> Result<(Vec<u8>, crate::value::Encoding)> {
+    use crate::value::Encoding as E;
     let rs = v.coerce_to_path_rstring_allow_nul(vm, globals)?;
-    let enc = rs.encoding();
+    let mut enc = rs.encoding();
     if !enc.is_ascii_compatible() {
         return Err(MonorubyErr::incompatible_encoding(
             &globals.store,
             enc,
-            crate::value::Encoding::UsAscii,
+            E::UsAscii,
         ));
     }
-    Ok((rs.to_str()?.to_string(), enc))
+    if enc == E::UsAscii {
+        enc = match super::file::filesystem_encoding(globals) {
+            E::UsAscii => E::Ascii8,
+            fs => fs,
+        };
+    }
+    Ok((rs.as_bytes().to_vec(), enc))
 }
 
 fn glob_impl(
-    patterns: Vec<(String, crate::value::Encoding)>,
+    patterns: Vec<(Vec<u8>, crate::value::Encoding)>,
     flags: i64,
-    base: Option<String>,
+    base: Option<Vec<u8>>,
     sort: bool,
 ) -> Result<Vec<RStringInner>> {
     let noescape = flags & FNM_NOESCAPE != 0;
     let mut all_matches = vec![];
-    for (pattern_str, enc) in &patterns {
+    for (pattern, enc) in &patterns {
         // Brace alternations expand first, in source order, and each
         // expansion contributes its own (individually sorted) result
         // group — duplicates across groups are kept (CRuby:
         // `Dir.glob("{a,a}")` lists `a` twice).
-        for pat in super::fnmatch::expand_braces(pattern_str, noescape) {
+        for pat in super::fnmatch::expand_braces(pattern, *enc, noescape) {
             let mut matches = vec![];
-            process_glob_pattern(&pat, base.as_deref(), flags, &mut matches)?;
+            process_glob_pattern(&pat, *enc, base.as_deref(), flags, &mut matches)?;
             if sort {
                 matches.sort();
             }
-            // Matches inherit the pattern's encoding (glob_spec.rb
-            // "preserves the encoding of the path").
+            // Matches keep their bytes and inherit the pattern's
+            // encoding (glob_spec.rb "preserves the encoding of the
+            // path"), valid in it or not (#2243).
             all_matches.extend(
                 matches
                     .into_iter()
-                    .map(|m| RStringInner::from_encoding(m.as_bytes(), *enc)),
+                    .map(|m| RStringInner::from_encoding(&m, *enc)),
             );
         }
     }
     Ok(all_matches)
 }
 
-/// Parse one (brace-free) glob pattern string and append matches.
+/// Parse one (brace-free) glob pattern and append matches.
 fn process_glob_pattern(
-    pattern_str: &str,
-    base: Option<&str>,
+    pattern: &[u8],
+    enc: crate::value::Encoding,
+    base: Option<&[u8]>,
     flags: i64,
-    matches: &mut Vec<String>,
+    matches: &mut Vec<Vec<u8>>,
 ) -> Result<()> {
-    if pattern_str.is_empty() {
+    use std::os::unix::ffi::OsStrExt;
+    if pattern.is_empty() {
         // Empty pattern matches nothing (CRuby behavior).
         return Ok(());
     }
 
-    let mut segments: Vec<&str> = pattern_str.split('/').collect();
+    let mut segments: Vec<&[u8]> = pattern.split(|&b| b == b'/').collect();
     let absolute = segments.len() > 1 && segments[0].is_empty();
     if absolute {
         segments.remove(0);
@@ -600,14 +613,14 @@ fn process_glob_pattern(
     // Trailing separators: `a/` matches only directories and the
     // separators are preserved in the output (`a//` → `"a//"`).
     let mut trailing = 0usize;
-    while segments.last() == Some(&"") {
+    while segments.last().is_some_and(|s| s.is_empty()) {
         segments.pop();
         trailing += 1;
     }
     if absolute && segments.is_empty() {
         // The pattern was just "/" (or "//"…).
         if std::path::Path::new("/").exists() {
-            matches.push("/".to_string());
+            matches.push(b"/".to_vec());
         }
         return Ok(());
     }
@@ -617,41 +630,41 @@ fn process_glob_pattern(
     // scratch dir): nothing matches then, rather than a panic.
     let cwd = || std::env::current_dir().ok();
     let root = if absolute {
-        PathPair::new(PathBuf::from("/"), "/".to_string())
+        PathPair::new(PathBuf::from("/"), b"/".to_vec())
     } else if let Some(base) = base {
         let Some(mut p) = cwd() else { return Ok(()) };
-        p.push(base);
+        p.push(std::ffi::OsStr::from_bytes(base));
         match p.canonicalize() {
-            Ok(p) => PathPair::new(p, String::new()),
+            Ok(p) => PathPair::new(p, vec![]),
             Err(_) => return Ok(()),
         }
     } else {
         let Some(p) = cwd() else { return Ok(()) };
-        PathPair::new(p, String::new())
+        PathPair::new(p, vec![])
     };
 
     let mut components: Vec<PathComponent> = vec![];
     for seg in &segments {
         match *seg {
-            "." => components.push(PathComponent::Current),
-            ".." => components.push(PathComponent::Parent),
+            b"." => components.push(PathComponent::Current),
+            b".." => components.push(PathComponent::Parent),
             // Interior empty segment: an extra `/` in the output —
             // except right after `**`, which swallows it
             // (`a/**//b` prints single-slashed).
-            "" => {
+            b"" => {
                 if components.last() != Some(&PathComponent::Globstar) {
                     components.push(PathComponent::ExtraSlash);
                 }
             }
-            "**" => components.push(PathComponent::Globstar),
-            s => components.push(PathComponent::Name(s.to_string())),
+            b"**" => components.push(PathComponent::Globstar),
+            s => components.push(PathComponent::Name(s.to_vec())),
         }
     }
     // A trailing `**` with no `/` after it behaves like `*` — just this
     // level (CRuby: `Dir.glob("**") == Dir.glob("*")`).
     if trailing == 0 && components.last() == Some(&PathComponent::Globstar) {
         components.pop();
-        components.push(PathComponent::Name("*".to_string()));
+        components.push(PathComponent::Name(b"*".to_vec()));
     }
     // `**//` prints a single trailing slash.
     if trailing > 1 && components.last() == Some(&PathComponent::Globstar) {
@@ -665,7 +678,7 @@ fn process_glob_pattern(
         base.is_some(),
         Reached::default(),
         matches,
-        seg_flags(flags),
+        (seg_flags(flags), enc),
     )
 }
 
@@ -681,31 +694,19 @@ struct Reached {
     globstar: bool,
 }
 
-/// Whether a segment pattern contains an unescaped metacharacter.
-fn has_meta(pat: &str) -> bool {
-    let mut chars = pat.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '\\' => {
-                let _ = chars.next();
-            }
-            '*' | '?' | '[' => return true,
-            _ => {}
-        }
-    }
-    false
-}
-
+/// `sf` is the matcher's flags and the encoding the pattern is read in.
 fn traverse_dir(
     mut path: PathPair,
     mut glob_rest: Vec<PathComponent>,
     trailing: usize,
     base_given: bool,
     reached: Reached,
-    matches: &mut Vec<String>,
-    sf: u32,
+    matches: &mut Vec<Vec<u8>>,
+    sf: (u32, crate::value::Encoding),
 ) -> Result<()> {
-    let dotmatch = sf & super::fnmatch::FNM_DOTMATCH != 0;
+    use std::os::unix::ffi::OsStrExt;
+    let (flags, enc) = sf;
+    let dotmatch = flags & super::fnmatch::FNM_DOTMATCH != 0;
     loop {
         if glob_rest.is_empty() {
             if trailing > 0 {
@@ -717,12 +718,14 @@ fn traverse_dir(
                         // reports the base directory itself as "/";
                         // without it, nothing.
                         if base_given {
-                            matches.push("/".to_string());
+                            matches.push(b"/".to_vec());
                         }
-                    } else if path.full == "/" {
-                        matches.push("/".to_string());
+                    } else if path.full == b"/" {
+                        matches.push(b"/".to_vec());
                     } else {
-                        matches.push(format!("{}{}", path.full, "/".repeat(trailing)));
+                        let mut m = path.full.clone();
+                        m.extend(std::iter::repeat_n(b'/', trailing));
+                        matches.push(m);
                     }
                 }
             } else {
@@ -765,15 +768,15 @@ fn traverse_dir(
                     Ok(e) => e,
                     Err(_) => return Ok(()),
                 };
-                let mut dirs: Vec<String> = entries
+                let mut dirs: Vec<Vec<u8>> = entries
                     .flatten()
                     .filter_map(|e| {
                         let ft = e.file_type().ok()?;
                         if !ft.is_dir() {
                             return None;
                         }
-                        let name = e.file_name().to_string_lossy().to_string();
-                        if name.starts_with('.') && !dotmatch {
+                        let name = e.file_name().as_bytes().to_vec();
+                        if name.starts_with(b".") && !dotmatch {
                             return None;
                         }
                         Some(name)
@@ -810,11 +813,11 @@ fn traverse_dir(
                 // The leading-period guard lives in the matcher: `*`
                 // skips dot-entries unless the pattern itself starts
                 // with `.` or FNM_DOTMATCH is set.
-                let mut names: Vec<String> = entries
+                let mut names: Vec<Vec<u8>> = entries
                     .flatten()
                     .filter_map(|e| {
-                        let name = e.file_name().to_string_lossy().to_string();
-                        super::fnmatch::match_segment(&pat, &name, sf).then_some(name)
+                        let name = e.file_name().as_bytes().to_vec();
+                        super::fnmatch::match_segment(&pat, &name, enc, flags).then_some(name)
                     })
                     .collect();
                 // Synthesize "." (read_dir omits it; ".." is never
@@ -825,14 +828,14 @@ fn traverse_dir(
                 // dot-leading patterns without FNM_DOTMATCH, only when
                 // no `**` was crossed (`nested/**/.*` omits "nested/.",
                 // `nested/.*` includes it).
-                let starts_dot = pat.starts_with('.');
+                let starts_dot = pat.starts_with(b".");
                 let allow_dot =
                     !reached.wildcard && (dotmatch || (starts_dot && !reached.globstar));
-                if allow_dot && super::fnmatch::match_segment(&pat, ".", sf) {
-                    names.push(".".to_string());
+                if allow_dot && super::fnmatch::match_segment(&pat, b".", enc, flags) {
+                    names.push(b".".to_vec());
                 }
                 names.sort();
-                let pat_meta = has_meta(&pat);
+                let pat_meta = super::fnmatch::has_meta(&pat, enc);
                 for name in names {
                     let mut new_path = path.clone();
                     new_path.push(&name);

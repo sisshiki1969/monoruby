@@ -407,8 +407,17 @@ pub(crate) fn argf_getline_raw(
         let mut stream_sep = sep.map(<[u8]>::to_vec);
         let wide = super::io::line_split(globals, &mut stream_sep, sep_src, ext, intl)?;
         let sep = stream_sep.as_deref();
-        let line = super::io::blocking_io_region(vm, globals, stream, libc::POLLIN, |_store| {
-            super::io::getline_with(stream, sep, limit, complete_utf8, wide.as_ref())
+        let conv = super::io::conv_pair(ext, intl);
+        let line = super::io::blocking_io_region(vm, globals, stream, libc::POLLIN, |store| {
+            super::io::getline_with(
+                stream,
+                sep,
+                limit,
+                complete_utf8,
+                wide.as_ref(),
+                conv,
+                store,
+            )
         })?;
         match line {
             Some(mut buf) => {
@@ -420,6 +429,8 @@ pub(crate) fn argf_getline_raw(
                 };
                 let s = super::io::read_conv(globals, stream, buf, &tail, ext, intl)?;
                 let inner = expect_inner(argf)?;
+                // Every line counts in `ARGF.lineno`, one the limit cut
+                // short too (`argf_getline`'s `++ARGF.last_lineno`).
                 inner.lineno += 1;
                 let n = inner.lineno;
                 globals.set_lineno(Value::integer(n));

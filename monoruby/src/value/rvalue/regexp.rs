@@ -1645,17 +1645,19 @@ impl RegexpInner {
     /// verbose-only.
     ///
     /// CRuby routes them through `rb_warn`, but Onigmo itself gates
-    /// most of them on `RTEST(ruby_verbose)` (the duplicated range,
-    /// "without escape" and unknown-escape ones), so those are
+    /// two of them on `RTEST(ruby_verbose)` (`CC_DUP_WARN`'s duplicated
+    /// range and `UNKNOWN_ESC_WARN`'s unknown escape), so those are
     /// verbose-only: `-w` / `$VERBOSE = true` shows them, the default
-    /// does not. The nested-repeat diagnostics are not gated and print
-    /// by default.
+    /// does not. The rest — "without escape", a `\p` with no property
+    /// name, an invalid back reference or subexp call, the nested
+    /// repeats — are not gated and print by default (#2259).
     pub fn drain_pending_warnings(location: Option<&str>) -> Vec<(String, bool)> {
         PENDING_REGEXP_WARNINGS
             .with(|w| std::mem::take(&mut *w.borrow_mut()))
             .into_iter()
             .map(|m| {
-                let verbose_only = !m.contains("nested repeat operator");
+                let verbose_only = m.starts_with("warning: character class has duplicated range")
+                    || m.starts_with("warning: Unknown escape ");
                 let m = match location {
                     Some(loc) => format!("{loc}: {m}"),
                     None => m,

@@ -2441,20 +2441,93 @@ fn line_split_of(
 }
 
 /// Read one line off `io` for `IO#gets` and its relatives: split on the
-/// separator's bytes, or as `wide` says.
+/// separator's bytes, or as `wide` says. `conv` is the stream's read
+/// conversion (external, internal) when it has one: a limit then counts
+/// bytes of the converted line ([`IoInner::getline_conv_limit`]).
+#[inline]
 pub(super) fn getline_with(
     mut io: Value,
     sep: Option<&[u8]>,
     limit: Option<usize>,
     complete_utf8: bool,
     wide: Option<&WideLines>,
+    conv: Option<(crate::value::Encoding, crate::value::Encoding)>,
+    store: &Store,
 ) -> Result<Option<Vec<u8>>> {
+    if let Some(limit) = limit
+        && limit > 0
+        && let Some((ext, intl)) = conv
+        && !io.as_io_inner().universal_newline()
+    {
+        return getline_conv_limit(io, sep, limit, wide, (ext, intl), store);
+    }
     match wide {
         Some(w) => io
             .as_io_inner_mut()
             .getline_units(w.sep.as_deref(), limit, w.unit, w.paragraph),
         None => io.as_io_inner_mut().getline(sep, limit, complete_utf8),
     }
+}
+
+#[cold]
+#[inline(never)]
+fn getline_conv_limit(
+    mut io: Value,
+    sep: Option<&[u8]>,
+    limit: usize,
+    wide: Option<&WideLines>,
+    (ext, intl): (crate::value::Encoding, crate::value::Encoding),
+    store: &Store,
+) -> Result<Option<Vec<u8>>> {
+    use crate::value::Encoding as E;
+    let (sep, lf): (Option<&[u8]>, Option<&[u8]>) = match wide {
+        Some(w) => (
+            w.sep.as_deref(),
+            w.sep
+                .as_deref()
+                .filter(|_| w.paragraph)
+                .map(|s| &s[..w.unit]),
+        ),
+        None => match sep {
+            Some([]) => (Some(b"\n\n".as_slice()), Some(b"\n".as_slice())),
+            sep => (sep, None),
+        },
+    };
+    let ascii_to_ascii = ext.is_ascii_compatible() && intl.is_ascii_compatible();
+    let unicode = |e: E| {
+        matches!(
+            e,
+            E::Utf8(_) | E::Utf16Le | E::Utf16Be | E::Utf32Le | E::Utf32Be
+        )
+    };
+    let opts = crate::value::transcode::TranscodeOpts::default();
+    // What one character of `ext` converts to, in bytes. A character
+    // that does not convert counts as itself: the conversion of the line
+    // reports it.
+    let conv_len = |ch: &[u8]| -> usize {
+        if ascii_to_ascii && ch.len() == 1 && ch[0] < 0x80 {
+            return 1;
+        }
+        if matches!(intl, E::Utf8(_))
+            && unicode(ext)
+            && let Some(c) = crate::value::rvalue::enc_codepoint(ext, ch).and_then(char::from_u32)
+        {
+            return c.len_utf8();
+        }
+        crate::value::transcode_bytes_with_opts(ch, ext, intl, &opts, store)
+            .map_or(ch.len(), |b| b.len())
+    };
+    io.as_io_inner_mut()
+        .getline_conv_limit(sep, lf, limit, ext, conv_len)
+}
+
+/// The read conversion of a stream with these encodings, for
+/// [`getline_with`]: `(external, internal)` when it transcodes.
+pub(super) fn conv_pair(
+    ext: crate::value::Encoding,
+    intl: Option<crate::value::Encoding>,
+) -> Option<(crate::value::Encoding, crate::value::Encoding)> {
+    intl.filter(|&i| i != ext).map(|i| (ext, i))
 }
 
 /// Whether a read with these encodings transcodes what it reads.
@@ -2471,6 +2544,34 @@ fn io_completes_utf8(globals: &mut Globals, io: Value) -> bool {
     use crate::value::Encoding as E;
     let ext_v = read_io_encoding(globals, io, false);
     matches!(enc_obj_to_enum(globals, ext_v).unwrap_or(E::UTF8), E::Utf8(_))
+}
+
+/// Whether a line read off the stream counts in `lineno` / `$.`: not
+/// when the limit cut it short (CRuby's `nolimit`, #2261). `ended` is
+/// whether it ends with its separator, which is looked for before the
+/// limit; `len` its length in the encoding it is returned in.
+fn line_counts(ended: bool, len: usize, limit: Option<usize>) -> bool {
+    ended || limit.is_none_or(|l| len < l)
+}
+
+/// Whether `buf`, a line as [`getline_with`] read it, ends with the
+/// separator it was split by.
+fn ends_with_sep(buf: &[u8], sep: Option<&[u8]>, wide: Option<&WideLines>) -> bool {
+    let sep = match wide {
+        Some(w) => w.sep.as_deref(),
+        None => sep,
+    };
+    match sep {
+        None => false,
+        Some([]) => buf.ends_with(b"\n\n"),
+        Some(s) => buf.ends_with(s),
+    }
+}
+
+/// [`ends_with_sep`] for a line taken out of characters already
+/// converted (`sep` is in the internal encoding).
+fn pending_line_counts(line: &[u8], sep: Option<&[u8]>, limit: Option<usize>) -> bool {
+    line_counts(ends_with_sep(line, sep, None), line.len(), limit)
 }
 
 /// Bump the IO's line counter and `$.` after a successful line read.
@@ -2738,17 +2839,20 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
     {
         return Ok(s);
     }
-    let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+    let line = blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |store| {
         getline_with(
             lfp.self_val(),
             sep.as_deref(),
             limit,
             complete_utf8,
             wide.as_ref(),
+            conv_pair(ext, intl),
+            store,
         )
     })?;
     match line {
         Some(mut buf) => {
+            let ended = limit.is_some() && ends_with_sep(&buf, sep.as_deref(), wide.as_ref());
             let tail = if chomp {
                 let converts = read_converts(ext, intl);
                 chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
@@ -2758,7 +2862,9 @@ fn gets_inner(vm: &mut Executor, globals: &mut Globals, lfp: Lfp) -> Result<Valu
             // Converted before the line counts: a conversion error
             // leaves `lineno` / `$.` alone, as in CRuby.
             let s = read_conv(globals, self_, buf, &tail, ext, intl)?;
-            bump_lineno(globals, self_)?;
+            if line_counts(ended, s.as_rstring_inner().len(), limit) {
+                bump_lineno(globals, self_)?;
+            }
             // `$_` is frame-local: set it on the calling Ruby scope's
             // LEP (the builtin's own native frame is skipped).
             vm.set_last_read_line(s);
@@ -2801,12 +2907,15 @@ fn gets_pending_line(
     else {
         return Ok(None);
     };
+    let counts = pending_line_counts(&line, sep, limit);
     if chomp {
         chomp_line(&mut line, sep, limit);
     }
     let mut s = Value::string_from_vec(line);
     s.as_rstring_inner_mut().set_encoding(intl);
-    bump_lineno(globals, io)?;
+    if counts {
+        bump_lineno(globals, io)?;
+    }
     vm.set_last_read_line(s);
     Ok(Some(s))
 }
@@ -2855,8 +2964,8 @@ fn gets_with_pending(
     }
     // The line goes on past what was pending.
     let more = limit.map(|l| l - pre.len());
-    let raw = match blocking_io_region(vm, globals, io, libc::POLLIN, |_store| {
-        getline_with(io, sep, more, complete_utf8, wide)
+    let raw = match blocking_io_region(vm, globals, io, libc::POLLIN, |store| {
+        getline_with(io, sep, more, complete_utf8, wide, Some((ext, intl)), store)
     }) {
         Ok(raw) => raw,
         Err(err) => {
@@ -3465,10 +3574,10 @@ fn io_class_readlines(
     if universal {
         io_val.as_io_inner_mut().set_universal_newline(true);
     }
-    let (converts, wide) = {
+    let (converts, wide, conv) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
         match line_split(globals, &mut sep, sep_src, ext, intl) {
-            Ok(wide) => (read_converts(ext, intl), wide),
+            Ok(wide) => (read_converts(ext, intl), wide, conv_pair(ext, intl)),
             Err(e) => {
                 let _ = io_val.as_io_inner_mut().close(&globals.store);
                 return Err(e);
@@ -3480,22 +3589,41 @@ fn io_class_readlines(
         // per-line allocations below.
         vm.temp_push(io_val);
         vm.temp_array_new(None);
+        let mut lineno = 0i64;
         let result = (|| {
             while let Some(mut buf) =
-                blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
-                    getline_with(io_val, sep.as_deref(), limit, complete_utf8, wide.as_ref())
+                blocking_io_region(vm, globals, io_val, libc::POLLIN, |store| {
+                    getline_with(
+                        io_val,
+                        sep.as_deref(),
+                        limit,
+                        complete_utf8,
+                        wide.as_ref(),
+                        conv,
+                        store,
+                    )
                 })?
             {
+                let ended = limit.is_some() && ends_with_sep(&buf, sep.as_deref(), wide.as_ref());
                 let tail = if chomp {
                     chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
                 } else {
                     vec![]
                 };
                 let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
+                // Read through the getline machinery, as `IO.foreach`:
+                // each line that counts is `$.` (#2263). No Ruby code
+                // runs between two lines, so `$.` is set once below.
+                if line_counts(ended, line.as_rstring_inner().len(), limit) {
+                    lineno += 1;
+                }
                 vm.temp_array_push(line);
             }
             Ok(vm.temp_pop())
         })();
+        if lineno > 0 {
+            globals.set_lineno(Value::integer(lineno));
+        }
         // Close the fd now — leaving it to GC lets descriptors pile up.
         let _ = io_val.as_io_inner_mut().close(&globals.store);
         result
@@ -3656,10 +3784,10 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
     if universal {
         io_val.as_io_inner_mut().set_universal_newline(true);
     }
-    let (converts, wide) = {
+    let (converts, wide, conv) = {
         let (ext, intl) = resolve_encs(globals, ext_obj, int_obj);
         match line_split(globals, &mut sep, sep_src, ext, intl) {
-            Ok(wide) => (read_converts(ext, intl), wide),
+            Ok(wide) => (read_converts(ext, intl), wide, conv_pair(ext, intl)),
             Err(e) => {
                 let _ = io_val.as_io_inner_mut().close(&globals.store);
                 return Err(e);
@@ -3672,10 +3800,19 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
         let mut lineno = 0i64;
         let result = (|| {
             while let Some(mut buf) =
-                blocking_io_region(vm, globals, io_val, libc::POLLIN, |_store| {
-                    getline_with(io_val, sep.as_deref(), limit, complete_utf8, wide.as_ref())
+                blocking_io_region(vm, globals, io_val, libc::POLLIN, |store| {
+                    getline_with(
+                        io_val,
+                        sep.as_deref(),
+                        limit,
+                        complete_utf8,
+                        wide.as_ref(),
+                        conv,
+                        store,
+                    )
                 })?
             {
+                let ended = limit.is_some() && ends_with_sep(&buf, sep.as_deref(), wide.as_ref());
                 let tail = if chomp {
                     chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
                 } else {
@@ -3684,9 +3821,11 @@ fn io_foreach(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, pc: BytecodePt
                 let line = tag_with_encs(globals, io_val, buf, &tail, ext_obj, int_obj)?;
                 // CRuby's foreach reads through the getline machinery,
                 // which updates `$.` and `$_` per line (and leaves `$_`
-                // nil at EOF).
-                lineno += 1;
-                globals.set_lineno(Value::integer(lineno));
+                // nil at EOF). A line the limit cut leaves `$.` alone.
+                if line_counts(ended, line.as_rstring_inner().len(), limit) {
+                    lineno += 1;
+                    globals.set_lineno(Value::integer(lineno));
+                }
                 vm.set_last_read_line(line);
                 vm.invoke_block(globals, &p, &[line])?;
             }
@@ -5047,25 +5186,31 @@ fn io_readlines(
                 wide.as_ref(),
             )?
         {
+            let counts = pending_line_counts(&line, sep.as_deref(), limit);
             if chomp {
                 chomp_line(&mut line, sep.as_deref(), limit);
             }
             let mut s = Value::string_from_vec(line);
             s.as_rstring_inner_mut().set_encoding(i);
             vm.temp_array_push(s);
-            bump_lineno(globals, self_)?;
+            if counts {
+                bump_lineno(globals, self_)?;
+            }
         }
         while let Some(mut buf) =
-            blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |_store| {
+            blocking_io_region(vm, globals, lfp.self_val(), libc::POLLIN, |store| {
                 getline_with(
                     lfp.self_val(),
                     sep.as_deref(),
                     limit,
                     complete_utf8,
                     wide.as_ref(),
+                    conv_pair(ext, intl),
+                    store,
                 )
             })?
         {
+            let ended = limit.is_some() && ends_with_sep(&buf, sep.as_deref(), wide.as_ref());
             let tail = if chomp {
                 chomp_line_for(&mut buf, sep.as_deref(), limit, converts, wide.as_ref())
             } else {
@@ -5073,7 +5218,9 @@ fn io_readlines(
             };
             let line = read_conv(globals, self_, buf, &tail, ext, intl)?;
             vm.temp_array_push(line);
-            bump_lineno(globals, self_)?;
+            if line_counts(ended, line.as_rstring_inner().len(), limit) {
+                bump_lineno(globals, self_)?;
+            }
         }
         Ok(vm.temp_pop())
     })

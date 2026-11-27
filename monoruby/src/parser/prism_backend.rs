@@ -686,10 +686,44 @@ fn try_prism_inner(
     // character". `rb_reg_preprocess`, which monoruby ports as
     // `reg_preprocess` and runs where the literal is compiled, is the
     // authority: prism's diagnostic stands only when it agrees.
-    let mut escaped_regexps: Option<EscapedRegexpLiterals> = None;
-    let errors: Vec<super::parse_error::Diagnostic> = result
+    let escaped_regexps: std::cell::OnceCell<EscapedRegexpLiterals> = std::cell::OnceCell::new();
+    let escaped_regexps = || {
+        escaped_regexps.get_or_init(|| {
+            let mut found = EscapedRegexpLiterals::default();
+            found.visit(&tree.root());
+            found
+        })
+    };
+    // CRuby's prism refused a `\u` escape of a regexp literal that names
+    // no character itself, and left every other malformed one to
+    // `rb_reg_preprocess`; prism 2.x judges them all in its regexp
+    // parser, with messages of its own (#2258).
+    let bad_unicode: Vec<(usize, usize)> = if InvalidRegexpUnicodeEscapes::may_have_any(&code) {
+        let mut found = InvalidRegexpUnicodeEscapes::default();
+        found.visit(&tree.root());
+        found.spans
+    } else {
+        vec![]
+    };
+    let mut errors: Vec<super::parse_error::Diagnostic> = result
         .errors()
         .filter(|d| !is_regexp_escape_left_to_preprocess(d, regexp_check_encoding))
+        .filter(|d| {
+            let msg = d.message();
+            let regexp_unicode_escape = REGEXP_UNICODE_ESCAPE_MESSAGES.contains(&msg)
+                || msg.starts_with(b"invalid Unicode range: /")
+                || msg.starts_with(b"invalid Unicode list: ");
+            if !regexp_unicode_escape {
+                return true;
+            }
+            // The lexer gives a string's escapes some of these messages
+            // too: only one inside a regexp literal is the regexp parser's.
+            let (start, end) = (d.location().start() as usize, d.location().end() as usize);
+            !escaped_regexps()
+                .spans
+                .iter()
+                .any(|(s, e)| *s <= start && end <= *e)
+        })
         .map(|d| {
             let loc = d.location();
             let (mut start, mut end) = (loc.start() as usize, loc.end() as usize);
@@ -698,12 +732,7 @@ fn try_prism_inner(
             // literal's content had no backslash, and marked the whole
             // literal otherwise (#2256).
             if REGEXP_PARSE_MESSAGES.contains(&d.message())
-                && let Some(&span) = escaped_regexps
-                    .get_or_insert_with(|| {
-                        let mut found = EscapedRegexpLiterals::default();
-                        found.visit(&tree.root());
-                        found
-                    })
+                && let Some(&span) = escaped_regexps()
                     .spans
                     .iter()
                     .filter(|(s, e)| *s <= start && end <= *e)
@@ -718,6 +747,23 @@ fn try_prism_inner(
             }
         })
         .collect();
+    for (start, end) in bad_unicode {
+        // Each after the errors that start no later, as prism 1.x raised
+        // it while reading the escape: `/\u{1100000}/` has the
+        // "maximum length" error first.
+        let at = errors
+            .iter()
+            .position(|e| e.start + cli_encoding_line > start)
+            .unwrap_or(errors.len());
+        errors.insert(
+            at,
+            super::parse_error::Diagnostic {
+                message: INVALID_UNICODE_ESCAPE.to_vec(),
+                start: start.saturating_sub(cli_encoding_line),
+                end: end.saturating_sub(cli_encoding_line),
+            },
+        );
+    }
     if let Some(head) = errors.first() {
         // CRuby prints a parse's warnings before it raises the parse's
         // error: they are left for whoever reports the error.
@@ -5939,6 +5985,153 @@ impl<'pr> prism::Visit<'pr> for EscapedRegexpLiterals {
     fn visit_match_last_line_node(&mut self, node: &prism::MatchLastLineNode<'pr>) {
         self.note(node.location(), node.content_loc());
         prism::visit_match_last_line_node(self, node);
+    }
+}
+
+/// The `\u` escapes of regexp literals that name no Unicode character
+/// (a surrogate, or a value past U+10FFFF), as `(start, end)` of the
+/// escape's hex digits. CRuby's prism 1.x read a regexp's escapes as it
+/// reads a string's and refused these there, with a string's message
+/// over the digits; prism 2.x leaves them to its regexp parser, which
+/// says "invalid Unicode range" of the whole literal, and does not look
+/// at an interpolated literal at all (#2258).
+#[derive(Default)]
+struct InvalidRegexpUnicodeEscapes {
+    spans: Vec<(usize, usize)>,
+}
+
+/// The message CRuby's prism gives an escape [`InvalidRegexpUnicodeEscapes`]
+/// finds (`PM_ERR_ESCAPE_INVALID_UNICODE`).
+const INVALID_UNICODE_ESCAPE: &[u8] = b"invalid Unicode escape sequence";
+
+/// What prism 2.x's regexp parser says of a malformed `\u` escape
+/// (`pm_regexp_parse_unicode_escape`), besides "invalid Unicode range:
+/// /…/" and "invalid Unicode list: …". CRuby's prism 1.x had no such
+/// checks: `rb_reg_preprocess` refuses these escapes when the literal is
+/// compiled, with its own messages (#2258).
+const REGEXP_UNICODE_ESCAPE_MESSAGES: &[&[u8]] = &[
+    b"invalid Unicode escape",
+    b"invalid Unicode range",
+    b"unterminated Unicode escape",
+];
+
+impl InvalidRegexpUnicodeEscapes {
+    /// Whether `code` has a `\u` escape this could object to at all: a
+    /// file with none (nearly every one) is not walked.
+    fn may_have_any(code: &[u8]) -> bool {
+        memchr::memmem::find_iter(code, b"\\u").any(|i| {
+            let mut spans = vec![];
+            unicode_escape_at(code, i + 2, i, &mut spans);
+            !spans.is_empty()
+        })
+    }
+
+    /// Walk one piece of a literal's source, as prism 1.x's lexer does:
+    /// an escape is a backslash and the character after it, and `\c`,
+    /// `\C-` and `\M-` take the escape that follows them along (prism
+    /// refuses a `\u` there with a message of its own).
+    fn scan(&mut self, content: Location<'_>) {
+        let base = content.start() as usize;
+        let src = content.as_slice();
+        let mut i = 0;
+        while i + 1 < src.len() {
+            if src[i] != b'\\' {
+                i += 1;
+                continue;
+            }
+            match src[i + 1] {
+                b'u' => i = unicode_escape_at(src, i + 2, base, &mut self.spans),
+                b'c' => i += 2 + 2 * usize::from(src.get(i + 2) == Some(&b'\\')),
+                b'C' | b'M' if src.get(i + 2) == Some(&b'-') => {
+                    i += 3 + 2 * usize::from(src.get(i + 3) == Some(&b'\\'))
+                }
+                _ => i += 2,
+            }
+        }
+    }
+
+    fn scan_parts(&mut self, parts: prism::NodeList<'_>) {
+        for part in parts.iter() {
+            if let Some(s) = part.as_string_node() {
+                self.scan(s.content_loc());
+            }
+        }
+    }
+}
+
+/// The `\u` escape whose `u` is just before `src[at]`: push the span of
+/// every codepoint in it that is no Unicode character (`base` added),
+/// and answer where the escape ends.
+fn unicode_escape_at(src: &[u8], at: usize, base: usize, spans: &mut Vec<(usize, usize)>) -> usize {
+    let hex_run = |from: usize| {
+        src[from..]
+            .iter()
+            .take_while(|b| b.is_ascii_hexdigit())
+            .count()
+    };
+    let invalid = |digits: &[u8]| {
+        let value = digits
+            .iter()
+            .fold(0u32, |v, &d| (v << 4) | (d as char).to_digit(16).unwrap());
+        value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value)
+    };
+    let inline_space = |from: usize| {
+        src[from..]
+            .iter()
+            .take_while(|&&b| b == b' ' || b == b'\t')
+            .count()
+    };
+    if src.get(at) == Some(&b'{') {
+        let mut i = at + 1;
+        i += inline_space(i);
+        while i < src.len() && src[i] != b'}' {
+            let len = hex_run(i);
+            if len == 0 {
+                return i;
+            }
+            if invalid(&src[i..i + len]) {
+                spans.push((base + i, base + i + len));
+            }
+            i += len;
+            i += inline_space(i);
+        }
+        i + usize::from(i < src.len())
+    } else {
+        let len = hex_run(at).min(4);
+        // Four digits are at most U+FFFF: only a surrogate (`D800` to
+        // `DFFF`) is no character.
+        if len == 4 && matches!(src[at], b'd' | b'D') && invalid(&src[at..at + 4]) {
+            spans.push((base + at, base + at + 4));
+        }
+        at + len
+    }
+}
+
+impl<'pr> prism::Visit<'pr> for InvalidRegexpUnicodeEscapes {
+    fn visit_regular_expression_node(&mut self, node: &prism::RegularExpressionNode<'pr>) {
+        self.scan(node.content_loc());
+        prism::visit_regular_expression_node(self, node);
+    }
+
+    fn visit_match_last_line_node(&mut self, node: &prism::MatchLastLineNode<'pr>) {
+        self.scan(node.content_loc());
+        prism::visit_match_last_line_node(self, node);
+    }
+
+    fn visit_interpolated_regular_expression_node(
+        &mut self,
+        node: &prism::InterpolatedRegularExpressionNode<'pr>,
+    ) {
+        self.scan_parts(node.parts());
+        prism::visit_interpolated_regular_expression_node(self, node);
+    }
+
+    fn visit_interpolated_match_last_line_node(
+        &mut self,
+        node: &prism::InterpolatedMatchLastLineNode<'pr>,
+    ) {
+        self.scan_parts(node.parts());
+        prism::visit_interpolated_match_last_line_node(self, node);
     }
 }
 

@@ -42,6 +42,7 @@ mod break_proc;
 mod builtin_inline_hot;
 mod builtin_operator_binding;
 mod bundler_host_checkout;
+mod byte_paths_line_limits_regexp_escapes;
 mod capi;
 mod capture_callee_no_abort;
 mod capture_in_compiled_frame;

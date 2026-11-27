@@ -1,11 +1,11 @@
 extern crate monoruby;
 use monoruby::tests::*;
 
-// Onigmo's compile-time diagnostics ("character class has duplicated
-// range", "without escape") are gated on `RTEST(ruby_verbose)` inside
-// Onigmo, so they print only when `$VERBOSE` is `true` (`-w`); a plain
-// run and `-W0` stay silent. They are flushed through the current
-// `$stderr`.
+// Two of Onigmo's compile-time diagnostics ("character class has
+// duplicated range", "Unknown escape") are gated on `RTEST(ruby_verbose)`
+// inside Onigmo, so they print only when `$VERBOSE` is `true` (`-w`); a
+// plain run and `-W0` stay silent. They are flushed through the current
+// `$stderr`. ("without escape" is not gated, #2259.)
 
 #[test]
 fn onigmo_warnings_are_verbose_only() {
