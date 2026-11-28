@@ -69,7 +69,7 @@ fn finish_parse(
 ) -> Result<Value> {
     let rb_errors = errors_to_array(ctx, errors)?;
     if doc.is_null() {
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let aggregate = "aggregate";
         let ex = ctx.funcall(klass, aggregate, &[rb_errors], None)?;
         return Err(if ex.truthy() {
@@ -196,7 +196,7 @@ fn finish_html_parse(
         let msg = ctx.str(format!(
             "Parser without recover option encountered error or warning: {text}"
         ));
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let ex = ctx.funcall(klass, "new", &[msg], None)?;
         return Err(raise(ctx, ex));
     }

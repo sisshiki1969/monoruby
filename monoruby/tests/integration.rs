@@ -282,6 +282,7 @@ mod symbol_proc_no_receiver;
 mod syntax_report_did_you_mean_source_names;
 mod syntax_suggest;
 mod system_exit_status;
+mod tally_single_probe;
 mod time_interval;
 mod time_timezone;
 mod to_c_enum_size_integer_complex_pow_stdout_lazy;

@@ -341,7 +341,7 @@ fn entity_lookup_get(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -
         ]
     };
     let klass = ctx
-        .const_get(classes().html4, "EntityDescription")
+        .const_get(classes(ctx).html4, "EntityDescription")
         .ok_or_else(|| {
             name_error(
                 ctx,

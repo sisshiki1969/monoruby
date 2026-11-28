@@ -243,7 +243,7 @@ fn node_new(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
         (*node).doc = doc;
         node
     };
-    let class = if class == classes().node {
+    let class = if class == classes(ctx).node {
         None
     } else {
         Some(class)

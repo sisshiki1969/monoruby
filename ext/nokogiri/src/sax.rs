@@ -211,7 +211,7 @@ unsafe extern "C" fn cb_start_element_ns(
     unsafe {
         with_call(ctx, |ctx, doc| {
             let attr_class = ctx
-                .const_get(classes().sax_parser, "Attribute")
+                .const_get(classes(ctx).sax_parser, "Attribute")
                 .ok_or_else(|| {
                     name_error(
                         ctx,
@@ -513,7 +513,7 @@ pub(crate) fn init(ctx: &mut Ctx, c: &Classes) {
 /// (`xml_sax_parser_allocate`'s job).
 fn handler_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlSAXHandler> {
     if ctx.native::<XmlSaxHandler>(v).is_none() {
-        if !ctx.is_kind_of(v, classes().sax_parser) {
+        if !ctx.is_kind_of(v, classes(ctx).sax_parser) {
             return Err(ctx.argument_error("argument must be a Nokogiri::XML::SAX::Parser"));
         }
         // SAFETY: an all-NULL callback table is libxml2's empty handler.
@@ -591,7 +591,7 @@ fn set_encoding(ctx: &mut Ctx, ctxt: *mut xml::xmlParserCtxt, enc: Value) -> Res
         // SAFETY: the context is not wrapped yet.
         unsafe { xml::xmlFreeParserCtxt(ctxt) };
         let rb_errors = errors_to_array(ctx, &errors)?;
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
         return Err(if ex.is_nil() {
             ctx.runtime_error("could not set encoding")
@@ -768,7 +768,7 @@ fn parse_context(
     let self_val = this;
     let ctxt = context_ptr(ctx, self_val)?;
     let parser = args[0];
-    if !ctx.is_kind_of(parser, classes().sax_parser) {
+    if !ctx.is_kind_of(parser, classes(ctx).sax_parser) {
         return Err(ctx.argument_error("argument must be a Nokogiri::XML::SAX::Parser"));
     }
     let sax = handler_ptr(ctx, parser)?;
@@ -929,7 +929,7 @@ fn install_push_ctxt(
     }
     if ctx.native::<XmlSaxPushParser>(self_val).is_none() {
         // A fresh instance has no payload yet (`xml_sax_push_parser_allocate`).
-        if !ctx.is_kind_of(self_val, classes().sax_push_parser) {
+        if !ctx.is_kind_of(self_val, classes(ctx).sax_push_parser) {
             // SAFETY: a context nobody else holds.
             unsafe { free_parser_ctxt(ctxt) };
             return Err(ctx.argument_error("expected a Nokogiri::XML::SAX::PushParser"));

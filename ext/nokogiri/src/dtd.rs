@@ -146,7 +146,7 @@ fn notations(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result
     // SAFETY: a live table of `xmlNotation`s.
     let entries = unsafe { scan(table) };
     let klass = ctx
-        .const_get(classes().xml, "Notation")
+        .const_get(classes(ctx).xml, "Notation")
         .ok_or_else(|| name_error(ctx, "uninitialized constant Nokogiri::XML::Notation"))?;
     let hash = ctx.hash_new();
     let len = ctx.temp_len();
@@ -361,7 +361,7 @@ fn wrap_element_content(
     document: Value,
     content: *mut xml::xmlElementContent,
 ) -> Result<Value> {
-    let rb = ctx.native_new(classes().element_content, XmlElementContent { content })?;
+    let rb = ctx.native_new(classes(ctx).element_content, XmlElementContent { content })?;
     ctx.ivar_set(rb, "@document", document)?;
     Ok(rb)
 }
@@ -463,7 +463,7 @@ fn create_entity(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Re
     };
     if entity.is_null() {
         let rb_errors = errors_to_array(ctx, &errors)?;
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
         return Err(if ex.truthy() {
             raise(ctx, ex)
@@ -473,7 +473,7 @@ fn create_entity(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Re
     }
     wrap_node_as(
         ctx,
-        Some(classes().entity_decl),
+        Some(classes(ctx).entity_decl),
         entity as *mut xml::xmlNode,
     )
 }

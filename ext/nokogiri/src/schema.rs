@@ -105,7 +105,7 @@ fn from_document_args(
     let mut options = args.get(1).copied().unwrap_or_default();
     if options.is_nil() {
         let parse_options = ctx
-            .const_get(classes().xml, "ParseOptions")
+            .const_get(classes(ctx).xml, "ParseOptions")
             .ok_or_else(|| name_error(ctx, "uninitialized constant Nokogiri::XML::ParseOptions"))?;
         options = ctx
             .const_get(parse_options, "DEFAULT_SCHEMA")
@@ -151,7 +151,7 @@ fn finish(
 ) -> Result<Value> {
     let rb_errors = errors_to_array(ctx, errors)?;
     let Some(schema) = schema else {
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
         return Err(if ex.truthy() {
             raise(ctx, ex)
