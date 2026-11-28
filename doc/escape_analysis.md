@@ -10,10 +10,9 @@ handed, still elided, into a specialized callee's parameter — as the
 literal argument of `size([a, b])`, or as the `*rest` parameter the
 callee binds `f(a, b)` into (§6).
 
-This replaced `try_fuse_array_minmax`, a peephole that recognized exactly
-`array` + `min`/`max` on the next instruction. The pattern-specific part is
-now data: what a callee may be handed instead of a real Array is its
-**receiver escape summary**, declared next to the builtin.
+The pattern-specific part is data: what a callee may be handed instead of
+a real Array is its **receiver escape summary**, declared next to the
+builtin.
 
 Source: `codegen/jitgen/compile/escape.rs`; the state half in
 `state/slot.rs` (`SlotState::virtuals`, `LinkMode::from_caller`) and

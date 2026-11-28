@@ -360,10 +360,9 @@ forwarding callsite に対しても、
   自体が消える。call を消すこと自体が転送の consume なので、`ir.set_deferred_rest()`
   を立てて caller 側スキップを維持する（さもないと誰も見ない Array を作る）。
 
-が効く。（かつてはここに `compile/frameless.rs::ivar_store_body` による
-ivar ストア展開もあったが、`recv.new(args)` は現在 bytecodegen が付ける
-`initialize` twin call site（`CallSiteInfo::class_new_init`）経由で
-frameless callee として本体をインライン出力するので、認識器は削除された。）
+が効く。`recv.new(args)` は bytecodegen が付ける `initialize` twin call
+site（`CallSiteInfo::class_new_init`）経由で、frameless callee として本体を
+インライン出力する。
 Ruby レベルの `Class#new` は `o.__builtin_initialize__(...)`
 （`bypass_visibility` 付きの forwarding call）という形なので、
 `X.new(a, b)` が **allocate + ivar ストア 2 本**にまで落ちる。これが実利上

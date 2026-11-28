@@ -4,6 +4,8 @@
 **対象**: `analyse_backedge_fixpoint` とその周辺(JIT の抽象実行エンジン)
 **調査時点**: monoruby `5ed383e`(2026-11-12。`1b1b2a9` の 1 コミット後で、
 `monoruby/src/codegen` 配下の差分は無い)、比較対象 Shopify/ruby `053f8da` の `zjit/`
+**注**: 本文が参照する `regalloc_separation.md` は削除済み(過去の計測記録。
+git 履歴の `a1ce4b2` 以前で読める)
 
 ---
 
@@ -669,7 +671,6 @@ app_aobench でも最小値が ±7% 動いた。時間で言えるのは「join 
 | §46 `place`/`ty` の再統合 | `join_ty` は debug 限定(`slot.rs:474`)。B の向き判定を `jit-log` で使うなら cfg を広げる必要がある |
 | `lir.md` 9c(不動点のメタデータを LIR へ渡す) | 影響しない。D で walk を省いても記録内容は同じ |
 | `escape_analysis.md` §3(ループヘッドの省略オブジェクト) | `equiv` は `virtuals` を見ない。本体が具現化するとスロットが `V` から `S` に変わるので検出されると読めるが、E のテストに含めて確かめる |
-| `polymorphic_call.md` §9 | `InlineGenClassIndependent` は現在のコードに無い(`globals.rs:183-185` は単一の `InlineGen` に統合済みと書いている)。文書側が古い |
 
 ### 5.2 インライン生成器に型シグネチャを別登録するか —— 見送り
 

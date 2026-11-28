@@ -40,7 +40,7 @@ Highlights from the last two months; earlier months are in the changelog, linked
 
 <!-- END LATEST-MONTHS -->
 
-Earlier months: [Changelog](https://sisshiki1969.github.io/monoruby/docs/changelog.html) (from January 2026), and [Progress summary (April 2025 – April 2026)](https://sisshiki1969.github.io/monoruby/docs/design/progress_2025-2026.html) for a prose account of the same period.
+Earlier months: [Changelog](https://sisshiki1969.github.io/monoruby/docs/changelog.html) (from January 2026).
 
 ## Presentation
 

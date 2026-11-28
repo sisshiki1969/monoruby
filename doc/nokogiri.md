@@ -1,12 +1,12 @@
-# nokogiri を monoruby で動かす方法の検討
+# nokogiri の実装
 
 nokogiri は C 拡張（libxml2 / libxslt / gumbo）の上に Ruby を載せた gem で、
-monoruby では `require "nokogiri"` が `nokogiri/nokogiri` の LoadError で止まる
-（precompiled gem の `.so` は CRuby ABI なので読めない）。本稿は、psych
-（`doc/…` の libyaml 移植）・zlib（`libz-sys` 同梱）と同じ「gem の Ruby 半分は
-そのまま、ネイティブ半分を monoruby 側で提供する」路線を nokogiri に適用する
-場合の設計と、代替案との比較をまとめる。`doc/c_extention.md`（CRuby C API 互換層）
-との関係も述べる。
+precompiled gem の `.so` は CRuby ABI なので monoruby では読めない。monoruby は
+psych と同じく「gem の Ruby 半分はそのまま、ネイティブ半分を monoruby 側で
+提供する」形で nokogiri を動かしている。ネイティブ半分は Rust で書き直した
+拡張 `ext/nokogiri`（`nokogiri_native`）で、libxml2 / libxslt / gumbo は
+nokogiri のパッチを当てた C ソースを同梱してビルドする。本稿はその設計と、
+選ばなかった代替案（CRuby C API 互換層、純 Rust）との比較をまとめる。
 
 調査対象: nokogiri 1.19.1（x86_64-linux precompiled gem）と 1.18.9（source gem）。
 
@@ -51,7 +51,7 @@ zlib と同じ形。libxml2 等は `-sys` 相当の workspace crate で C ソー
   `config.h` を Linux / macOS 向けに固定する）。ノードの寿命管理（後述）は
   nokogiri の C コードで最も込み入った部分で、そこはそのまま移植が要る。
 
-### B. CRuby C API 互換層（`doc/c_extention.md` の Path C）で nokogiri の C 拡張をそのまま動かす
+### B. CRuby C API 互換層（`doc/c_api.md`）で nokogiri の C 拡張をそのまま動かす
 
 `ruby.h` 互換ヘッダと `rb_*` シムを作り、`gem install nokogiri` の再コンパイル
 で nokogiri.so を monoruby 向けに生成する。
@@ -62,8 +62,8 @@ zlib と同じ形。libxml2 等は `-sys` 相当の workspace crate で C ソー
   関数付き）、`rb_protect` / `rb_ensure` / `rb_rescue` の例外モデル、
   `rb_enc_*`、IO コールバック（`rb_io_*` 27 箇所）まで要る。C 拡張層の
   「最小ライン」（hello world の `.so`）から nokogiri までの距離が非常に長く、
-  最初のマイルストーンとしては重い。`doc/c_extention.md` §4 のレイアウト
-  不一致（`RSTRING_PTR` 等）も nokogiri は踏む（`StringValueCStr` 85 箇所）。
+  最初のマイルストーンとしては重い。`RSTRING_PTR` 等のレイアウト前提も
+  nokogiri は踏む（`StringValueCStr` 85 箇所）。
 
 ### C. 純 Rust で再実装（html5ever / quick-xml + 自前 DOM + XPath）
 
@@ -91,9 +91,9 @@ libxml2 に pkg-config でリンクする wrapper）。
 | 他 gem への波及 | なし | 大 | なし |
 | 既存の前例 | psych / zlib / json | なし | — |
 
-**推奨は A。** B は長期の別プロジェクトとして価値があるが、nokogiri を動かす
-最短路ではない。A で作る Rust 側のオブジェクト・寿命モデルは、将来 B を
-やるときの `TypedData` の設計にも流用できる。
+**A を採った。** B は nokogiri を動かす最短路ではなかった。A で作った Rust
+側のオブジェクト・寿命モデルは、後に作った C API 層の `TypedData` の設計にも
+流用している。
 
 ## 3. A の設計
 
@@ -101,14 +101,12 @@ libxml2 に pkg-config でリンクする wrapper）。
 
 ```
 monoruby/
-├── libxml2-src/        # workspace crate: libxml2 + libxslt (+libexslt) を cc でビルド
+├── libxml2-src/        # workspace crate: libxml2 + libxslt (+libexslt) + gumbo-parser を cc でビルド
 │   ├── build.rs        # ~60 + ~40 ファイルを直接コンパイル、config.h は同梱の固定版
 │   ├── vendor/         # nokogiri の dependencies.yml と同じ版に patches/ を適用したもの
 │   └── src/lib.rs      # 使う 227 関数の extern "C" 宣言（手書き。bindgen は使わない）
-├── gumbo-src/          # nokogiri 同梱の gumbo-parser（42 ファイル）を cc でビルド
-├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib）
-│   │                   # 当初は monoruby/src/builtins/nokogiri/ にあり、
-│   │                   # doc/native_extension_loading.md の 3 で拡張に出た
+├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib、
+│   │                   # doc/native_extension_loading.md）
 │   └── src/            # document.rs, node.rs, node_set.rs, xpath.rs, sax.rs, reader.rs,
 │       │               #   xslt.rs, schema.rs, dtd.rs, html5.rs, misc.rs
 │       └── lib.rs      # クラス登録（Init_nokogiri_native）、寿命モデルの共通部
@@ -116,10 +114,9 @@ monoruby/
     └── nokogiri/nokogiri.rb          # C 拡張の代わりに読まれるスタブ（定数定義など）
 ```
 
-libz-sys の前例どおり、C ソースは monoruby のビルドで静的リンクする。
+C ソースは拡張のビルドで静的リンクする。
 iconv は libxml2 の encoding 変換に必要で、glibc と macOS は libc に持つので
 libiconv は同梱しない（nokogiri の precompiled ビルドだけが同梱している）。
-zlib は既存の libz-sys を共有する。
 
 libxml2 は nokogiri のパッチを当てた版を使う。とくに `0009-allow-wildcard-
 namespaces`（`*:foo` の XPath）と `0019-xpath-…static-hash-table` は
@@ -191,7 +188,7 @@ C 拡張が定義していた定数（`Nokogiri::LIBXML_COMPILED_VERSION`、
 は `nokogiri/#{RUBY_VERSION}/nokogiri` を試してから `nokogiri/nokogiri` に
 落ちるので、後者をスタブで受ければ足りる。
 
-## 4. 進め方と検証
+## 4. 段階と検証
 
 ruby-bench に nokogiri のベンチマークは無いので、動機は「動かす」こと自体と
 Rails 系（rails-dom-testing、loofah、rails-html-sanitizer は nokogiri 必須）
@@ -217,27 +214,22 @@ Rails 系（rails-dom-testing、loofah、rails-html-sanitizer は nokogiri 必�
   から。
 - `tests/ruby_bench_outputs.rs` と同じ形の CRuby 出力比較テスト（同じ
   HTML / XML を両方でパースして `to_xml` / `xpath` の結果を突き合わせる）。
-  同じ libxml2 なので byte 単位で一致するはず。
+  同じ libxml2 なので byte 単位で一致する（`tests/nokogiri.rs`）。
 
-## 5. 見積りの目安
+## 5. ネイティブオブジェクトと C API 層
 
-既存の native stand-in は yaml.rs 496 行（libyaml-safer の上）、zlib.rs 635 行、
-prism.rs 172 行で、いずれも下に完成したライブラリがある。nokogiri は
-`ext/nokogiri` 10k 行の移植が本体で、`RValue` の新種別と GC 連携、
-libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 + Document 12
-+ NodeSet 12 + XPathContext 5 + HTML4 + SyntaxError）を占め、そこまでで
-一般的な用途（スクレイピング、Rails のビュー検証、loofah のサニタイズ）は動く。
+libxml2 のポインタを包むオブジェクトはネイティブオブジェクト
+（`MR_CLASS_NATIVE` のクラス、`native!` で宣言したペイロード、それぞれの
+`mark` / `Drop`）で、§3.2 の寿命モデルはこの形で表している。C API 層
+（`doc/c_api.md`）の `TypedData` / `Data` も同じコアのネイティブペイロードに
+載っている。
 
-B（C API 互換層）を将来やるなら、ここで作る `ObjTy::XML_*` の mark / drop の
-形がそのまま `TypedData` の受け皿になるので、A の作業は無駄にならない。
-
-## 6. 実装状況（XSLT 以外の全段階、2026-09）
+## 6. 実装状況
 
 `libxml2-src/`（libxml2 2.13.9 + nokogiri 1.19.7 の patches、`cc` でビルド、
 `config.h` は手書き、`xmlversion.h` は build.rs が生成）、
-`ext/nokogiri/`（Rust 側、monoruby 拡張 `nokogiri_native`。もとは
-`monoruby/src/builtins/nokogiri/` で、`doc/native_extension_loading.md` の
-手順 3 で `monoruby_ext` の `Ctx` 越しに書き直してコアの外に出した）、
+`ext/nokogiri/`（Rust 側、monoruby 拡張 `nokogiri_native`。`monoruby_ext` の
+`Ctx` 越しに書かれている、`doc/native_extension_loading.md`）、
 `monoruby/gem/nokogiri/`（gem 1.19.7 の Ruby 半分をそのまま +
 `nokogiri/nokogiri.rb` のスタブ、拡張を `require` する）。
 `tests/nokogiri.rs` が CRuby の nokogiri gem と同じスクリプトを走らせて出力を

@@ -3,10 +3,6 @@
 Monthly highlights of monoruby's development, with representative PRs. The
 README carries the most recent two months; this page is the full record.
 
-For a prose account of the same period rather than a list — what changed and
-why, over roughly 500 commits — see [Progress summary (April 2025 – April
-2026)](design/progress_2025-2026.md).
-
 > **Maintenance.** This page is the single source of truth. A scheduled
 > Routine appends the previous month on the 1st of each month, then runs
 > `bin/sync-changelog-readme`, which copies the two newest month sections

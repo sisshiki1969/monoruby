@@ -19,7 +19,7 @@ Blocking-IO builtins go through a common wrapper that checks buffered data, prob
 
 ## Synchronization primitives and interrupts
 
-`Mutex`, `Queue`, `SizedQueue`, and `ConditionVariable` are implemented **in Ruby** (in `builtins/startup.rb`), relying on safepoint-free straight-line test-and-set plus a *park permit* mechanism that closes the classic lost-wakeup race. Locks abandoned by a dead thread are reclaimed by the next acquirer, and `Mutex#owned?` is per-Fiber.
+`Mutex`, `Queue`, `SizedQueue`, and `ConditionVariable` are implemented **in Ruby** (in `builtins/thread.rb`), relying on safepoint-free straight-line test-and-set plus a *park permit* mechanism that closes the classic lost-wakeup race. Locks abandoned by a dead thread are reclaimed by the next acquirer, and `Mutex#owned?` is per-Fiber.
 
 `Thread#kill` / `#raise` are queued on the target: a parked target is woken and unwinds **from its exact blocking point** (running `ensure` blocks); a running target is caught at its next safepoint, so even busy loops are killable. `Thread.handle_interrupt` masking is honored at mask boundaries. Signals are converted on the main thread, as in CRuby — see [`doc/signal.md`](design/signal.md).
 

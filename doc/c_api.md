@@ -2,8 +2,7 @@
 
 CRuby 向けに書かれた C 拡張を、**ソースのまま** monoruby 用にビルドして
 `require` できるようにする層。`doc/native_extension_loading.md` §4 の段階 5
-（「必要なら A を `mr_*` の上に積む」）にあたる。設計検討の経緯は
-`doc/c_extention.md`（2026-08）。
+（「必要なら A を `mr_*` の上に積む」）にあたる。
 
 ---
 
@@ -120,8 +119,7 @@ CRuby は C スタックを保守的に走査するので、拡張はローカ�
 を気にせず `rb_funcall` を挟める。monoruby の GC は precise なので、層が
 C に渡す**ヒープ上の `VALUE` はすべて temp stack に積む**（`root()`）。
 temp stack はメソッド呼び出し（と `Init_`）が戻ったときにインタプリタが
-切り詰める。TruffleRuby の `ExtensionCallStack` と同じ考え方
-（`doc/c_extention.md` §3.4）。
+切り詰める。TruffleRuby の `ExtensionCallStack` と同じ考え方である。
 
 新しく作った値だけでなく、**ほかのオブジェクトから読み出した値も積む**:
 `rb_ary_entry`（`RARRAY_AREF`）、`RARRAY_CONST_PTR` のコピーの要素、

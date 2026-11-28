@@ -51,14 +51,19 @@ run time with `--no-jit`. (The old `jit` / `jit_x86` build cfgs and the
 
 | Feature | Effect |
 | --- | --- |
-| `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths |
-| `shadow-placement` | Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering. The gate for the abstract-interpreter / register-allocation separation |
+| `stress-spill-pool` | Shrink `PHYS_FPR_POOL` to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths. CI runs the test suite with it |
+| `shadow-placement` | Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering |
 | `phys-table` | Move the physical FP placement *policy* out of the resolver into an explicit table-backed function. Byte-identical to the formula it replaces |
+| `fixpoint-join` | Record a loop's back edge as the join with the previously recorded one, so recorded back edges only ever climb |
 | `mimalloc` | Route the global allocator's delegation to mimalloc instead of glibc, changing exactly one variable for an A/B |
 
-The last three are gated on measurement and are off until their A/B clears;
-see [Separating the abstract interpreter from register
-allocation](design/regalloc_separation.md).
+All but `stress-spill-pool` are experiments, off until an A/B justifies them.
+
+### Encodings
+
+| Feature | Effect |
+| --- | --- |
+| `no-cjk-tables` | Answer the CJK encodings from `encoding_rs` alone, without monoruby's correction tables. Only for `bin/gen-cjk-tables`, which diffs the codec against CRuby to generate those tables |
 
 ## Worked example: reading the pipeline
 
@@ -211,7 +216,7 @@ Things worth reading out of that listing:
   [Value Representation](value-representation.md).
 - **No accumulator register.** Values live in whatever GP register the
   per-basic-block allocator picked (`r8` and `r9` here), with the frame at
-  `[rbp-…]`. The fixed `r15` accumulator was retired in June 2026.
+  `[rbp-…]`; `r15` is the VM tier's accumulator only.
 - **`cmp rsp,[rbx+0x18]` before each call** is the stack-limit check; `rbx`
   holds `&mut Executor`.
 
@@ -288,7 +293,7 @@ monoruby is re-verified against a live CRuby before failing — grep test output
 for `re-verifying against a live ruby` to find tests that should move to the
 `_live` helpers.
 
-Running the suite needs a host `ruby` matching the vendored pin (**4.0.2**,
+Running the suite needs a host `ruby` matching the vendored pin (**4.0.9**,
 from `monoruby/vendor/ruby-stdlib/.ruby-version`). Since Ruby 3.4 `bigdecimal`
 is no longer a default gem, so install it explicitly or every
 `tests/bigdecimal.rs` test fails with `LoadError`:
