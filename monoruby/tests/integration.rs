@@ -282,6 +282,7 @@ mod symbol_proc_no_receiver;
 mod syntax_report_did_you_mean_source_names;
 mod syntax_suggest;
 mod system_exit_status;
+mod tally_into_iterated_hash;
 mod tally_single_probe;
 mod time_interval;
 mod time_timezone;

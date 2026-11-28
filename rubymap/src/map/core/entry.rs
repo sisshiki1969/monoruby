@@ -346,7 +346,7 @@ pub struct VacantEntry<'a, K, V, E, G, R> {
 impl<'a, K, V, E, G, R> VacantEntry<'a, K, V, E, G, R> {
     /// Return the index where a key-value pair may be inserted.
     pub fn index(&self) -> usize {
-        self.map.indices.len()
+        self.map.entries.len()
     }
 
     /// Gets a reference to the key that was used to find the entry.

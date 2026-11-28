@@ -43,7 +43,9 @@ pub(crate) struct IndexMapCore<K, V, E, G, R> {
     /// `clear`, which resets to linear.
     ///
     /// Invariants: `linear` ⇒ `indices.is_empty()`;
-    /// `!linear` ⇒ `indices.len() == entries.len()`.
+    /// `!linear` ⇒ `indices.len() == entries.len()`, less the buckets
+    /// tombstoned by the `tombstone_*` methods, which have left the table
+    /// but not the vector. A new entry always goes at `entries.len()`.
     linear: bool,
     /// entries is a dense vec maintaining entry order.
     entries: Entries<K, V>,
@@ -495,7 +497,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 let i = self.entries.len();
                 entry.insert(i);
                 self.push_entry(hash, key, value);
-                debug_assert_eq!(self.indices.len(), self.entries.len());
+                debug_assert!(self.indices.len() <= self.entries.len());
                 Ok((i, None))
             }
         }
@@ -535,7 +537,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 let i = self.entries.len();
                 entry.insert(i);
                 self.push_entry(hash, K::from(key), value);
-                debug_assert_eq!(self.indices.len(), self.entries.len());
+                debug_assert!(self.indices.len() <= self.entries.len());
                 (i, None)
             }
         }
@@ -580,7 +582,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 let i = self.entries.len();
                 entry.insert(i);
                 self.push_entry(hash, key, value);
-                debug_assert_eq!(self.indices.len(), self.entries.len());
+                debug_assert!(self.indices.len() <= self.entries.len());
                 (i, None)
             }
         }
@@ -670,7 +672,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 let key = key();
                 entry.insert(i);
                 self.push_entry(hash, key, value);
-                debug_assert_eq!(self.indices.len(), self.entries.len());
+                debug_assert!(self.indices.len() <= self.entries.len());
                 (i, None)
             }
         }
@@ -767,7 +769,7 @@ impl<K, V, E, G, R> IndexMapCore<K, V, E, G, R> {
                 let i = self.entries.len();
                 entry.insert(i);
                 self.push_entry(hash, key, value);
-                debug_assert_eq!(self.indices.len(), self.entries.len());
+                debug_assert!(self.indices.len() <= self.entries.len());
                 Ok((i, None))
             }
         }
@@ -1151,8 +1153,10 @@ impl<'a, K, V, E, G, R> RefMut<'a, K, V, E, G, R> {
     /// Insert a key-value pair in `entries`,
     /// *without* checking whether it already exists.
     fn insert_unique(self, hash: HashValue, key: K, value: V) -> OccupiedEntry<'a, K, V, E, G, R> {
-        let i = self.indices.len();
-        debug_assert_eq!(i, self.entries.len());
+        // `entries.len()`, not `indices.len()`: a tombstoned bucket has
+        // left the table but still holds its place in the vector.
+        let i = self.entries.len();
+        debug_assert!(self.indices.len() <= i);
         let entry = self
             .indices
             .insert_unique(hash.get(), i, get_hash(self.entries));

@@ -33,14 +33,24 @@ class Hash
       # turns false for it), so a deleted not-yet-visited entry is skipped
       # and deleting the current or an already-visited one skips nothing —
       # CRuby's semantics. `__entry_count` is the raw bound, tombstones
-      # included; *adding* a key still raises, so it cannot grow mid-loop.
+      # included. *Adding* a key raises, except through `tally(hash)`
+      # (#2271): the inner loop walks up to the bound the Hash had, and
+      # `__walk_bound` says what pairs appended that way do to it — a
+      # large Hash's walk goes on to them (CRuby's st_table), a small
+      # one's does not (ar_table), and one that has outgrown that size
+      # raises. Asked once the bound is reached, it costs the walk nothing
+      # per pair.
       i = 0
       # A literal block that splits the pair anyway (`{ |k, v| }`) takes
       # key and value straight from the yield's argument temporaries: the
       # JIT yields `[k, v]` without building it (`CallSiteInfo::yield_expanded`).
-      while i < __entry_count
-        yield [__key_at(i), __value_at(i)] if __live_at(i)
-        i += 1
+      bound = __entry_count
+      while i < bound
+        while i < bound
+          yield [__key_at(i), __value_at(i)] if __live_at(i)
+          i += 1
+        end
+        bound = __walk_bound(bound) if __entry_count != bound
       end
     ensure
       __iter_end(guard)
@@ -63,9 +73,13 @@ class Hash
     guard = __iter_begin
     begin
       i = 0
-      while i < __entry_count
-        yield __key_at(i) if __live_at(i)
-        i += 1
+      bound = __entry_count
+      while i < bound
+        while i < bound
+          yield __key_at(i) if __live_at(i)
+          i += 1
+        end
+        bound = __walk_bound(bound) if __entry_count != bound
       end
     ensure
       __iter_end(guard)
@@ -78,9 +92,13 @@ class Hash
     guard = __iter_begin
     begin
       i = 0
-      while i < __entry_count
-        yield __value_at(i) if __live_at(i)
-        i += 1
+      bound = __entry_count
+      while i < bound
+        while i < bound
+          yield __value_at(i) if __live_at(i)
+          i += 1
+        end
+        bound = __walk_bound(bound) if __entry_count != bound
       end
     ensure
       __iter_end(guard)
@@ -124,18 +142,22 @@ class Hash
     guard = __iter_begin
     begin
       i = 0
-      while i < __entry_count
-        if __live_at(i)
-          pair = yield __key_at(i), __value_at(i)
-          unless pair.is_a?(Array)
-            ary = __check_ary(pair)
-            raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
-            pair = ary
+      bound = __entry_count
+      while i < bound
+        while i < bound
+          if __live_at(i)
+            pair = yield __key_at(i), __value_at(i)
+            unless pair.is_a?(Array)
+              ary = __check_ary(pair)
+              raise TypeError, "wrong element type #{pair.class} (expected array)" if ary.nil?
+              pair = ary
+            end
+            raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
+            h[pair[0]] = pair[1]
           end
-          raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})" unless pair.size == 2
-          h[pair[0]] = pair[1]
+          i += 1
         end
-        i += 1
+        bound = __walk_bound(bound) if __entry_count != bound
       end
     ensure
       __iter_end(guard)
@@ -173,29 +195,41 @@ class Hash
     begin
       i = 0
       if hash && block_given?
-        while i < __entry_count
-          if __live_at(i)
-            k = __key_at(i)
-            new_k = hash.key?(k) ? hash[k] : yield(k)
-            h[new_k] = __value_at(i)
+        bound = __entry_count
+        while i < bound
+          while i < bound
+            if __live_at(i)
+              k = __key_at(i)
+              new_k = hash.key?(k) ? hash[k] : yield(k)
+              h[new_k] = __value_at(i)
+            end
+            i += 1
           end
-          i += 1
+          bound = __walk_bound(bound) if __entry_count != bound
         end
       elsif hash
         # Separate loop so the common block-less `transform_keys(map)`
         # walk carries no per-pair block test and no yield call site —
         # and maps each key with a single probe (`__get_or_key` returns
         # the key itself on a miss, so no key?-then-[] double lookup).
-        while i < __entry_count
-          if __live_at(i)
-            h[hash.__get_or_key(__key_at(i))] = __value_at(i)
+        bound = __entry_count
+        while i < bound
+          while i < bound
+            if __live_at(i)
+              h[hash.__get_or_key(__key_at(i))] = __value_at(i)
+            end
+            i += 1
           end
-          i += 1
+          bound = __walk_bound(bound) if __entry_count != bound
         end
       else
-        while i < __entry_count
-          h[yield(__key_at(i))] = __value_at(i) if __live_at(i)
-          i += 1
+        bound = __entry_count
+        while i < bound
+          while i < bound
+            h[yield(__key_at(i))] = __value_at(i) if __live_at(i)
+            i += 1
+          end
+          bound = __walk_bound(bound) if __entry_count != bound
         end
       end
     ensure
@@ -261,9 +295,13 @@ class Hash
     guard = __iter_begin
     begin
       i = 0
-      while i < __entry_count
-        __set_value_at(i, yield(__value_at(i))) if __live_at(i)
-        i += 1
+      bound = __entry_count
+      while i < bound
+        while i < bound
+          __set_value_at(i, yield(__value_at(i))) if __live_at(i)
+          i += 1
+        end
+        bound = __walk_bound(bound) if __entry_count != bound
       end
     ensure
       __iter_end(guard)
