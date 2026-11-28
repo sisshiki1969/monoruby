@@ -1,18 +1,16 @@
 //! # Unified low-level IR (LIR) — arch-neutral machine-level instructions
 //!
-//! **The unified low-level IR (Phase-1 item ③).** This module defines the
-//! arch-neutral machine-level instruction set (`LInst`) and its logical
-//! operands (`LOperand` / `LReg` / `LMem`). It **is** wired into the pipeline:
-//! both backends' `encode_linst` (`arch/<arch>/compile`) consume `LInst` as the
-//! **single byte-emission seam**. The family migration is far along — register
-//! moves, slot/field memory, the full FP family, fixnum arithmetic, the guard /
-//! check family, the whole method-call family, and the cold side-exit/deopt
-//! handlers all lower through `encode_linst` (stages 2-A…3-H + A, B5–B8; see the
-//! migration log in `doc/lir.md` §6). The arms still handled directly in the
-//! dispatcher are the specialized inlined-frame family and the zero-byte
-//! patch/recompile bookkeeping (`doc/lir.md` §8); migrating the `AsmInst::Inline`
-//! builtin generators onto LIR is the remaining "express inline-builtin codegen
-//! once, arch-neutrally" goal.
+//! This module defines the arch-neutral machine-level instruction set
+//! (`LInst`) and its logical operands (`LOperand` / `LReg` / `LMem`). Every
+//! `AsmInst` lowers to `LInst`, and both backends' `encode_linst`
+//! (`arch/<arch>/compile`) consume it as the **single byte-emission seam**.
+//! A few groups reach a side entry instead of the per-arch match: the
+//! shared-emitter macros (`encode_linst_macro`), the source-position
+//! pseudo-op (`encode_linst_frame`), and the `Inline` carrier
+//! (`encode_linst_inline`), through which the inline builtin generators and
+//! the specialized-call family still emit per-arch code (`doc/lir.md` §2).
+//! Moving those closures onto typed, arch-neutral LIR ops is the remaining
+//! "express inline-builtin codegen once" goal.
 //!
 //! ## Where it sits
 //!
@@ -921,7 +919,7 @@ pub(in crate::codegen) enum LInst {
     /// This is the transitional carrier that lets *every* `AsmInst` lower to
     /// `LInst`; migrating the closures to typed, arch-neutral LIR ops (so this
     /// variant can eventually go away) is the "express inline-builtin codegen
-    /// once" goal (`doc/lir.md` §8).
+    /// once" goal (`doc/lir.md` §2).
     Inline(super::asmir::InlineProcedure),
 }
 

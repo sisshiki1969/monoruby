@@ -59,15 +59,14 @@ impl DeoptPoint {
 }
 
 ///
-/// A deopt-carrying unbox load produced by `load_fpr` (item ②, step 2): the
+/// A deopt-carrying unbox load produced by `load_fpr`: the
 /// conversion to emit when materializing a slot's value into an FP register.
 ///
 /// The `FromStack` / `FromAcc` variants need a guard (their `float_to_fpr`
 /// deopts if the boxed value is not actually a `Float`); the emit half
 /// materializes the side-exit from the record's [`DeoptPoint`] program point,
 /// **not** a frozen `AsmDeopt` — the analysis half only decided the conversion
-/// and recorded the point (see doc/regalloc_separation.md §9). The
-/// numeric-literal variants are guard-free.
+/// and recorded the point. The numeric-literal variants are guard-free.
 ///
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(in crate::codegen::jitgen) enum FprLoad {
@@ -522,8 +521,8 @@ impl AbstractState {
     ///
     pub(crate) fn load_fpr(&mut self, ir: &mut AsmIr, slot: SlotId) -> FPReg {
         // The deopt point is recorded *before* the state transition, so its
-        // write-back snapshot (`get_write_back`) is the pre-load placement — see
-        // doc/regalloc_separation.md §9. The record carries the program point
+        // write-back snapshot (`get_write_back`) is the pre-load placement. The
+        // record carries the program point
         // (pc + write-back), not a frozen `AsmDeopt`; the emit half materializes
         // the side-exit from it.
         let deopt = self.deopt_point(ir);

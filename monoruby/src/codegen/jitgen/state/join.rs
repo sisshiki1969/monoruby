@@ -90,13 +90,12 @@ impl AbstractFrame {
     }
 
     fn join_with(&mut self, other: &AbstractFrame, allow_fpr: bool) {
-        // §5 allocator de-fusion, stage 1: record the per-slot `JoinAction`
-        // stream as we merge, then (debug) replay it from the pre-merge frame and
-        // assert it reproduces the identical placement. This locks the property
-        // the separated allocator pass relies on — the (allocation-free) decision
-        // stream plus `apply_join` is a *complete* record of the meet's placement
-        // work — and is the regression harness future allocator changes shadow
-        // against. See doc/regalloc_separation.md §12.
+        // Record the per-slot `JoinAction` stream as we merge, then (debug)
+        // replay it from the pre-merge frame and assert it reproduces the
+        // identical placement. This locks the property that the
+        // (allocation-free) decision stream plus `apply_join` is a *complete*
+        // record of the meet's placement work, and is the regression harness
+        // allocator changes are checked against.
         #[cfg(debug_assertions)]
         let pre = self.clone();
         self.invariants.join(&other.invariants);

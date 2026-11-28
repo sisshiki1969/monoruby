@@ -3934,14 +3934,11 @@ impl AbstractState {
     /// state the post-call continuation expects (it stores the result into
     /// `dst` itself).
     ///
-    /// Registration is unconditional: chain conversion is now the *only* way
-    /// an on-stack JIT frame is dropped to the interpreter, so every call and
+    /// Registration is unconditional: chain conversion is the *only* way an
+    /// on-stack JIT frame is dropped to the interpreter, so every call and
     /// yield site must be convertible from its return address alone. A site
-    /// the table does not know is a site the walk has to leave running its
-    /// compiled body — which was tolerable only while immediate eviction
-    /// existed as a fallback. When the speculation (§5 step 5) lands, the
-    /// per-site decision §6 argues for rides on top of this, not instead
-    /// of it.
+    /// the table does not know is a site the walk would have to leave
+    /// running its compiled body (`doc/chain_deopt.md` §5, §10).
     ///
     fn chain_exit(
         &self,

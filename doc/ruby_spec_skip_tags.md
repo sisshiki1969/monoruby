@@ -126,14 +126,6 @@ rubyspec-stats の run が空の結果を公開した場合は
 
 ## 現在のタグ
 
-`spec/tags/` には 1 ファイルだけがある。
-
-- `core/refinement/import_methods_tags.txt` — `Refinement#import_methods when
-  methods are not defined in Ruby code raises ArgumentError when importing
-  methods from C extension`。ハングではなく、spec の前提が成り立たなかった
-  ために付けたタグである。この spec は「C 拡張のメソッドは import できない」
-  ことを `Zlib` で確かめるが、タグを付けた時点の monoruby の `Zlib` は Ruby
-  実装だったので import が成功していた。現在の `Zlib` は CRuby の
-  `ext/zlib` を C API 層の上でビルドした `zlib.so`（`doc/c_api.md`）で、
-  `import_methods` は iseq でないメソッドを拒否する（`builtins/module.rs`）
-  ので、この example は通るはずである。CI で確かめてからタグを外す候補である。
+`spec/tags/` にタグは無く、ディレクトリもない。上の CI の各手順は
+ディレクトリが無いときコピーを飛ばし、モニタが犯人を見つければ
+`spec/tags/<cat>/` を作って書き込む。

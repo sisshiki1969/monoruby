@@ -1,7 +1,6 @@
-//! Per-basic-block **local GP register allocator** (Layer-②).
+//! Per-basic-block **local GP register allocator**.
 //!
-//! The register-allocation pass discussed in `doc/regalloc_separation.md` §3:
-//! a *local* (single basic block) allocator that assigns physical GP registers
+//! A *local* (single basic block) allocator that assigns physical GP registers
 //! to fixnum operands and results, **reusing** a register across instructions
 //! when a slot it already caches is read again. The GP-aware operations that
 //! drive it online are the integer binops (`binop_integer_gp`), the integer
@@ -13,7 +12,7 @@
 //! %1 = %2 + %3
 //! ```
 //!
-//! it emits, mirroring the design note's worked example:
+//! it emits:
 //!
 //! - `%2` not yet in a GP → load it into `GP1`,
 //! - `%3` not yet in a GP → load it into `GP2`,
