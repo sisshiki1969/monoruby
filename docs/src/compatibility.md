@@ -82,13 +82,10 @@ Both dashboards come from the same workflow shape
   counted after all, and the hanging file is pinned down and recorded in
   `data/timeouts.csv`. Both groups currently record **zero** timeouts.
 - `--excl-tag fails` excludes examples tagged in this repository's
-  `spec/tags/`. That list is deliberately tiny, and has shrunk as the
-  implementation caught up — **1 example** at present:
-  `Refinement#import_methods` from a C extension. The published pass rate is
-  therefore within a rounding error of an unfiltered one.
+  `spec/tags/`. Tags are reserved for examples that hang, and there are
+  **none** at present, so the published pass rate is an unfiltered one.
 
-The audit that cut the skip list down from coarse file-level exclusions to
-that handful is written up in [ruby/spec hang
+How hanging examples are found and tagged is written up in [ruby/spec hang
 countermeasures](design/ruby_spec_skip_tags.md). The structural hangs are
 gone: a blocking read parks the calling thread on an fd poll with the GVL
 released instead of blocking the process, so specs like `core/io/copy_stream_spec.rb` and

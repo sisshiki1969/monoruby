@@ -2629,8 +2629,7 @@ impl Codegen {
         // (`[rbp - (base-24+8n)]`); if we undid it first, those pushed
         // return addresses would land on the very spill slots the
         // write-back is about to read, corrupting a live float (it would
-        // box a code pointer back to the VM). See the deopt-bridge
-        // analysis in doc/regalloc_separation.md §39.
+        // box a code pointer back to the VM).
         self.gen_write_back_for_deopt(wb, base);
         // Now release the spill region that Loop JIT entry pinned rsp
         // below (see `AsmInst::LoopJitRspBump`). Method / specialized

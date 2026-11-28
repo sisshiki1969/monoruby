@@ -3728,8 +3728,10 @@ pub struct PolyCacheEntry {
 
 /// Polymorphic method cache of a call site: the receiver(-pair) classes
 /// the VM observed on its slow paths, up to [`PMC_WAYS`] of them.
-/// Recording-only for now — the JIT does not consume it yet (see
-/// `doc/polymorphic_call.md` §7); dump it with the `profile` feature.
+/// The JIT reads it to pick a polymorphic inline cache's arms
+/// (`compile/pic.rs`) and to tell a key-polymorphic `Hash#[]` site
+/// (`builtins/hash.rs`); recording is described in
+/// `doc/polymorphic_call.md` §7. Dump it with the `profile` feature.
 #[derive(Debug, Clone, Default)]
 pub struct PolyCache {
     entries: Vec<PolyCacheEntry>,

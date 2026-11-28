@@ -1071,7 +1071,7 @@ impl Codegen {
         // spill region: the write-back boxes spilled floats with calls whose
         // callee prologues push below sp, and undoing the bump first would let
         // those pushes overwrite the spill slots being read (see the x86 twin
-        // `side_exit_with_label` and doc/regalloc_separation.md §39).
+        // `side_exit_with_label`).
         self.a64_gen_write_back_for_deopt(wb, base);
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         // Same position as the x86 twin: after the write-back, with nothing
@@ -1567,10 +1567,9 @@ impl Codegen {
         // every other exit that leaves through `entry_raise` (`emit_raise`,
         // retry/redo/ensure_end). After the `blr` — the runtime call may
         // push below sp, and undoing first would let those pushes overwrite
-        // the spill slots (`a64_gen_deopt`'s ordering, regalloc_separation
-        // §39). `entry_raise`'s no-handler path restores sp from x29 anyway;
-        // this matters for its `goto` path, which resumes the VM with sp
-        // untouched.
+        // the spill slots (`a64_gen_deopt`'s ordering). `entry_raise`'s
+        // no-handler path restores sp from x29 anyway; this matters for its
+        // `goto` path, which resumes the VM with sp untouched.
         self.a64_undo_loop_rsp_bump(loop_jit_spill_bytes);
         self.a64_far_branch(&raise, false);
     }
