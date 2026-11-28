@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-4efde97b.js";
+            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -523,7 +523,7 @@ Cargo の artifact dependency に任せ、<code>build.rs</code> は受け取っ�
 </ul>
 <h3 id="62-分かったこと"><a class="header" href="#62-分かったこと">6.2 分かったこと</a></h3>
 <ul>
-<li><strong>拡張の <code>static</code> はプロセス共通、<code>Init_</code> はインタプリタごと。</strong> テストハーネスは 1 プロセスに多数の <code>Globals</code> を作るので、拡張が定義したクラスを <code>static</code> に持つと 2 つ目のインタプリタで壊れる。<code>Ctx::interpreter_id</code>（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。</li>
+<li><strong>拡張の <code>static</code> はプロセス共通、<code>Init_</code> はインタプリタごと。</strong> テストハーネスは 1 プロセスに多数の <code>Globals</code> を作るので、拡張が定義したクラスを <code>static</code> に持つと 2 つ目のインタプリタで壊れる。<code>Ctx::interpreter_id</code>（globals ポインタ）で key する。クラスは <code>monoruby_ext::PerInterpreter</code>（プロセス共通の表を id で引く）に置く。thread-local にしてはいけない: 1:1 スレッドモデルでは Ruby の <code>Thread</code> がそれぞれ別のカーネルスレッドで動き、<code>Init_</code> を走らせたスレッド以外から拡張のメソッドが呼ばれる（#2268）。整数ハンドルで Ruby に渡す native 状態（psych の emitter、zstd の stream / dict）も同じ理由で <code>monoruby_ext::HandleTable</code>。C のコールバックに渡す「実行中の呼び出し」の状態（sqlite3 の <code>CALLS</code>、nokogiri の <code>XSLT_CALL</code>）は呼び出したスレッドの上で呼び返されるので thread-local のままでよい。</li>
 <li><strong><code>require "x/4.0/x_native"</code> は <code>.rb</code> stand-in に届かなければならない。</strong> ext の探索は bare な <code>require "x_native.so"</code> だけに限定した（gem の nested <code>.so</code> 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。</li>
 <li><strong>テストから拡張をビルドするときは別の target dir</strong>（<code>target/ext/</code>）。外側の <code>cargo test</code> が target dir のロックを持ったままテストを走らせるので、同じ dir への nested <code>cargo build</code> は待ち続ける。aarch64 の qemu 実行では <code>--target</code> を明示する必要がある。</li>
 <li><strong>alloc 関数が無い代わりの「遅延 payload」。</strong> nokogiri の <code>SAX::Parser</code> / <code>SAX::PushParser</code> / <code>NodeSet</code> はコア側で alloc 関数を持ち、<code>new</code> の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（<code>handler_ptr</code> / <code>install_push_ctxt</code> / <code>set_ptr</code>）が <code>is_kind_of</code> で確かめて <code>native_set</code> で埋める。<code>Object#dup</code> のコピーも同じ経路で埋まる。</li>
