@@ -70,6 +70,11 @@ pub(crate) const INLINE_CAP: usize = 3;
 /// Capacity of the map an inline hash is promoted to (see `promote`).
 const PROMOTED_CAP: usize = 8;
 
+/// The most pairs CRuby keeps in an `ar_table` (`RHASH_AR_TABLE_MAX_SIZE`),
+/// which decides how a walk treats a pair appended under it
+/// ([`HashRef::walk_bound`]).
+const WALK_AR_MAX: usize = 8;
+
 //
 // ## Layout constants for JIT-generated code
 //
@@ -1215,6 +1220,36 @@ impl<'a> HashRef<'a> {
         self.len() == 0
     }
 
+    ///
+    /// The exclusive bound of a position-indexed walk that began over
+    /// `bound` entries and has reached it, when the entry count has moved
+    /// since (`__walk_bound`). That count changes during a walk only by a
+    /// pair appended without the iteration check, which only `tally(hash)`
+    /// does (CRuby's `rb_hash_stlike_update`, #2271).
+    ///
+    /// CRuby walks its two tables differently, and this follows it:
+    /// - an `ar_table` (at most [`WALK_AR_MAX`] pairs, never identity-keyed)
+    ///   is walked up to the bound it had when the walk began, so a pair
+    ///   appended since is not reached — and the walk raises once the
+    ///   table has outgrown that size and become an `st_table` (CRuby's
+    ///   `ensure_ar_table`). CRuby raises right after the block that made
+    ///   it outgrow; this raises at the end of the walk, so that no walk
+    ///   has to look at the count after every pair;
+    /// - an `st_table` is walked up to its current bound, so an appended
+    ///   pair is reached.
+    ///
+    pub(crate) fn walk_bound(&self, bound: usize) -> Result<usize> {
+        if bound > WALK_AR_MAX || self.is_compare_by_identity() {
+            Ok(self.entry_count())
+        } else if self.len() > WALK_AR_MAX {
+            Err(MonorubyErr::runtimeerr(
+                "hash representation was changed during iteration",
+            ))
+        } else {
+            Ok(bound)
+        }
+    }
+
     /// The `index`-th entry in insertion order, or `None` when out of range
     /// **or tombstoned** — the sentinel key must never surface as a Ruby
     /// value, so a dead entry answers like an out-of-range one.
@@ -1544,7 +1579,19 @@ impl<'a> HashRef<'a> {
             vm.temp_push(Value::nil());
             vm.temp_push(Value::nil());
             let mut i = start;
+            let mut bound = self.entry_count();
             loop {
+                if i >= bound {
+                    // Asked here rather than after each pair, as the
+                    // walks in Ruby ask it (builtins/hash.rb).
+                    if self.entry_count() == bound {
+                        return Ok(false);
+                    }
+                    bound = self.walk_bound(bound)?;
+                    if i >= bound {
+                        return Ok(false);
+                    }
+                }
                 // One look at the storage per step — which `f` may have
                 // promoted, tombstoned or emptied since the last one.
                 let (k, v) = match self.content() {
@@ -1996,7 +2043,8 @@ impl<'a> HashRefMut<'a> {
     ///
     /// With `FRESH` the Hash is one under construction that nothing has
     /// iterated or removed from yet (see
-    /// [`HashmapInner::aset_native_key`]), so the tombstone and iteration
+    /// [`HashmapInner::aset_native_key`]), or one that [`Self::update`]
+    /// appends to under a live traversal, so the tombstone and iteration
     /// checks are left out.
     ///
     /// Const parameters and not arguments: each caller gets the body for
@@ -2011,12 +2059,12 @@ impl<'a> HashRefMut<'a> {
         globals: &mut Globals,
     ) -> Result<()> {
         if !FRESH {
-            // Stale tombstones must go before an insert: growing the index
-            // table re-inserts every raw bucket, which would resurrect
-            // them. (During iteration the new-key check below raises
-            // first, and an existing-key update touches no bucket
-            // positions, so tombstones can only be stale — no traversal
-            // live — when this compacts.)
+            // Stale tombstones go before an insert, while no traversal is
+            // live to need their positions. (During iteration the new-key
+            // check below raises first, and an existing-key update touches
+            // no bucket positions; the one append made under a traversal,
+            // `update`'s, leaves them where they are — the index table
+            // holds only the live positions, so they stay out of reach.)
             if !self.as_ref().iter_active() {
                 self.compact_if_dirty();
             } else if !COPY && self.observes(k, globals) {
@@ -2144,13 +2192,17 @@ impl<'a> HashRefMut<'a> {
             self.set_value_at(i, v);
             return Ok(());
         }
-        self.append_observed(k, hash_value, v, vm, globals)
+        self.append_observed::<false>(k, hash_value, v, vm, globals)
     }
 
     /// The new-key half of [`Self::store_observed`]: file `k` => `v`
     /// under `hash_value`, which the probe has just missed. Nothing is
     /// called on the key.
-    fn append_observed(
+    ///
+    /// With `ITER_OK` a traversal may be live, and the pair is appended
+    /// all the same, behind the tombstones it may have left
+    /// ([`Self::update`]).
+    fn append_observed<const ITER_OK: bool>(
         &mut self,
         k: Value,
         hash_value: i64,
@@ -2160,12 +2212,13 @@ impl<'a> HashRefMut<'a> {
     ) -> Result<()> {
         // A new key. The key's methods may have started a traversal that
         // is still open (an external enumerator), or left tombstones.
-        if self.as_ref().iter_active() {
+        if !self.as_ref().iter_active() {
+            self.compact_if_dirty();
+        } else if !ITER_OK {
             return Err(MonorubyErr::runtimeerr(
                 "can't add a new key into hash during iteration",
             ));
         }
-        self.compact_if_dirty();
         if self.is_inline() {
             let ident = self.as_ref().is_ident_inline();
             let len = self.inline_len();
@@ -2198,6 +2251,14 @@ impl<'a> HashRefMut<'a> {
     /// ([`is_observed_key`]) is hashed once, as `rb_hash_stlike_update`
     /// hashes it; `f` runs no Ruby code, and an error it answers leaves
     /// the Hash as it was. Answers what was stored.
+    ///
+    /// Like `rb_hash_stlike_update`, this does not look at the iteration
+    /// level: a new pair is appended while the Hash is being walked, after
+    /// every position the walk has (#2271). Whether the walk reaches it is
+    /// the walk's business ([`HashRef::walk_bound`]). The entries keep
+    /// their positions — tombstones included, which stay until the walk is
+    /// over — so the only thing the append moves is the entry vector,
+    /// which every walk reads afresh at each step.
     pub(crate) fn update(
         &mut self,
         k: Value,
@@ -2213,7 +2274,7 @@ impl<'a> HashRefMut<'a> {
                 return Ok(v);
             }
             let v = f(None, globals)?;
-            self.append_observed(k, hash_value, v, vm, globals)?;
+            self.append_observed::<true>(k, hash_value, v, vm, globals)?;
             return Ok(v);
         }
         // Settled without a call: an existing pair is updated where it
@@ -2227,7 +2288,14 @@ impl<'a> HashRefMut<'a> {
             return Ok(v);
         }
         let v = f(None, globals)?;
-        self.store::<false, false>(k, v, vm, globals)?;
+        if self.as_ref().iter_active() {
+            // The key is one that is not asked, so the store calls
+            // nothing, and `FRESH` leaves out what it would do about the
+            // traversal: raise, or compact the tombstones under it.
+            self.store::<false, true>(k, v, vm, globals)?;
+        } else {
+            self.store::<false, false>(k, v, vm, globals)?;
+        }
         Ok(v)
     }
 
@@ -2914,6 +2982,11 @@ impl Hashmap {
     /// See [`HashRef::live_at`].
     pub(crate) fn live_at(&self, index: usize) -> bool {
         self.inner().live_at(index)
+    }
+
+    /// See [`HashRef::walk_bound`].
+    pub(crate) fn walk_bound(&self, bound: usize) -> Result<usize> {
+        self.inner().walk_bound(bound)
     }
 
     pub fn is_empty(&self) -> bool {

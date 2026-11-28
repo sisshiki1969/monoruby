@@ -119,6 +119,9 @@ pub(super) fn init(globals: &mut Globals) {
         inline_gen2!(hash_live_at),
         1,
     );
+    // The bound of such a walk at its end, once the entry count has moved
+    // under it (a pair `tally` appended): rare, so not inlined.
+    globals.define_builtin_func(HASH_CLASS, "__walk_bound", walk_bound, 1);
     // Internals of the Ruby-level `Hash#each` (builtins/hash.rb). `each`
     // lives in Ruby so that a `h.each { .. }` call site can inline both the
     // method and the block; these three are the parts that cannot.
@@ -1700,6 +1703,27 @@ fn value_at(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr)
 #[monoruby_builtin]
 fn entry_count(_vm: &mut Executor, _globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
     let n = lfp.self_val().as_hash().entry_count();
+    Ok(Value::integer(n as i64))
+}
+
+///
+/// ### Hash#__walk_bound (internal)
+///
+/// - __walk_bound(bound) -> Integer
+///
+/// The new exclusive bound of a position-indexed walk that began with
+/// `bound` entries and has reached it, asked when `__entry_count` no
+/// longer equals it: a pair
+/// was appended under the walk, which only `tally(hash)` does (#2271).
+/// `bound` itself for a small Hash (CRuby's `ar_table`, whose walk does
+/// not reach the new pair), the current count for a large or an
+/// identity-keyed one (`st_table`); a RuntimeError once a small one has
+/// outgrown its size. See `HashRef::walk_bound`.
+///
+#[monoruby_builtin]
+fn walk_bound(_vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) -> Result<Value> {
+    let bound = lfp.arg(0).coerce_to_i64(globals)?.max(0) as usize;
+    let n = lfp.self_val().as_hash().walk_bound(bound)?;
     Ok(Value::integer(n as i64))
 }
 
