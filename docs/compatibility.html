@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -275,9 +275,8 @@ therefore within a rounding error of an unfiltered one.</li>
 <p>The audit that cut the skip list down from coarse file-level exclusions to
 that handful is written up in <a href="design/ruby_spec_skip_tags.html">ruby/spec hang
 countermeasures</a>. The structural hangs are
-gone under either thread model: a blocking read releases the GVL (1:1) or
-parks the calling thread on the scheduler’s fd poller (M:1) instead of
-blocking the process, so specs like <code>core/io/copy_stream_spec.rb</code> and
+gone: a blocking read parks the calling thread on an fd poll with the GVL
+released instead of blocking the process, so specs like <code>core/io/copy_stream_spec.rb</code> and
 <code>core/io/select_spec.rb</code> run to completion.</p>
 <h2 id="running-the-specs-yourself"><a class="header" href="#running-the-specs-yourself">Running the specs yourself</a></h2>
 <p>ruby/spec and mspec are cloned alongside the monoruby checkout, not inside
@@ -296,9 +295,8 @@ objects not moving. See <a href="design/gc.html">GC — mechanism and
 implementation</a>.</li>
 <li><strong>Threads are real kernel threads behind a GVL.</strong> Each Ruby <code>Thread</code> is an
 OS thread that holds a global lock while it runs Ruby, releasing it at
-safepoints and around blocking syscalls; the older M:1 green scheduler,
-with time-slice preemption, is still there behind
-<code>MONORUBY_THREAD_MODEL=green</code>. See <a href="design/threads.html">Thread / Fiber / non-blocking IO /
+safepoints (with 10 ms time-slice preemption) and around blocking
+syscalls. See <a href="design/threads.html">Thread / Fiber / non-blocking IO /
 preemption</a>.</li>
 </ul>
 <p>C extensions are no longer on this list. Since October 2026 monoruby ships a

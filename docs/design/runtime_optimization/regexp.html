@@ -35,7 +35,7 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-afb61271.js"></script>
@@ -193,7 +193,7 @@ String 側の表現（共有部分文字列、code range、<code>regex_view</cod
 束ねている。<code>Regex</code> は生の <code>re_pattern_buffer</code> ポインタ、コンパイル時の
 パターンバイト列、オプション語、<code>OnigmoEncoding</code>、コンパイル時の診断
 <code>Vec&lt;String&gt;</code> を持ち、<code>unsafe impl Send + Sync</code> なので、プロセス全体で 1 つの
-<code>Arc&lt;Regex&gt;</code> をグリーンスレッド間で共有できる。</p>
+<code>Arc&lt;Regex&gt;</code> をスレッド間で共有できる。</p>
 <p>構築は <code>Regex::new_bytes_with_encoding</code> の 1 本に集約され、<code>onig_new</code> を
 <code>OnigSyntaxRuby</code> で呼び、Onigmo の <code>onig_syntax_warn</code> 出力をフックで拾って
 <code>warnings</code> に溜める。</p>

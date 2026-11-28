@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -283,8 +283,9 @@ Ruby で書かれているので、<code>RbConfig::CONFIG</code> を monoruby �
 <code>setjmp</code> で作り、C 呼び出しの境界（builtin trampoline の直下、JIT
 フレームを跨がない場所）で必ず受けてから <code>set_error</code> に変換する設計が
 要る。C 側のリソース解放は <code>rb_ensure</code> に頼る CRuby 流儀に従わせる。</li>
-<li><strong>GVL がなく green thread。</strong> <code>rb_thread_call_without_gvl</code> を
-<code>NativeOp</code> オフロードに写像する。<code>rb_thread_create</code> 等は対象外にする。</li>
+<li><strong>(当時は)GVL がなく green thread。</strong> <code>rb_thread_call_without_gvl</code> を
+<code>NativeOp</code> オフロードに写像する(現在は 1:1 モデルで GVL を外して呼ぶ、
+<code>doc/threads.md</code> §12.7)。<code>rb_thread_create</code> 等は対象外にする。</li>
 <li><strong>レイアウト前提マクロ。</strong> <code>RSTRING_PTR</code> / <code>RARRAY_PTR</code> は lazy
 materialize + pin、<code>RTYPEDDATA</code> は co-allocation で吸収し、<code>RARRAY_PTR[i] =</code>
 の lvalue 書き込みは諦める（旧稿 §4）。</li>

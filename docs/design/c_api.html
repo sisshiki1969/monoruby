@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -282,8 +282,7 @@ CRuby の隠し ivar）は <code>/</code> を前に付けたコア側の隠し i
 <code>#instance_variables</code> や inspect には出ない。</li>
 <li>Ruby を呼ぶ API（<code>rb_funcall</code>、<code>rb_yield</code>、<code>rb_proc_call</code>、
 <code>rb_thread_call_without_gvl</code>）は戻ったあと <code>capi_cur</code> を呼ぶ前の値に戻す。
-green thread の切り替えは LIFO でないので、呼び出し中に別スレッドが同じ
-OS スレッドで拡張に入っても自分のフレームが残る。</li>
+入れ子の呼び出しが外側のフレームを壊さないための保存・復元。</li>
 </ul>
 <h3 id="33-gc-呼び出し中は全部生かす"><a class="header" href="#33-gc-呼び出し中は全部生かす">3.3 GC: 呼び出し中は全部生かす</a></h3>
 <p>CRuby は C スタックを保守的に走査するので、拡張はローカル変数の <code>VALUE</code>
@@ -333,14 +332,14 @@ String 自身のバッファを返す。書き込み可能で、<code>rb_str_new
 （<code>native_extension_loading.md</code> §6.2）。</li>
 <li><code>rb_encoding</code> は名前ごとの小さな記録。添字 0/1/2 は CRuby と同じく
 ASCII-8BIT / UTF-8 / US-ASCII。</li>
-<li><code>rb_thread_call_without_gvl</code> は <code>call_blocking_ubf</code>（1:1 モデルでは GVL を
-外して呼んだカーネルスレッド上で、green では native pool のワーカーで実行）。
+<li><code>rb_thread_call_without_gvl</code> は <code>call_blocking_ubf</code>（GVL を外して、呼んだ
+カーネルスレッド上で実行）。
 ubf は呼び出しの間 <code>ThreadInner::blocking_ubf</code> に記録され、そのスレッドへの
 <code>Thread#wakeup</code> / <code>#raise</code> / <code>#kill</code>（<code>interrupt_blocking</code>）と、main が
 ブロック中のシグナル（ポーリング点でそれを見たスレッドが呼ぶ）で 1 回だけ
 GVL を持ったまま呼ばれる（CRuby の <code>rb_threadptr_interrupt</code> と同じ）。
 <code>RUBY_UBF_IO</code> は関数なしで、割り込みの <code>SIGVTALRM</code> がシステムコールを
-<code>EINTR</code> で切る（1:1 モデルのみ。green ではワーカーに送るシグナルがなく未対応）。
+<code>EINTR</code> で切る。
 fixture は <code>tests/capi/capi_nogvl.c</code>。</li>
 <li>多くの関数は Ruby のメソッドを <code>rb_funcall</code> で呼ぶだけの薄い実装
 （TruffleRuby の <code>Truffle::CExt</code> と同じ方針）。正しさ優先で、ホットな

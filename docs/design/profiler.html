@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -381,7 +381,7 @@ stay with the caller.</li>
 <p>Each OS thread knows the <code>Executor</code> running on it: <code>prof::start</code> sets it
 for the main program, <code>prof::enter_thread</code> for a native thread’s body, and
 <code>prof::set_executor</code> follows every fiber switch (<code>Fiber#resume</code> /
-<code>#transfer</code>, the enumerator fibers) and green-thread resume. Each thread
+<code>#transfer</code>, the enumerator fibers). Each thread
 also carries a phase byte, set by guards around <code>Allocator::gc</code>, the JIT
 compile in <code>Codegen::compile</code>, the parser and <code>bytecode_compile</code>, and the
 global allocator.</p>

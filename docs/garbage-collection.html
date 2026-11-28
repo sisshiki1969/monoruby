@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-afb61271.js"></script>
@@ -201,7 +201,7 @@
 <li><strong>malloc pressure</strong> — a custom <code>#[global_allocator]</code> tracks off-heap allocation (String/Array backing stores etc.) and requests a GC when it outgrows an adaptive threshold, so heavy malloc traffic can’t outrun the heap-cell trigger.</li>
 <li><strong>Explicit</strong> — <code>GC.start</code>.</li>
 </ul>
-<p>Safepoint polls (<code>compare alloc_flag; conditionally call gc</code>) are emitted at <strong>callee entry and loop back-edges</strong> in both the VM tier and JIT code. The same poll also drives green-thread preemption and pending-signal delivery (see <a href="threads-and-fibers.html">Threads and Fibers</a>). Rooting is <strong>precise</strong>: roots are explicitly enumerated — the executor’s frame chain, temporary-value stack, the green-thread scheduler’s thread registry, pending exceptions, and global state — never conservatively scanned off the machine stack; JIT code spills live registers before a safepoint call.</p>
+<p>Safepoint polls (<code>compare alloc_flag; conditionally call gc</code>) are emitted at <strong>callee entry and loop back-edges</strong> in both the VM tier and JIT code. The same poll also drives thread preemption (the GVL handoff) and pending-signal delivery (see <a href="threads-and-fibers.html">Threads and Fibers</a>). Rooting is <strong>precise</strong>: roots are explicitly enumerated — the executor’s frame chain, temporary-value stack, the thread registry, pending exceptions, and global state — never conservatively scanned off the machine stack; JIT code spills live registers before a safepoint call.</p>
 <h2 id="controlling-the-gc"><a class="header" href="#controlling-the-gc">Controlling the GC</a></h2>
 <div class="table-wrapper">
 <table>

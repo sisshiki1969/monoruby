@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -648,7 +648,7 @@ Value を持たず、ivar ストアは全経路バリア済み。</li>
 <pre><code>Root::mark → YIELDER.mark      (ブロック/ファイバの yielder)
            → Globals::mark     (globals.rs)
            → Executor::mark    (executor.rs:248)
-           → scheduler::mark    (executor.rs:3729 — グリーンスレッドの root)
+           → scheduler::mark    (executor.rs:3729 — Ruby スレッドの root)
 </code></pre>
 <p><code>Executor::mark</code>(<code>executor.rs:248</code>)が辿るもの:</p>
 <ul>
@@ -662,17 +662,17 @@ Value を持たず、ivar ストアは全経路バリア済み。</li>
 </ul>
 <p><code>Globals::mark</code> はクラステーブル・定数・グローバル変数・呼び出しサイト等の
 恒久ルートをマークする。</p>
-<h3 id="グリーンスレッドschedulermark"><a class="header" href="#グリーンスレッドschedulermark">グリーンスレッド(<code>scheduler::mark</code>)</a></h3>
-<p>green thread 導入後、GC ルートには<strong>スケジューラの生存スレッド registry</strong>が加わった
-(<code>scheduler::mark</code>, <code>scheduler.rs</code>)。<code>Scheduler::mark</code> は <code>threads</code> / <code>current</code> / <code>main</code> /
-<code>ready</code> / <code>sleepers</code> / <code>io_waiters</code> の全 Thread オブジェクトをマークし、<code>in_scheduler</code>
-中は main の Executor(<code>main_exec</code>)も deref してマークする。各 Thread は
-<code>impl GC for ThreadInner</code> を通じて自分の <code>handle</code> Executor(→ その CFP チェーン)と
-proc/args/result/exception/joiners/pending/masks/last_status をマークする。</p>
-<p>したがって GC は事実上<strong>複数の Executor</strong>をマークする:各 green thread の <code>handle</code> と、
-<code>main_exec</code> 経由で辿る埋め込み側所有の main Executor。切替はセーフポイントでしか
-起きないので、サスペンド中のどのスレッドのフレームも GC-complete
-(詳細は <code>doc/threads.md</code> §2・§3.4・§8)。</p>
+<h3 id="ruby-スレッドschedulermark"><a class="header" href="#ruby-スレッドschedulermark">Ruby スレッド(<code>scheduler::mark</code>)</a></h3>
+<p>GC ルートには<strong>スレッド registry</strong> が含まれる(<code>scheduler::mark</code>, <code>scheduler.rs</code>)。
+<code>Scheduler::mark</code> は <code>threads</code> / <code>current</code> / <code>main</code> の全 Thread オブジェクトをマークし、
+current が main でない間は main の Executor(<code>main_exec</code>)も deref してマークする。
+各 Thread は <code>impl GC for ThreadInner</code> を通じて自分の <code>handle</code> Executor
+(→ その CFP チェーン)と proc/args/result/exception/joiners/pending/masks/last_status
+をマークする。</p>
+<p>したがって GC は事実上<strong>複数の Executor</strong>をマークする:各スレッドの <code>handle</code> と、
+<code>main_exec</code> 経由で辿る埋め込み側所有の main Executor。GVL の受け渡しは
+セーフポイントでしか起きないので、GVL を待っているどのスレッドのフレームも
+GC-complete(詳細は <code>doc/threads.md</code> §2・§3.1・§12)。</p>
 <h3 id="81-ビルトインの一時値--素の-vecvalue-はルートではない"><a class="header" href="#81-ビルトインの一時値--素の-vecvalue-はルートではない">8.1 ビルトインの一時値 — 素の <code>Vec&lt;Value&gt;</code> は<strong>ルートではない</strong></a></h3>
 <p>ルート走査は上記の列挙がすべてなので、Rust 側のローカル(<code>Vec&lt;Value&gt;</code>、
 <code>HashMap&lt;_, Value&gt;</code>、単なる <code>Value</code> 束など)は <strong>GC からまったく見えない</strong>。

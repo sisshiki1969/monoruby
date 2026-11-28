@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -729,8 +729,8 @@ walk once the patch fallback was gone, and are now one function
 <h3 id="101-the-other-threads-chains-and-the-frame-at-a-poll"><a class="header" href="#101-the-other-threads-chains-and-the-frame-at-a-poll">10.1 The other threads’ chains, and the frame at a poll</a></h3>
 <p>A basic-op redefinition is the one caller of the walk whose stale frames are
 not all on the redefining thread’s stack. Every other Ruby thread is
-suspended under it — a green thread until the scheduler switches to it, a
-kernel thread until it gets the GVL (doc/threads.md §12) — and each holds
+suspended under it — a kernel thread waiting for the GVL (doc/threads.md
+§12) — and each holds
 compiled frames that inlined the operator just replaced. <code>check_bop_redefine</code>
 therefore walks every chain: its own, then the chain of each executor
 <code>scheduler::suspended_executors</code> returns (the context a thread parked or

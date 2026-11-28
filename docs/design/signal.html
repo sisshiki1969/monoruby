@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-ba9b47a4.js";
+            window.path_to_searchindex_js = "../searchindex-70a11531.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -310,22 +310,14 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 <code>execute_gc</code> は<strong>ハンドラ呼び出し中に CODEGEN 借用を保持しない</strong>ので、trap ハンドラが
 その内部で JIT コンパイルや GC を起こしても自由に再入できる。</p>
 <h3 id="41-配送ゲートschedulersignal_delivery_ok"><a class="header" href="#41-配送ゲートschedulersignal_delivery_ok">4.1 配送ゲート(<code>scheduler::signal_delivery_ok</code>)</a></h3>
-<p>すべての poll 地点で配送してよいわけではない。3 条件を満たす poll だけが drain する:</p>
-<ol>
-<li><strong>メインのグリーンスレッド上</strong>であること(<code>current == main</code>)。CRuby と同じく、
-非メインスレッド実行中に届いたシグナルはメインの次の poll まで保留される。</li>
-<li>スケジューラ自身の<strong>機構(<code>machinery</code>)が走っていない</strong>こと。</li>
-<li>スケジューラの<strong>入口(<code>pass</code> / <code>sleep</code> / <code>join</code> / <code>terminate_all</code>)の中でない</strong>こと。
-これらの内側ではコンテキストが既にスイッチ用に保存されている(あるいは直後に
-保存される)場合があり、その上に積んだ Ruby フレームは保存コンテキストの復帰時に
-<strong>もう一度</strong>実行されてしまう。</li>
-</ol>
-<p>3 番目は <code>SCHED_CALL_DEPTH</code>(RAII ガード <code>SchedCall</code>)で数える。<strong>この深度は
-コンテキストスイッチと一緒に持ち回らなければならない</strong> — カウンタは OS スレッドの
-thread-local だが、ガードは各グリーンスレッドのスタック上にあり、park した
-スレッドは Rust フレームごと凍結されるのでガードが解放されないまま残る。
-<code>dispatch</code> は <code>machinery</code> と同じ区間で深度を退避・復元し、park 中の深度は
-<code>ThreadInner::sched_call_depth</code> に置く。</p>
+<p>すべての poll 地点で配送してよいわけではない。<strong>メインスレッド上</strong>
+(<code>current == main</code>)の poll だけが drain する。CRuby と同じく、非メインスレッド
+実行中に届いたシグナルはメインの次の poll まで保留される(非メインのホルダは
+その poll で GVL を譲る、<code>doc/threads.md</code> §12.8)。</p>
+<p>2026-11 まであった M:1 グリーンスケジューラでは、これに加えてスケジューラの
+機構と入口(<code>pass</code> / <code>sleep</code> / <code>join</code>)の内側を <code>SCHED_CALL_DEPTH</code> で除外して
+いた。保存中のコンテキストの上に積んだ Ruby フレームが復帰時にもう一度実行される
+のを防ぐためで、コンテキストを保存して切り替えない 1:1 モデルでは不要になった。</p>
 <blockquote>
 <p>これを怠ると、<code>sleep</code> で park したスレッドが 1 本あるだけでカウンタが恒久的に
 1 以上に張り付き、以後 <code>Signal.trap</code> ハンドラが<strong>二度と走らなくなる</strong>。
@@ -454,16 +446,16 @@ SIGALRM をスキップ)。</li>
 <hr>
 <h2 id="9-スレッド--スケジューラとの関係"><a class="header" href="#9-スレッド--スケジューラとの関係">9. スレッド / スケジューラとの関係</a></h2>
 <ul>
-<li><strong>どのスレッドが変換するか</strong>: main グリーンスレッド(§4.1 の配送ゲート、CRuby と同じ)。
+<li><strong>どのスレッドが変換するか</strong>: main スレッド(§4.1 の配送ゲート、CRuby と同じ)。
 非 main スレッドの poll ではビットマップと SIGNAL レーンが残り、main の次の poll が配送する。</li>
 <li>poll ワードは GC・プリエンプションと共有の <code>u32</code> で、8bit×4 のレーンに分割
 (<code>poll_flag.rs</code>)。書き手はアリーナのページ圧力 / malloc / <code>GC.start</code>(GC レーン)、
 <strong>シグナルハンドラ(SIGNAL レーン)</strong>、プリエンプトタイマ(PREEMPT レーン)。
 全書き込みは冪等なアトミック <code>fetch_or</code>/<code>fetch_and</code>(<code>doc/threads.md</code> §8.2 /
 <code>doc/gc.md</code> §4.1)。</li>
-<li>グリーンスレッドをまたぐブロッキング IO はスケジューラの fd ポーラで park する。
-シグナルによる EINTR が待機を起こし poll 地点を通すので、他スレッドが park していても
-シグナル応答性が保たれる。</li>
+<li>ブロッキング IO は GVL を手放して fd を <code>poll(2)</code> する(park)。シグナルは main の
+カーネルスレッドに配られ、その EINTR が待機を起こし poll 地点を通すので、他スレッドが
+park していてもシグナル応答性が保たれる。</li>
 </ul>
 <hr>
 <h2 id="10-終了時の-signalexceptionシグナル死"><a class="header" href="#10-終了時の-signalexceptionシグナル死">10. 終了時の SignalException(シグナル死)</a></h2>
