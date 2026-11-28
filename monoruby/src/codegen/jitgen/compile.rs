@@ -666,6 +666,7 @@ impl<'a> JitContext<'a> {
                 ir.new_hash(using_fpr, args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::HashInsert { hash, args, len } => {
                 state.write_back_range(ir, args, len * 2);
@@ -675,6 +676,7 @@ impl<'a> JitContext<'a> {
                 ir.hash_insert(using_fpr, hash, args, len as _);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, hash);
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::ArrayConcat { dst, src } => {
                 state.write_back_slots(ir, &[dst, src]);
@@ -683,6 +685,7 @@ impl<'a> JitContext<'a> {
                 ir.array_concat(using_fpr, dst, src);
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::Range {
                 dst,
@@ -699,6 +702,7 @@ impl<'a> JitContext<'a> {
                 let using_fpr = state.get_using_fpr(ir);
                 ir.new_range(start, end, exclude_end, using_fpr, error);
                 state.def_rax2acc(ir, dst);
+                self.check_bop_after_helper(state, ir);
             }
 
             TraceIr::LoadConst(dst, id) => {
@@ -1110,6 +1114,7 @@ impl<'a> JitContext<'a> {
                 ir.handle_error(error);
                 state.def_rax2acc(ir, lhs);
                 state.unset_side_effect_guard();
+                self.check_bop_after_helper(state, ir);
             }
 
             TraceIr::ArrayAny { reg } => {
@@ -1131,25 +1136,44 @@ impl<'a> JitContext<'a> {
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::BlockCode { dst, src } => {
-                // Only a Symbol in a scope with refinements active becomes
-                // something else (`runtime::jit_block_code`); the set is
+                // Only a Symbol becomes something else
+                // (`runtime::jit_block_code`): in a scope with refinements
+                // active, or once `Symbol#to_proc` is redefined. The set is
                 // this body's, a compile-time constant (`using` bumps the
-                // class version).
+                // class version); that `Symbol#to_proc` is the builtin is
+                // an assumption the class-version guard keeps, recorded so
+                // the salvage asks it again.
                 let set = self.refinements();
-                if set.is_empty() || state.class(src).is_some_and(|c| c != SYMBOL_CLASS) {
+                let maybe_symbol = state.class(src).is_none_or(|c| c == SYMBOL_CLASS);
+                let builtin_to_proc = maybe_symbol && self.assume_builtin_symbol_to_proc(state, ir);
+                if !maybe_symbol || (builtin_to_proc && set.is_empty()) {
                     if dst != src {
                         if !matches!(state.mode(src), LinkMode::S(_) | LinkMode::C(_)) {
                             state.flush_gp(ir);
                         }
                         state.copy_slot(ir, src, dst);
                     }
-                } else {
+                } else if builtin_to_proc {
+                    // Runs no Ruby and cannot fail.
                     state.flush_gp(ir);
                     state.write_back(ir, src, Keep::All);
                     ir.block_code(state, src, set, pc);
                     state.def_rax2acc(ir, dst);
+                } else {
+                    // A Symbol calls the redefined `to_proc`.
+                    state.flush_gp(ir);
+                    state.write_back(ir, src, Keep::All);
+                    let error = ir.new_error(state);
+                    ir.block_code(state, src, set, pc);
+                    ir.handle_error(error);
+                    state.unset_class_version_guard();
+                    state.unset_const_version_guard();
+                    state.unset_side_effect_guard();
+                    state.def_rax2acc(ir, dst);
+                    self.check_bop_after_helper(state, ir);
                 }
             }
             TraceIr::Mov(dst, src) => {
@@ -1186,6 +1210,7 @@ impl<'a> JitContext<'a> {
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::ConcatRegexp(dst, arg, len) => {
                 state.flush_gp(ir);
@@ -1196,6 +1221,7 @@ impl<'a> JitContext<'a> {
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::ExpandArray {
                 src,
@@ -1214,6 +1240,7 @@ impl<'a> JitContext<'a> {
                 }
                 ir.expand_array(state, dst, len, rest_pos);
                 ir.handle_error(error);
+                self.check_bop_after_helper(state, ir);
             }
             TraceIr::UndefMethod { undef } => {
                 state.flush_gp(ir);
@@ -2074,7 +2101,56 @@ impl<'a> JitContext<'a> {
         }
     }
 
-    fn jit_check_method(&self, class_id: CachedClass, name: IdentId) -> Option<(FuncId, Visibility)> {
+    ///
+    /// After a frameless runtime helper that may run Ruby code (a `#hash`,
+    /// `#to_s`, `#to_a`, `#to_ary`, `#<=>`, `#===`, a user-defined
+    /// operator, ...) and whose result the state has already defined:
+    /// deopt to the next instruction if a basic operator was redefined
+    /// meanwhile (#2198). The eviction converts the suspended compiled
+    /// frames through the return addresses their callees hold, and the
+    /// frame that called the helper has no such callee (the helper pushes
+    /// no frame), so it has to look for itself.
+    ///
+    pub(super) fn check_bop_after_helper(&self, state: &AbstractState, ir: &mut AsmIr) {
+        ir.check_bop_after(state, self.recv_miss_recompile_target());
+    }
+
+    ///
+    /// Whether `Symbol#to_proc` is the builtin, so that a `&:sym` block
+    /// argument passes the bare Symbol. When it is, the answer is an
+    /// assumption of the unit: recorded in `inline_method_cache` (the
+    /// salvage asks it again) and kept by the class-version guard, which
+    /// any redefinition moves.
+    ///
+    fn assume_builtin_symbol_to_proc(&mut self, state: &mut AbstractState, ir: &mut AsmIr) -> bool {
+        let func_id = self
+            .store
+            .check_method_for_class_with_version(
+                SYMBOL_CLASS,
+                IdentId::TO_PROC,
+                self.class_version(),
+            )
+            .and_then(|entry| entry.func_id());
+        if func_id.is_none() || func_id != self.store.symbol_to_proc_fid() {
+            return false;
+        }
+        self.inline_method_cache.push(InlineCacheEntry {
+            recv_class: CachedClass::from_class(SYMBOL_CLASS),
+            name: Some(IdentId::TO_PROC),
+            refinements: RefinementSetId::EMPTY,
+            func_id,
+            super_of: None,
+            visibility: None,
+        });
+        self.guard_class_version(state, ir, true);
+        true
+    }
+
+    fn jit_check_method(
+        &self,
+        class_id: CachedClass,
+        name: IdentId,
+    ) -> Option<(FuncId, Visibility)> {
         let refinements = self.refinements();
         let class_version = self.class_version();
         let entry = if refinements.is_empty() {

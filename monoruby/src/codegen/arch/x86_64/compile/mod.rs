@@ -2043,7 +2043,8 @@ impl Codegen {
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`: the
     /// block a `&expr` value passes from a body whose refinements are
-    /// `set`. Runs no Ruby and cannot fail.
+    /// `set`. Runs Ruby (and can fail) only once `Symbol#to_proc` is
+    /// redefined.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
@@ -2058,8 +2059,12 @@ impl Codegen {
             movq rdx, [rbp - (jrbp_local(src))];
             movq rcx, (set.get() as u64);
             movq r8, (pc.as_ptr() as u64);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::jit_block_code);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }

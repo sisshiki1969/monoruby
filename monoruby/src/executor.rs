@@ -6154,17 +6154,32 @@ impl Executor {
             return Ok(Proc::from_outer(outer, fid, pc));
         }
         // `to_proc` fallback (Method#to_proc, user classes with #to_proc,
-        // ...). Matches CRuby's `&obj` coercion: a non-Proc `#to_proc`
-        // result and a missing `#to_proc` both raise TypeError.
-        if let Some(result) = self.block_arg_to_proc(globals, bh.0)? {
+        // ...).
+        let set = self.ruby_level_refinements(globals);
+        self.block_arg_to_proc_in(globals, bh.0, set)
+    }
+
+    /// `obj.to_proc` for a `&obj` block argument, under the refinement set
+    /// *set* of the scope that wrote the `&`. Matches CRuby's `&obj`
+    /// coercion: a non-Proc `#to_proc` result and a missing `#to_proc` both
+    /// raise TypeError.
+    pub(crate) fn block_arg_to_proc_in(
+        &mut self,
+        globals: &mut Globals,
+        obj: Value,
+        set: RefinementSetId,
+    ) -> Result<Proc> {
+        if let Some(result) =
+            self.invoke_method_if_exists_in(globals, IdentId::TO_PROC, obj, &[], None, None, set)?
+        {
             if let Some(proc) = result.is_proc() {
                 return Ok(proc);
             }
             // `#to_proc` returned a non-Proc:
-            // `can't convert X into Proc (X#to_proc gives Y)`.
+            // `can't convert X to Proc (X#to_proc gives Y)`.
             return Err(MonorubyErr::cant_convert_error(
                 &globals.store,
-                bh.0,
+                obj,
                 result,
                 "Proc",
                 IdentId::TO_PROC,
@@ -6173,7 +6188,7 @@ impl Executor {
         // No `#to_proc`: `no implicit conversion of X into Proc`.
         Err(MonorubyErr::no_implicit_conversion(
             &globals.store,
-            bh.0,
+            obj,
             PROC_CLASS,
         ))
     }
@@ -7148,6 +7163,16 @@ pub enum RecompileReason {
     /// the recompile gives the site its ordinary helper call, whose error
     /// exit keeps the callee framed. One-shot per site.
     ImpureHelper = 9,
+    /// A generic operator helper (`AsmInst::GenericBinOp` and its
+    /// relatives) ran Ruby code, and a basic operator was redefined while
+    /// it did. The frame that called the helper cannot be converted by the
+    /// eviction's chain walk (no callee frame of its own holds its return
+    /// address), so it checks after the call (`AsmInst::CheckBOP`) and
+    /// resumes the interpreter at the next instruction. The check compares
+    /// the global redefinition counter, which an unrelated redefinition
+    /// moves too: the recompile bakes the current count, so a body whose
+    /// code is still valid stops deopting there.
+    BopRedefined = 10,
 }
 
 impl RecompileReason {

@@ -3815,7 +3815,8 @@ impl Codegen {
     }
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
-    /// Mirrors x86 `emit_block_code`; runs no Ruby and cannot fail.
+    /// Mirrors x86 `emit_block_code`; runs Ruby (and can fail) only once
+    /// `Symbol#to_proc` is redefined.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
@@ -3836,8 +3837,12 @@ impl Codegen {
             mov x3, (set);
             mov x4, (pc);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;                 // result in x0
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);

@@ -1389,6 +1389,28 @@ impl AsmIr {
         self.push(AsmInst::CheckBOP { deopt });
     }
 
+    ///
+    /// [`Self::check_bop`] after a helper call that ran Ruby code and whose
+    /// result the state has already defined: the exit resumes at the next
+    /// instruction. With a *target* the exit recompiles the unit after a
+    /// few misses (`RecompileReason::BopRedefined`), so a redefinition the
+    /// unit's code does not depend on costs a few deopts, not one per pass.
+    ///
+    pub(super) fn check_bop_after(
+        &mut self,
+        state: &AbstractFrame,
+        target: Option<RecompileTarget>,
+    ) {
+        let pc = state.pc().next();
+        let deopt = match target {
+            Some(target) if self.deopt_redirect.is_none() && self.deopt_recompile.is_none() => {
+                self.new_recompile_deopt_with_pc(state, pc, RecompileReason::BopRedefined, target)
+            }
+            _ => self.new_deopt_with_pc(state, pc),
+        };
+        self.push(AsmInst::CheckBOP { deopt });
+    }
+
     pub(super) fn block_arg(
         &mut self,
         state: &AbstractFrame,

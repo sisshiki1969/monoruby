@@ -21,7 +21,8 @@ pub(super) fn init(globals: &mut Globals) {
     globals.define_builtin_func(SYMBOL_CLASS, "to_s", sym_to_s, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "name", sym_name, 0);
     globals.define_builtin_func(SYMBOL_CLASS, "inspect", sym_inspect, 0);
-    globals.define_builtin_func(SYMBOL_CLASS, "to_proc", sym_to_proc, 0);
+    let to_proc_fid = globals.define_builtin_func(SYMBOL_CLASS, "to_proc", sym_to_proc, 0);
+    globals.store.set_symbol_to_proc_fid(to_proc_fid);
     // Regexp-matching delegations. These are native (not the pure-Ruby
     // `to_s.=~` forms in builtins/symbol.rb) specifically so that `$~`
     // and the BACK_REF / NTH_REF family land on the *caller's* LEP.
