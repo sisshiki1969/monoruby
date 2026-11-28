@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a8400f70.js";
+            window.path_to_searchindex_js = "searchindex-05c2266b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-2dc4913e.js"></script>
@@ -3851,6 +3851,20 @@ write-back を再生し、返りアドレススロットを共有 VM continuatio
 <code>doc/chain_deopt.md</code> §10.1。</li>
 <li><strong><code>def</code> 地点</strong> — <code>AsmInst::CheckBOP</code> は JIT データ語のカウンタを
 コンパイル時の値と比べる（class-version ガードと同じ世代比較）。</li>
+<li><strong>Ruby を走らせうるヘルパの直後</strong> — 汎用演算子ヘルパ（多相な <code>==</code> など）、
+文字列・正規表現の式展開（<code>#to_s</code>）、Hash リテラル（<code>#hash</code>）、Range
+リテラル（<code>#&lt;=&gt;</code>）、splat（<code>#to_a</code>）、多重代入（<code>#to_ary</code>）、<code>when *ary</code>、
+再定義された <code>Symbol#to_proc</code> の <code>&amp;:sym</code> は、フレームを積まないヘルパの中で
+Ruby を実行する。そこで再定義が起きても、ヘルパを呼んだフレームには
+返りアドレスを保持する callee が無いので、4. の walk では変換されない。
+これらの直後にも <code>CheckBOP</code> を置き（<code>JitContext::check_bop_after_helper</code>）、
+出口は結果を書き戻して次の命令から VM で再開する。カウンタは無関係な
+再定義でも進むので、出口は数回で再コンパイルする
+（<code>RecompileReason::BopRedefined</code>）。依存していない本体は新しいカウンタで
+作り直され、以後は抜けない。splat と多重代入は Array をインラインで
+扱う速い経路を持つので、比較はランタイム呼び出しの側にだけ置く
+（<code>AsmInst::ToA</code> / <code>ExpandArray</code> の <code>bop</code>）。回帰テストは
+<code>tests/helper_bop_redefinition.rs</code>。</li>
 </ol>
 <p><code>fib(29)</code>（release、x86-64）で測ると、<code>fib</code> が使わない演算子
 （<code>Float#+</code>、<code>Integer#~</code> / <code>#|</code> / <code>#*</code>、<code>Array#[]</code>）を再定義しても実行時間は
