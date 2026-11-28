@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e3025e2d.js";
+            window.path_to_searchindex_js = "../searchindex-7c0ffae2.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-afb61271.js"></script>
@@ -201,6 +201,18 @@ context-carrying <code>encode_linst_inline</code>), so <strong>every</strong> <c
 dispatcher lowers to <code>LInst</code>. What remains outside <code>encode_linst</code> is the
 specialized inlined-frame family and the zero-byte patch/recompile bookkeeping
 that is <em>not</em> byte emission — see §8.</p>
+<blockquote>
+<p><strong>2026-11 simplification.</strong> The <em><code>encode_linst_macro</code>-style</em> macro-ops (§5)
+were a pure relay: <code>compile_asmir</code> copied an <code>AsmInst</code> into an <code>LInst</code> with
+the same fields, and <code>encode_linst_macro</code> unpacked it into a call of the
+per-arch <code>emit_*</code> helper. The 86 of them built in one place only are gone
+from <code>LInst</code>; their <code>compile_asmir</code> arm calls the <code>emit_*</code> helper directly.
+<code>LInst</code> keeps the decomposed primitives, the decomposed-style delegations
+(guards, <code>IntegerBinOp</code>, …) and the six macro-ops built in more than one
+place (<code>SelectPage</code>, <code>BindLabel</code>, <code>HandleError</code>, <code>InlineRet</code>, <code>MethodRet</code>,
+<code>ChainExit</code>), which still reach <code>encode_linst_macro</code>. The migration log
+below describes the state before that change.</p>
+</blockquote>
 <hr>
 <h2 id="1-motivation"><a class="header" href="#1-motivation">1. Motivation</a></h2>
 <p>The original justification (“close the aarch64 <em>bail</em> gap”) is <strong>gone</strong>: the
