@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fed06106.js";
+            window.path_to_searchindex_js = "../searchindex-8e8eae61.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-2dc4913e.js"></script>
@@ -621,8 +621,8 @@ means:</p>
 <tr><th>Scope</th><th><code>Executor</code></th><th>Answers</th><th>Used for</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Call site</strong></td><td><code>site_refinements</code></td><td>the running frame’s own set; <code>EMPTY</code> for a native frame and for a frame of the Ruby-written core</td><td>call sites and operators (<code>find_method_at_site</code>, <code>invoke_method_op</code>), interpolation, <code>case</code> / <code>when</code> and <code>rescue</code>’s <code>===</code>, <code>defined?(recv.m)</code></td></tr>
-<tr><td><strong>Ruby level</strong></td><td><code>ruby_level_refinements</code></td><td>the nearest <em>user</em> Ruby frame’s set, walking out through native frames and frames of the Ruby-written core — CRuby’s <code>rb_vm_cref()</code>, the core being C there</td><td><code>public_send</code> and <code>&amp;:sym</code> (<code>CALL_PUBLIC</code>), <code>&amp;obj</code> → <code>to_proc</code>, the second try of <code>rb_funcallv_public</code>, the C API’s <code>rb_respond_to</code>, the scope a <code>def</code> / <code>refine</code> snapshots</td></tr>
+<tr><td><strong>Call site</strong></td><td><code>site_refinements</code></td><td>the running frame’s own set; <code>EMPTY</code> for a native frame and for a frame of the Ruby-written core</td><td>call sites and operators (<code>find_method_at_site</code>, <code>invoke_method_op</code>), interpolation, <code>case</code> / <code>when</code> and <code>rescue</code>’s <code>===</code>, <code>defined?(recv.m)</code>, <code>&amp;obj</code> → <code>to_proc</code> (<code>BlockCode</code>, at the call as CRuby’s <code>vm_to_proc</code>)</td></tr>
+<tr><td><strong>Ruby level</strong></td><td><code>ruby_level_refinements</code></td><td>the nearest <em>user</em> Ruby frame’s set, walking out through native frames and frames of the Ruby-written core — CRuby’s <code>rb_vm_cref()</code>, the core being C there</td><td><code>public_send</code> and <code>&amp;:sym</code> (<code>CALL_PUBLIC</code>), the second try of <code>rb_funcallv_public</code>, the C API’s <code>rb_respond_to</code>, the scope a <code>def</code> / <code>refine</code> snapshots</td></tr>
 <tr><td><strong>Funcall</strong></td><td>— (<code>RefinementSetId::EMPTY</code>)</td><td>no refinement</td><td>everything else a builtin calls: <code>find_method</code>, <code>invoke_method_inner</code>, <code>invoke_method_if_exists</code> — <code>rb_funcall</code> / <code>rb_check_funcall</code></td></tr>
 </tbody>
 </table>
