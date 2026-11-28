@@ -185,7 +185,8 @@ pub(crate) fn dump_state_for_gc() -> String {
             "main_exec={:?} main_exec_parent_fiber={:?} current={:016x} main={:016x} threads={}",
             s.main_exec,
             // SAFETY: forensics-only read; main_exec is live while set.
-            s.main_exec.map(|e| unsafe { e.as_ref().parent_fiber() }),
+            s.main_exec
+                .map(|e| unsafe { e.as_ref().parent_fiber() }),
             s.current.map(|v| v.id()).unwrap_or(0),
             s.main.map(|v| v.id()).unwrap_or(0),
             s.threads.len(),

@@ -1271,6 +1271,9 @@ mod tests {
         run_test_once(r#"Thread.pass"#);
         run_test_once(r#"[Thread.current == Thread.main, Thread.current.alive?]"#);
         run_test_once(r#"Thread.current.status"#);
+        // `wakeup` on a thread that is not sleeping (here the caller
+        // itself) does nothing and answers the thread.
+        run_test_once(r#"Thread.current.wakeup.equal?(Thread.current)"#);
     }
 
     #[test]
