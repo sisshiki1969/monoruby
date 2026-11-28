@@ -149,6 +149,20 @@ JIT がガード無しで基本演算を仮定するのは、整数・浮動小�
    `doc/chain_deopt.md` §10.1。
 5. **`def` 地点** — `AsmInst::CheckBOP` は JIT データ語のカウンタを
    コンパイル時の値と比べる（class-version ガードと同じ世代比較）。
+6. **Ruby を走らせうるヘルパの直後** — 汎用演算子ヘルパ（多相な `==` など）、
+   文字列・正規表現の式展開（`#to_s`）、Hash リテラル（`#hash`）、Range
+   リテラル（`#<=>`）、splat（`#to_a`）、多重代入（`#to_ary`）、`when *ary`、
+   再定義された `Symbol#to_proc` の `&:sym` は、フレームを積まないヘルパの中で
+   Ruby を実行する。そこで再定義が起きても、ヘルパを呼んだフレームには
+   返りアドレスを保持する callee が無いので、4. の walk では変換されない。
+   これらの直後にも `CheckBOP` を置き（`JitContext::check_bop_after_helper`）、
+   出口は結果を書き戻して次の命令から VM で再開する。カウンタは無関係な
+   再定義でも進むので、出口は数回で再コンパイルする
+   （`RecompileReason::BopRedefined`）。依存していない本体は新しいカウンタで
+   作り直され、以後は抜けない。splat と多重代入は Array をインラインで
+   扱う速い経路を持つので、比較はランタイム呼び出しの側にだけ置く
+   （`AsmInst::ToA` / `ExpandArray` の `bop`）。回帰テストは
+   `tests/helper_bop_redefinition.rs`。
 
 `fib(29)`（release、x86-64）で測ると、`fib` が使わない演算子
 （`Float#+`、`Integer#~` / `#|` / `#*`、`Array#[]`）を再定義しても実行時間は

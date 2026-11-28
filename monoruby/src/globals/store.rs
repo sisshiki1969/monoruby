@@ -246,6 +246,12 @@ pub struct Store {
     /// FuncId of the builtin `Symbol#==`, the other `==` that compares the
     /// two words; see [`Self::is_identity_eq`].
     symbol_eq_fid: Option<FuncId>,
+    /// FuncId of the builtin `Symbol#to_proc`; see
+    /// [`Self::symbol_to_proc_is_builtin`].
+    symbol_to_proc_fid: Option<FuncId>,
+    /// [`Self::symbol_to_proc_is_builtin`]'s answer and the class version
+    /// it was computed at.
+    symbol_to_proc_memo: std::cell::Cell<(u32, bool)>,
     /// FuncIds of the default `initialize_copy` / `initialize_dup` /
     /// `initialize_clone` builtins. `Kernel#dup` / `#clone` compare a
     /// class's resolved hooks against these to recognize the no-op case
@@ -972,6 +978,8 @@ impl Store {
             identity_eq_fid: None,
             default_neq: None,
             symbol_eq_fid: None,
+            symbol_to_proc_fid: None,
+            symbol_to_proc_memo: std::cell::Cell::new((u32::MAX, true)),
             default_copy_hooks: None,
             builtin_to_s: None,
             enum_direct_sources: [None; 3],
@@ -2707,6 +2715,34 @@ impl Store {
 
     pub(crate) fn set_symbol_eq_fid(&mut self, fid: FuncId) {
         self.symbol_eq_fid = Some(fid);
+    }
+
+    pub(crate) fn set_symbol_to_proc_fid(&mut self, fid: FuncId) {
+        self.symbol_to_proc_fid = Some(fid);
+    }
+
+    /// The builtin `Symbol#to_proc`.
+    pub(crate) fn symbol_to_proc_fid(&self) -> Option<FuncId> {
+        self.symbol_to_proc_fid
+    }
+
+    /// Whether `Symbol#to_proc` still resolves to the builtin, so that a
+    /// `&:sym` block argument may pass the bare Symbol (CRuby's
+    /// `rb_method_basic_definition_p(rb_cSymbol, idTo_proc)` in
+    /// `vm_caller_setup_arg_block`). A refinement of `Symbol#to_proc` does
+    /// not count, as in CRuby: the method table is asked without one.
+    /// Memoized per class version: *version* is the VM's current one.
+    pub(crate) fn symbol_to_proc_is_builtin(&self, version: u32) -> bool {
+        let (memo_version, answer) = self.symbol_to_proc_memo.get();
+        if memo_version == version {
+            return answer;
+        }
+        let answer = self
+            .check_method_for_class_with_version(SYMBOL_CLASS, IdentId::TO_PROC, version)
+            .and_then(|entry| entry.func_id())
+            == self.symbol_to_proc_fid;
+        self.symbol_to_proc_memo.set((version, answer));
+        answer
     }
 
     /// Whether *fid* is one of the builtin `==`s that answer by comparing

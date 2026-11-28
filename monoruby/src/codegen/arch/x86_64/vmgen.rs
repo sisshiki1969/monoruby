@@ -364,9 +364,12 @@ impl Codegen {
         //BcOp::BlockCode
         // A non-Symbol passes as it is with no call; a Symbol asks
         // `runtime::vm_block_code`, which answers it unchanged unless this
-        // frame's scope activated refinements. Runs no Ruby, cannot fail.
+        // frame's scope activated refinements or `Symbol#to_proc` was
+        // redefined. Only the latter runs Ruby and can fail.
         let block_code = self.jit.get_current_address();
+        let raise = self.entry_raise();
         let store = self.jit.label();
+        let class_version = self.class_version_label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
@@ -377,8 +380,15 @@ impl Codegen {
             movq rdi, rbx;
             movq rsi, r12;
             lea  rcx, [r13 - 16];
+            movl r8, [rip + class_version];
             movq rax, (runtime::vm_block_code);
             call rax;
+        };
+        // `to_proc` may run Ruby code that moves this frame to the heap.
+        self.restore_lfp();
+        monoasm! { &mut self.jit,
+            testq rax, rax;
+            je  raise;
         store:
         };
         self.vm_get_slot_addr(GP::R15);

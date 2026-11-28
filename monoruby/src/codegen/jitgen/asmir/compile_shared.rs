@@ -378,8 +378,15 @@ impl Codegen {
             } => {
                 self.emit_concat_str(arg, len, using_fpr);
             }
-            AsmInst::ToA { src, using_fpr } => {
-                self.emit_to_a(src, using_fpr);
+            AsmInst::ToA {
+                src,
+                using_fpr,
+                bop: (dst, deopt),
+            } => {
+                let deopt =
+                    self.deopt_label(labels, deopt, DeoptCause::Static("basic op redefined"));
+                let version = self.bop_redefine_version();
+                self.emit_to_a(src, using_fpr, dst, deopt, version);
             }
             AsmInst::BlockCode {
                 src,
@@ -1310,8 +1317,11 @@ impl Codegen {
                 len,
                 rest_pos,
                 using_fpr,
+                bop,
             } => {
-                self.emit_expand_array(dst, len, rest_pos, using_fpr);
+                let bop = self.deopt_label(labels, bop, DeoptCause::Static("basic op redefined"));
+                let version = self.bop_redefine_version();
+                self.emit_expand_array(dst, len, rest_pos, using_fpr, bop, version);
             }
             // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
             // around the call.

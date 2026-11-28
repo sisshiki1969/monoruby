@@ -2036,14 +2036,18 @@ impl Codegen {
         &mut self,
         src: SlotId,
         using_fpr: UsingFpr,
+        dst: SlotId,
+        deopt: DestLabel,
+        version: u32,
     ) -> bool {
-        self.to_a(src, using_fpr);
+        self.to_a(src, using_fpr, dst, deopt, version);
         true
     }
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`: the
     /// block a `&expr` value passes from a body whose refinements are
-    /// `set`. Runs no Ruby and cannot fail.
+    /// `set`. Runs Ruby (and can fail) only once `Symbol#to_proc` is
+    /// redefined.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
@@ -2058,8 +2062,12 @@ impl Codegen {
             movq rdx, [rbp - (jrbp_local(src))];
             movq rcx, (set.get() as u64);
             movq r8, (pc.as_ptr() as u64);
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            movq rax, [rbx + (EXECUTOR_CFP)];
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], rax;
             movq rax, (runtime::jit_block_code);
             call rax;
+            movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
     }
@@ -2499,9 +2507,18 @@ impl Codegen {
         self.fpr_restore(using_fpr);
     }
 
-    fn to_a(&mut self, src: SlotId, using_fpr: UsingFpr) {
+    fn to_a(
+        &mut self,
+        src: SlotId,
+        using_fpr: UsingFpr,
+        dst: SlotId,
+        deopt: DestLabel,
+        version: u32,
+    ) {
         let toa = self.jit.label();
         let exit = self.jit.label();
+        let bop = self.jit.label();
+        let bop_flag = self.bop_redefined_flags.clone();
         monoasm!( &mut self.jit,
             movq rax, [rbp - (jrbp_local(src))];
         );
@@ -2523,8 +2540,17 @@ impl Codegen {
             movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
+        // An error is the main line's to handle. Otherwise the Ruby
+        // `to_a` ran may have redefined a basic operator (#2198).
         monoasm!( &mut self.jit,
-            jmp  exit;
+            testq rax, rax;
+            jz   exit;
+            cmpl [rip + bop_flag], (version as i32);
+            jeq  exit;
+        bop:
+            movq [rbp - (jrbp_local(dst))], rax;
+            movq rdi, (Value::symbol_from_str("_bop_guard").id());
+            jmp  deopt;
         );
         self.select_page(0);
     }
@@ -3157,12 +3183,17 @@ impl Codegen {
         len: usize,
         rest_pos: Option<usize>,
         using_fpr: UsingFpr,
+        bop: DestLabel,
+        version: u32,
     ) -> bool {
         let rest = if let Some(rest_pos) = rest_pos {
             rest_pos + 1
         } else {
             0
         };
+        let bop_flag = self.bop_redefined_flags.clone();
+        let bop_exit = self.jit.label();
+        let done = self.jit.label();
         // The fast path (when emitted) falls through to the runtime call
         // below on `slow`, and jumps past it on success.
         let fast = self.expand_array_fast_path(dst, len, rest_pos);
@@ -3184,6 +3215,22 @@ impl Codegen {
             movq [rbx + (EXECUTOR_JIT_HELPER_CFP)], 0;
         );
         self.fpr_restore(using_fpr);
+        // An error is the main line's to handle. Otherwise the `#to_ary`
+        // the call ran may have redefined a basic operator (#2198).
+        monoasm!( &mut self.jit,
+            testq rax, rax;
+            jz   done;
+            cmpl [rip + bop_flag], (version as i32);
+            jne  bop_exit;
+        done:
+        );
+        self.select_page(1);
+        monoasm!( &mut self.jit,
+        bop_exit:
+            movq rdi, (Value::symbol_from_str("_bop_guard").id());
+            jmp  bop;
+        );
+        self.select_page(0);
         if let Some(exit) = fast {
             self.jit.bind_label(exit);
         }

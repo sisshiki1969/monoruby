@@ -837,20 +837,25 @@ pub(super) extern "C" fn yield_symbol_proc1(
 
 ///
 /// `BlockCode` in the VM: the block the `&expr` value *val* passes from the
-/// running frame. A Symbol written where refinements are active becomes
-/// the refined symbol proc of that scope (CRuby's
-/// `vm_caller_setup_arg_block`, `Globals::refined_symbol_proc`), which
-/// carries the scope's refinements to whoever yields to it; every other
-/// value, and any Symbol while the scope activated none, passes as it is.
+/// running frame (CRuby's `vm_caller_setup_arg_block`). While
+/// `Symbol#to_proc` is the builtin, a Symbol written where refinements are
+/// active becomes the refined symbol proc of that scope
+/// (`Globals::refined_symbol_proc`), which carries the scope's refinements
+/// to whoever yields to it, and any other Symbol passes as it is. Once
+/// `Symbol#to_proc` is redefined, a Symbol passes what its `to_proc`
+/// answers, which must be a Proc (#2180). Every other value passes as it
+/// is. `None` when `to_proc` raised or answered something else.
 ///
 pub(super) extern "C" fn vm_block_code(
     vm: &mut Executor,
     globals: &mut Globals,
     val: Value,
     pc: BytecodePtr,
-) -> Value {
+    // The VM's class version, read by the caller (cheaper there).
+    class_version: u32,
+) -> Option<Value> {
     let set = vm.site_refinements(globals);
-    block_code(globals, val, set, pc)
+    block_code(vm, globals, val, set, pc, class_version)
 }
 
 ///
@@ -859,19 +864,39 @@ pub(super) extern "C" fn vm_block_code(
 /// one's frame, so the frame cannot tell).
 ///
 pub(super) extern "C" fn jit_block_code(
-    _vm: &mut Executor,
+    vm: &mut Executor,
     globals: &mut Globals,
     val: Value,
     set: RefinementSetId,
     pc: BytecodePtr,
-) -> Value {
-    block_code(globals, val, set, pc)
+) -> Option<Value> {
+    block_code(vm, globals, val, set, pc, Globals::class_version())
 }
 
-fn block_code(globals: &mut Globals, val: Value, set: RefinementSetId, pc: BytecodePtr) -> Value {
-    match val.try_symbol() {
-        Some(symbol) if !set.is_empty() => globals.refined_symbol_proc(symbol, set, pc),
-        _ => val,
+fn block_code(
+    vm: &mut Executor,
+    globals: &mut Globals,
+    val: Value,
+    set: RefinementSetId,
+    pc: BytecodePtr,
+    class_version: u32,
+) -> Option<Value> {
+    let Some(symbol) = val.try_symbol() else {
+        return Some(val);
+    };
+    if globals.store.symbol_to_proc_is_builtin(class_version) {
+        return Some(if set.is_empty() {
+            val
+        } else {
+            globals.refined_symbol_proc(symbol, set, pc)
+        });
+    }
+    match vm.block_arg_to_proc_in(globals, val, set) {
+        Ok(proc) => Some(proc.into()),
+        Err(err) => {
+            vm.set_error(err);
+            None
+        }
     }
 }
 

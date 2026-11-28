@@ -491,12 +491,18 @@ impl Codegen {
     /// op 182 `BlockCode`: dst `[pc+4]` <- the block the `&expr` value in
     /// src `[pc+2]` passes. A non-Symbol passes as it is with no call; a
     /// Symbol asks `runtime::vm_block_code`, which answers it unchanged
-    /// unless this frame's scope activated refinements. Runs no Ruby and
-    /// cannot fail. (x86 `BcOp::BlockCode`.)
+    /// unless this frame's scope activated refinements or `Symbol#to_proc`
+    /// was redefined. Only the latter runs Ruby and can fail.
+    /// (x86 `BcOp::BlockCode`.)
     pub(in crate::codegen) fn a64_op_block_code(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
+        let raise = self.entry_raise.clone();
         let call = self.jit.label();
         let store = self.jit.label();
+        let cv_addr = self
+            .jit
+            .get_label_address(&self.class_version_label())
+            .as_ptr() as u64;
         monoasm_arm64!(&mut self.jit,
             ldrh x10, [x(PC.0), #(2)];  // src slot
         );
@@ -515,8 +521,15 @@ impl Codegen {
             mov x1, x(GLOBALS.0);
             mov x2, x10;
             mov x3, x(PC.0);
+            mov x4, (cv_addr);
+            ldr w4, [x4];
             mov x9, (runtime::vm_block_code as *const () as u64);
             blr x9;
+        );
+        // Reloads the LFP (`to_proc` may have moved this frame to the
+        // heap) and raises on a zero result.
+        self.a64_checked_store_next(&raise);
+        monoasm_arm64!(&mut self.jit,
             store:
             ldrh x11, [x(PC.0), #(4)];  // dst slot
             neg x11, x11;

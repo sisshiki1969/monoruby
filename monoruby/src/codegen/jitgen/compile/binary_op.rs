@@ -99,11 +99,13 @@ impl BinaryOp {
 /// branched on it at the end of every arm.
 ///
 enum BinaryLowering {
-    /// Inline code was emitted — a guarded generator, or the merge of a
-    /// dispatch. `dst` is defined (or the answer is in the condition flags).
+    /// Inline code was emitted — a guarded generator, the merge of a
+    /// dispatch, or the class-independent C helper with its error and
+    /// basic-op checks (`emit_generic_binary`). `dst` is defined (or the
+    /// answer is in the condition flags).
     Emitted,
-    /// The class-independent C helper was emitted and its error handled;
-    /// `Option<Value>` is in rax for the caller to sink.
+    /// A lowering that runs no Ruby (the inline `Klass === v`) left its
+    /// answer in rax for the caller to sink.
     Generic,
     /// The ordinary guarded method-call path ran.
     Called(CompileResult),
@@ -745,8 +747,16 @@ impl<'a> JitContext<'a> {
         // helper.
         ir.push(AsmInst::Label(slow));
         let mut rest = entry.clone();
-        self.emit_generic_binary(&mut rest, ir, binop, lhs, rhs, case_semantics, is_func_call);
-        rest.def_rax2acc(ir, dst);
+        self.emit_generic_binary(
+            &mut rest,
+            ir,
+            binop,
+            dst,
+            lhs,
+            rhs,
+            case_semantics,
+            is_func_call,
+        );
         self.end_arm(rest, ir, &merge, false);
 
         self.bind_merge(state, ir, merge);
@@ -845,8 +855,16 @@ impl<'a> JitContext<'a> {
         // ---- arm 2: every other operand pair, through the generic helper.
         ir.push(AsmInst::Label(slow));
         let mut rest = entry.clone();
-        self.emit_generic_binary(&mut rest, ir, binop, lhs, rhs, case_semantics, is_func_call);
-        rest.def_rax2acc(ir, dst);
+        self.emit_generic_binary(
+            &mut rest,
+            ir,
+            binop,
+            dst,
+            lhs,
+            rhs,
+            case_semantics,
+            is_func_call,
+        );
         self.end_arm(rest, ir, &merge, false);
 
         self.bind_merge(state, ir, merge);
@@ -952,8 +970,8 @@ impl<'a> JitContext<'a> {
             && lhs_class.is_none_or(|c| !self.basic_op_assumable(c, IdentId::_TEQ))
         {
             state.flush_gp(ir);
-            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, true);
-            return Ok(BinaryLowering::Generic);
+            self.emit_generic_binary(state, ir, binop, dst, lhs, rhs, case_semantics, true);
+            return Ok(BinaryLowering::Emitted);
         }
 
         // ---- 2. A site the VM saw comparing more than one lhs class, whose
@@ -1290,8 +1308,17 @@ impl<'a> JitContext<'a> {
                 .store
                 .get_callsite_id(self.iseq_id(), bc_pos)
                 .is_some_and(|c| self.store[c].is_func_call());
-            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
-            return Ok(BinaryLowering::Generic);
+            self.emit_generic_binary(
+                state,
+                ir,
+                binop,
+                dst,
+                lhs,
+                rhs,
+                case_semantics,
+                is_func_call,
+            );
+            return Ok(BinaryLowering::Emitted);
         }
         // A BOOL_CLASS receiver whose operator has no unified resolution
         // (TrueClass and FalseClass diverge on it — a user redefinition on
@@ -1313,8 +1340,17 @@ impl<'a> JitContext<'a> {
                 .store
                 .get_callsite_id(self.iseq_id(), bc_pos)
                 .is_some_and(|c| self.store[c].is_func_call());
-            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
-            return Ok(BinaryLowering::Generic);
+            self.emit_generic_binary(
+                state,
+                ir,
+                binop,
+                dst,
+                lhs,
+                rhs,
+                case_semantics,
+                is_func_call,
+            );
+            return Ok(BinaryLowering::Emitted);
         }
         // A Bignum-profiled receiver has no inline form and nothing worth
         // guarding: a direct call would need a compound representation
@@ -1329,8 +1365,17 @@ impl<'a> JitContext<'a> {
                 .store
                 .get_callsite_id(self.iseq_id(), bc_pos)
                 .is_some_and(|c| self.store[c].is_func_call());
-            self.emit_generic_binary(state, ir, binop, lhs, rhs, case_semantics, is_func_call);
-            return Ok(BinaryLowering::Generic);
+            self.emit_generic_binary(
+                state,
+                ir,
+                binop,
+                dst,
+                lhs,
+                rhs,
+                case_semantics,
+                is_func_call,
+            );
+            return Ok(BinaryLowering::Emitted);
         }
         // Still monomorphic: make the recv-class guard recompile on a miss, so
         // the site flips to the treatment above the moment the VM observes
@@ -1454,6 +1499,7 @@ impl<'a> JitContext<'a> {
         state: &mut AbstractState,
         ir: &mut AsmIr,
         binop: BinaryOp,
+        dst: Option<SlotId>,
         lhs: SlotId,
         rhs: SlotId,
         // The fused comparison (case/when and rescue matching) dispatches
@@ -1480,6 +1526,7 @@ impl<'a> JitContext<'a> {
             let func = crate::executor::op::pure_eq_helper(scope, kind == CmpKind::Ne);
             ir.opt_eq_cmp(state, lhs, rhs, kind, func, is_func_call);
             self.pure_helper_exit(state, ir);
+            state.def_rax2acc(ir, dst);
             return;
         }
         let error = ir.new_error(state);
@@ -1508,6 +1555,10 @@ impl<'a> JitContext<'a> {
         state.unset_class_version_guard();
         state.unset_const_version_guard();
         state.unset_side_effect_guard();
+        state.def_rax2acc(ir, dst);
+        // That Ruby may also have redefined a basic operator this body
+        // inlines after the site.
+        self.check_bop_after_helper(state, ir);
     }
 }
 

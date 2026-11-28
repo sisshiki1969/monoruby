@@ -3782,7 +3782,14 @@ impl Codegen {
 
     /// rax <- `src` coerced to an Array: load slot `src`; if already an Array
     /// keep it, otherwise call runtime::to_a(vm, globals, val). Mirrors x86 to_a.
-    pub(in crate::codegen::jitgen) fn emit_to_a(&mut self, src: SlotId, using_fpr: UsingFpr) -> bool {
+    pub(in crate::codegen::jitgen) fn emit_to_a(
+        &mut self,
+        src: SlotId,
+        using_fpr: UsingFpr,
+        dst: SlotId,
+        deopt: DestLabel,
+        version: u32,
+    ) -> bool {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
         let toa = self.jit.label();
@@ -3808,14 +3815,45 @@ impl Codegen {
             blr x9;                 // result in x0
             str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
+        );
+        // An error is the main line's to handle. Otherwise the Ruby
+        // `to_a` ran may have redefined a basic operator (#2198): the
+        // exit sees the result in `dst`, past the FPR restore.
+        let flag_addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as u64;
+        let bop = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, exit;
+            mov x9, (flag_addr);
+            ldr w9, [x9];
+            mov x10, (version as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &bop);
+        monoasm_arm64!(&mut self.jit,
             exit:
         );
         self.emit_fpr_restore(using_fpr, false);
+        // The slow path, out of line.
+        let done = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            b done;
+            bop:
+        );
+        self.emit_fpr_restore(using_fpr, false);
+        self.a64_frame_store(0, lfp, dst.0 as u32 * 8 + LFP_SELF as u32);
+        monoasm_arm64!(&mut self.jit,
+            b deopt;
+            done:
+        );
         true
     }
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
-    /// Mirrors x86 `emit_block_code`; runs no Ruby and cannot fail.
+    /// Mirrors x86 `emit_block_code`; runs Ruby (and can fail) only once
+    /// `Symbol#to_proc` is redefined.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
@@ -3836,8 +3874,12 @@ impl Codegen {
             mov x3, (set);
             mov x4, (pc);
             str x30, [sp, #-16]!;
+            // In a helper that may run Ruby: `Executor::jit_helper_cfp`.
+            ldr x10, [x19, #(EXECUTOR_CFP as u32)];
+            str x10, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             mov x9, (f);
             blr x9;                 // result in x0
+            str xzr, [x19, #(EXECUTOR_JIT_HELPER_CFP as u32)];
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
@@ -4431,6 +4473,8 @@ impl Codegen {
         len: usize,
         rest_pos: Option<usize>,
         using_fpr: UsingFpr,
+        bop: DestLabel,
+        version: u32,
     ) -> bool {
         let rest = if let Some(rest_pos) = rest_pos {
             rest_pos as u64 + 1
@@ -4464,6 +4508,24 @@ impl Codegen {
             ldr x30, [sp], #16;
         );
         self.emit_fpr_restore(using_fpr, false);
+        // An error is the main line's to handle. Otherwise the `#to_ary`
+        // the call ran may have redefined a basic operator (#2198).
+        let flag_addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as u64;
+        let done = self.jit.label();
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, done;
+            mov x9, (flag_addr);
+            ldr w9, [x9];
+            mov x10, (version as u64);
+            cmp x9, x10;
+        );
+        self.jit.bcond_label(monoasm::Cond::Ne, &bop);
+        monoasm_arm64!(&mut self.jit,
+            done:
+        );
         if let Some(exit) = fast {
             self.jit.bind_label(exit);
         }
