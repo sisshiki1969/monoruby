@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,425 +177,249 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="chain-deopt--handoff-note"><a class="header" href="#chain-deopt--handoff-note">Chain deopt — handoff note</a></h1>
-<p><strong>Kind:</strong> plan. <strong>Status:</strong> the <em>mechanism</em> (§5 steps 1–3) is implemented and
-exercised end-to-end <strong>in its eager form</strong> — the walk replays every suspended
-frame’s write-back at deopt time and points its return-address slot at one
-shared VM continuation stub (§9.3’s conversion has landed; §8 describes the
-implementation). Registration is unconditional in every build, and chain
-conversion is now the <strong>only</strong> way an on-stack JIT frame is dropped to the
-interpreter: immediate eviction — the code-patching mechanism this document
-was written against — is gone (§10). The <strong>escalation half of step 4</strong> — the
-switch that makes every interpreter-resuming side exit run the
-chain-deopt walk, plus the runtime entry it calls — is in place and <strong>on by
-default in every build</strong> (§8.5; the former <code>chain-deopt</code> validation feature
-is gone). <strong>The speculation itself (§5 steps 4–5) was built and has since been
-removed</strong> — §11 records what shipped; its last residue (the per-frame
-<code>speculated_floats</code> / <code>speculation_poisoned</code> fields and the
-<code>capture_events</code> counter, all written but never read) went in 2026-10.
-What stays is the escalation half, which the return-type flow between
-specialized frames needs on its own. The return-state recovery (§6) is
-not implemented. §9 stays as the record
-of why the original lazy build was wrong.</p>
+                        <h1 id="chain-deopt--converting-suspended-jit-frames-to-interpreter-frames"><a class="header" href="#chain-deopt--converting-suspended-jit-frames-to-interpreter-frames">Chain deopt — converting suspended JIT frames to interpreter frames</a></h1>
+<p><strong>Kind:</strong> reference. Chain deopt drops a whole suspended chain of compiled
+frames back to the interpreter in one step, without touching machine code.
+It is the only way an on-stack JIT frame is dropped to the interpreter. This
+document describes the mechanism, the frame-layout facts it depends on, and
+its three callers: basic-op redefinition, escalated side exits, and captures.</p>
 <hr>
 <h2 id="1-what-this-is-for"><a class="header" href="#1-what-this-is-for">1. What this is for</a></h2>
-<p>The optimization we want is <strong>speculative unboxed <code>Float</code> locals across a
-block call</strong>.</p>
-<p>Today a method call that passes a block demotes every local to
-<code>LinkMode::S</code> before the call:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// compile/method_call.rs
-// We must write back all local vars to the stack and set the state to
-// LinkMode::S when they are possibly accessed or captured from inner blocks.
-if callsite.block_fid.is_some() {
-    state.locals_to_S(ir);
-}
-<span class="boring">}</span></code></pre>
-<p>so a <code>Float</code> local is boxed on every block call, because the inner block
-might read or write it. The speculation is to <strong>stop demoting</strong>: keep the
-local unboxed in the frame’s FP spill area and let the (specialized,
-non-capturable) block read and write it there. If the block ever stores a
-non-<code>Float</code> into such a local the speculation is dead — the outer frame’s
-compiled code assumes an <code>f64</code> at a spill offset that no longer holds one —
-and the whole suspended chain has to fall back to the interpreter at once.</p>
-<p>The motivating shape is real and hot. <code>benchmark/app_aobench.rb</code>:</p>
-<pre><code class="language-ruby">occlusion = 0.0
-nphi.times do |j|
-  ntheta.times do |i|
-    ...
-    occlusion += 1.0     # outer Float local, mutated from two blocks deep
-  end
-end
-</code></pre>
-<p><strong>Chain deopt is the enabling mechanism, not the optimization.</strong> It also
-pays for itself a second time — see §6.</p>
+<p>A compiled frame that is suspended at a call cannot be protected by its
+callee’s guards. Three situations need such frames converted:</p>
+<ul>
+<li><strong>Basic-op redefinition.</strong> Redefining <code>Integer#+</code> inside a callee makes
+the caller’s compiled continuation stale, because it inlined the builtin
+operator. Every suspended compiled frame on every thread must stop running
+its compiled body (<code>doc/bop_redefinition.md</code>, §10.1 below).</li>
+<li><strong>Side exits inside a compilation unit.</strong> Specialized callees, frameless
+bodies and yielded blocks are compiled into the caller’s unit, and the
+caller’s compiled continuation relies on facts derived from them: a
+narrowed return state (§6), and outer-frame <code>Float</code> locals that a
+specialized block reads and writes unboxed (§5 step 5,
+<code>doc/trace_chain_joins.md</code> §5). When such a callee deopts, the
+suspended frames above it in the same unit must not resume their
+compiled code.</li>
+<li><strong>Captures.</strong> A <code>binding</code> / <code>eval</code> that reaches a compiled frame through
+a path the JIT did not anticipate converts that frame first, so the
+capture reads homed slots (<code>Codegen::convert_for_capture</code>).</li>
+</ul>
 <h2 id="2-the-mechanism"><a class="header" href="#2-the-mechanism">2. The mechanism</a></h2>
-<p>On a deep deopt, leave every frame where it is and convert the whole
-suspended chain from JIT frames into interpreter frames:</p>
+<p>On a chain deopt every frame stays where it is on the stack. For each
+suspended compiled frame the walk:</p>
 <ol>
-<li>for every JIT frame on the stack, write its spilled xmm/d registers back
-into its local slots (boxing the floats);</li>
-<li>rewrite each frame’s <strong>return-address slot on the stack</strong> to the VM’s
-post-call continuation;</li>
-<li>the continuation reads the suspended pc off the stack, so that slot has
-to be right (it is — see §3.2).</li>
+<li>writes the frame’s register- and spill-resident state back into its
+local slots (boxing floats, materializing elided objects);</li>
+<li>rewrites the frame’s <strong>return-address slot</strong> to one shared continuation
+stub that resumes the interpreter after the call (§8.2).</li>
 </ol>
-<p>Control then never re-enters JIT code: each <code>ret</code> lands in the interpreter.</p>
-<p>This is <strong>not</strong> what <code>Codegen::immediate_eviction</code> did. That one wrote a
-<code>jmp deopt</code> into the <em>code</em> at the call’s return continuation, so control
-returned into JIT code and deopted one instruction later. Chain deopt does not
-touch code and does not return into JIT code at all — which is why it could
-replace immediate eviction outright rather than sit beside it (§10).</p>
-<h2 id="3-what-was-verified-in-the-source"><a class="header" href="#3-what-was-verified-in-the-source">3. What was verified in the source</a></h2>
-<h3 id="31-the-vm-entry-already-exists-and-is-shared"><a class="header" href="#31-the-vm-entry-already-exists-and-is-shared">3.1 The VM entry already exists and is shared</a></h3>
-<p><code>arch/x86_64/vmgen/method_call.rs:81</code>, the send opcode’s post-call sequence:</p>
-<pre><code class="language-asm">done:
-  pop_cont_frame     ; popq r13 (suspended pc); addq rsp, 8
-                     ; movzxw rdi, [r13 + RET_REG_FROM_CALLSITE]  &lt;- dst slot, from the bytecode
-                     ; addq r13, 32                               &lt;- past the 2-unit send
-  vm_handle_error
-  vm_store_rdi(rax)  ; store the return value into dst
-  fetch_and_dispatch
-</code></pre>
-<p>It is <strong>entirely stack-driven and carries no per-site state</strong>: it recovers
-the pc from the stack, re-derives the destination slot from the bytecode at
-that pc, stores <code>rax</code>, and resumes. So a <em>single</em> address serves every call
-site. Bind a label there and expose its address.</p>
-<h3 id="32-the-suspended-pc-is-already-correct--no-prerequisite-work"><a class="header" href="#32-the-suspended-pc-is-already-correct--no-prerequisite-work">3.2 The suspended pc is already correct — no prerequisite work</a></h3>
-<p><code>AsmInst::ContFramePc { call_site_pc }</code> (<code>asmir.rs:1678</code>) stores the
-call-site pc into the outgoing cont-frame slot — documented as “the slot
-<code>Kernel#caller</code> reads”. Its producers cover every JIT call/yield emitter:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th><code>compile/method_call.rs</code></th><th>emitter</th><th>path</th></tr>
-</thead>
-<tbody>
-<tr><td>822</td><td><code>compile_yield_specialized</code></td><td>specialized yield</td></tr>
-<tr><td>1419</td><td><code>send</code></td><td>ordinary call</td></tr>
-<tr><td>1484</td><td><code>send_specialized</code></td><td>specialized call</td></tr>
-<tr><td>1520</td><td><code>compile_yield</code></td><td>generic yield</td></tr>
-</tbody>
-</table>
-</div>
-<p><code>Cfp::caller_pc_slot</code>’s “not every dispatch path writes it” caveat is about
-non-JIT paths (the invoker’s zero sentinel). Filling the pc lazily during
-the walk remains available as belt-and-braces, but is not needed to start.</p>
-<h3 id="33-the-write-back-is-heavier-than-a-memcpy"><a class="header" href="#33-the-write-back-is-heavier-than-a-memcpy">3.3 The write-back is heavier than a memcpy</a></h3>
-<p><code>WriteBack</code> (<code>jitgen.rs:175</code>) has six kinds of entry:</p>
+<p>Control then never re-enters the compiled body: as each callee returns, its
+<code>ret</code> lands in the stub. Because no machine code is rewritten, a compiled
+body that is still valid for future invocations survives.</p>
+<h2 id="3-frame-facts-the-mechanism-relies-on"><a class="header" href="#3-frame-facts-the-mechanism-relies-on">3. Frame facts the mechanism relies on</a></h2>
+<h3 id="31-the-vm-continuation-after-a-call"><a class="header" href="#31-the-vm-continuation-after-a-call">3.1 The VM continuation after a call</a></h3>
+<p>The VM’s send handler resumes after a call by popping the cont frame (which
+holds the suspended pc), re-deriving the destination slot from the bytecode
+at that pc, storing the result and dispatching the next instruction. It is
+stack-driven and carries no per-site state. That sequence assumes a 2-unit
+<code>send</code>, though, while 1-unit operator sites (<code>BinOp</code>, <code>Index</code>, …) dispatch
+through the same JIT <code>send</code> emitter, which is why the walk targets a
+dedicated stub rather than the raw VM continuation (§8.2).</p>
+<h3 id="32-the-suspended-pc"><a class="header" href="#32-the-suspended-pc">3.2 The suspended pc</a></h3>
+<p><code>AsmInst::ContFramePc { call_site_pc }</code> stores the call-site pc into the
+outgoing cont-frame slot at every JIT call and yield emitter (ordinary
+<code>send</code>, <code>send_specialized</code>, generic and specialized yield). It is the slot
+<code>Kernel#caller</code> reads (<code>Cfp::caller_pc_slot</code>), and the stub reads it too.</p>
+<h3 id="33-what-a-write-back-contains"><a class="header" href="#33-what-a-write-back-contains">3.3 What a write-back contains</a></h3>
+<p><code>WriteBack</code> (<code>jitgen.rs</code>) has six kinds of entry:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>fpr: Vec&lt;(FPReg, Vec&lt;SlotId&gt;)&gt;,                            // float -&gt; one or more slots
 literal: Vec&lt;(Value, SlotId)&gt;,
 void: Vec&lt;SlotId&gt;,
-gp: Vec&lt;(GP, SlotId)&gt;,                                     // empty in shipping builds
-forward_kwrest: Vec&lt;(SlotId, Box&lt;[(IdentId, SlotId)]&gt;)&gt;,   // K1: build the kwrest Hash
+gp: Vec&lt;(GP, SlotId)&gt;,
+forward_kwrest: Vec&lt;(SlotId, Box&lt;[(IdentId, SlotId)]&gt;)&gt;,   // build the kwrest Hash
 virtual_obj: Vec&lt;(SlotId, VirtualSrc)&gt;,                    // elided objects to allocate
 <span class="boring">}</span></code></pre>
-<p>To replay one from Rust the walker needs the <code>WriteBack</code> <strong>and the frame’s
-spill base</strong> (<code>base</code>, today only a compile-time argument to
-<code>gen_write_back_for_deopt</code>). <code>virtual_obj</code> / <code>forward_kwrest</code> additionally
-need <code>create_array</code> (or <code>value_deep_copy</code>) / <code>correct_rest_kw</code> calls, so
-this is not a pure memory shuffle.</p>
-<p>Why replaying from Rust is possible at all: xmm is caller-saved, so
-<code>FprSave</code> has already spilled every live float of a <strong>suspended</strong> frame into
-that frame’s own spill area. Only the innermost frame still has live values
-in registers, and that one deopts through its compiled handler as it does
-today.</p>
-<h3 id="34-the-registration-key-already-exists"><a class="header" href="#34-the-registration-key-already-exists">3.4 The registration key already exists</a></h3>
-<p><code>return_addr_table</code> (<code>codegen.rs</code>) maps a suspended call’s return address to
-its side exit, filled by <code>set_deopt_with_return_addr</code> from all four emitters
-above. The runtime table wants the same key.</p>
-<h2 id="4-a-rejected-attempt--do-not-repeat-it"><a class="header" href="#4-a-rejected-attempt--do-not-repeat-it">4. A rejected attempt — do not repeat it</a></h2>
-<p>Rewriting the stack’s return address to point at that frame’s <strong><code>Evict</code>
-handler</strong> looks like it should work. It does not, and it fails loudly
-(<code>caller_lines_survive_specialized_frame_eviction</code>, SIGABRT inside
-<code>pmc_record_binary</code>).</p>
-<p>The instruction order at a specialized call is:</p>
-<pre><code>call callee            &lt;- the return address points here
-&lt;result-store code emitted by def_rax2acc_return&gt;
-patch_point            &lt;- where immediate_eviction wrote its jmp
-</code></pre>
-<p>and <code>compile/method_call.rs:835</code> fixed the contract:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let res = state.def_rax2acc_return(ir, dst, return_state);  // emits the result store
-state.immediate_evict(ir, evict);                            // records patch_point + write_back
-<span class="boring">}</span></code></pre>
-<p>The <code>Evict</code> write-back is captured <strong>after</strong> the result store is modelled,
-so the handler assumes that store has already run. Entering it directly by
-<code>ret</code> skips the store, the callee’s return value never reaches its slot, and
-garbage propagates.</p>
-<p><code>immediate_eviction</code> patched at <code>patch_point</code> — <em>after</em> the result store —
-precisely for this reason. Chain deopt sidesteps the whole issue by
-targeting the VM entry (§3.1), where <code>vm_store_rdi</code> does the store. (The
-argument is preserved because it is the reason the <em>stub</em>, not the frame’s
-own <code>Evict</code> handler, is the conversion target; the patching mechanism it
-describes no longer exists — §10.)</p>
-<h2 id="5-order-of-work"><a class="header" href="#5-order-of-work">5. Order of work</a></h2>
-<p>Steps 1–3 are done, essentially as written (after a detour through a lazy
-per-site-handler form — §9) — see §8.</p>
+<p>Replaying one needs the <code>WriteBack</code> and the frame’s FP spill <code>base</code>, and
+<code>virtual_obj</code> / <code>forward_kwrest</code> need runtime calls (<code>create_array</code> or
+<code>value_deep_copy</code>, <code>correct_rest_kw</code>), so it is not a pure memory shuffle.</p>
+<h3 id="34-the-registration-key"><a class="header" href="#34-the-registration-key">3.4 The registration key</a></h3>
+<p>A suspended frame is identified by the return address in its callee’s
+return-address slot, which is all the walk has to go on.
+<code>Codegen::chain_deopt_table</code> maps that return address to the site’s
+conversion stub and the calling frame’s depth in its compilation unit.
+<code>AsmInst::ChainExit</code> is pushed after the call, when the return address is no
+longer at hand, so it names its site through <code>asm_return_addr_table</code>, keyed
+by the site’s <code>AsmEvict</code> id.</p>
+<h2 id="4-why-the-target-is-a-stub-not-the-frames-own-deopt-handler"><a class="header" href="#4-why-the-target-is-a-stub-not-the-frames-own-deopt-handler">4. Why the target is a stub, not the frame’s own deopt handler</a></h2>
+<p>Pointing the return-address slot at the call site’s own side-exit handler
+looks simpler, but it is wrong. The site’s write-back is captured <em>after</em>
+the result store (<code>def_rax2acc_return</code>) is modelled, so its handler assumes
+the callee’s return value is already in its slot. Entering it by <code>ret</code> skips
+that store and the return value is lost. The continuation stub performs the
+store itself (§8.2).</p>
+<h2 id="5-the-steps"><a class="header" href="#5-the-steps">5. The steps</a></h2>
 <ol>
-<li><strong>Runtime table</strong> <code>return_addr -&gt; (WriteBack, spill base)</code>, plus the Rust
-routine that replays one against a frame’s <code>rbp</code>/<code>lfp</code>.</li>
-<li><strong>Expose the VM entry</strong>: bind a label at <code>done:</code> and publish its address.</li>
-<li><strong>The walk</strong>: <code>Cfp::set_return_addr</code> (a writer next to the existing
-<code>return_addr()</code> at <code>frame.rs:76</code>), then walk the CFP chain applying 1 and
-2. Model the loop on <code>immediate_eviction</code>, which already skips VM frames
-via <code>check_vm_address</code> and handles recursion by visiting every frame.
-(The chain walk has since <em>become</em> that loop — §10.)</li>
-<li><strong>Firing point</strong>: the <code>Float</code> guard on a block’s <code>StoreDynVar</code> into an
-outer unboxed local. Write back <em>before</em> performing the offending store,
-or the write-back overwrites it.</li>
-<li><strong>Relax <code>locals_to_S</code></strong> for qualifying block calls, and point the block’s
-<code>Load/StoreDynVar</code> at the outer frame’s spill area.</li>
-<li><strong>Recover the return-state narrowing</strong> — see §6.</li>
+<li><strong>Per-site conversion.</strong> Each call and yield site’s replay data is
+compiled into a conversion stub and registered in <code>chain_deopt_table</code>
+(§8.1).</li>
+<li><strong>The continuation.</strong> One shared continuation stub per arch (§8.2).</li>
+<li><strong>The walk.</strong> <code>Codegen::chain_deopt_into</code> walks the CFP chain from a
+given frame, converting each registered compiled frame (§8.5).</li>
+<li><strong>Escalation.</strong> An interpreter-resuming side exit in a frame that is not
+its unit’s root runs the walk over its unit’s suspended frames before it
+resumes the interpreter (§8.5).</li>
+<li><strong>Unboxed outer locals.</strong> A specialized block reads and writes an outer
+frame’s <code>Float</code> local directly in that frame’s FP save / spill area
+(<code>LInst::LoadDynVarSpecF</code> / <code>StoreDynVarSpecF</code>, a single <code>f64</code> move at
+<code>[rbp/x29 + offset + disp]</code>). The claims are part of the abstract state
+(<code>doc/trace_chain_joins.md</code> §5). The frame’s slot does not hold the
+value meanwhile, so step 4 is what keeps a deopt below such a block
+sound: the walk boxes the value back into the slot before the
+interpreter can read it.</li>
 </ol>
-<h2 id="6-the-second-payoff-frame_had_deopt"><a class="header" href="#6-the-second-payoff-frame_had_deopt">6. The second payoff: <code>frame_had_deopt</code></a></h2>
-<p><code>compile/method_call.rs:1243</code> currently gives up all return-type inference
-for any callee that <em>could</em> deopt:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>if self.store[iseq_id].has_exception_handler() || frame_had_deopt {
-    s.taint_for_unmodeled_rescue();     // ret -&gt; ReturnValue::Value
-}
-<span class="boring">}</span></code></pre>
-<p>and propagates the fact one level out (<code>current_frame_mut().had_deopt = true</code>),
-so one deopt-able site anywhere in an inlined subtree flattens every
-enclosing return state to <code>Value</code>. This is PR #505’s fix for a real
-unsoundness: a deopted callee resumes in the interpreter and can return a
-value outside the class the abstract interpreter predicted.</p>
-<p>Chain deopt licenses removing the <code>frame_had_deopt</code> half:</p>
+<h2 id="6-return-state-narrowing-across-a-deopt-able-callee"><a class="header" href="#6-return-state-narrowing-across-a-deopt-able-callee">6. Return-state narrowing across a deopt-able callee</a></h2>
+<p>A specialized callee’s computed return state (for example
+<code>Guarded::Class(Integer)</code>) is consumed by the caller’s compiled
+continuation. A callee that deopts resumes in the interpreter and may return
+a value outside that class. The compiler used to widen the return state to
+<code>Value</code> for any callee that <em>could</em> deopt (<code>frame_had_deopt</code>, PR #505).</p>
+<p>Escalation makes that widening unnecessary, and it is gone:</p>
 <ul>
-<li>callee completes in JIT — the inference was derived from exactly those
-compiled paths, so it holds;</li>
-<li>callee deopts — the caller is converted too, its compiled code never
-resumes, and the <code>Guarded::Class(..)</code> tag is never acted on.</li>
+<li>if the callee completes in compiled code, the inferred state was derived
+from exactly those paths, so it holds;</li>
+<li>if the callee deopts, the escalated walk converts the caller as well, so
+the compiled continuation that consumed the narrowed state never runs.</li>
 </ul>
-<p>Two conditions on that argument:</p>
+<p>Two conditions apply:</p>
 <ul>
-<li><strong>Every deopt below a site that consumed a narrowed return state must
-escalate to chain deopt.</strong> Blanket escalation would make today’s cheap
-per-frame deopts pay a chain walk and throw away the caller’s compiled
-execution, so gate it per site. Specialization compiles the callee body
-<em>per call site</em>, so the flag can be baked in at compile time. This is the
-quietest thing in the design to get wrong — a missed escalation shows up
-only as a wrong class tag — so it wants a mechanical guarantee (a frame
-flag every side-exit emitter in that frame consults), not review
-discipline.</li>
-<li><strong><code>has_exception_handler</code> stays.</strong> An exception raised and rescued <em>inside</em>
-the callee returns normally with no deopt at all, so chain deopt never
-fires and the happy-path-only inference is still wrong (issue #405).</li>
+<li><strong>Every deopt below a consumer of a narrowed return state must
+escalate.</strong> This is enforced mechanically, not by review: the escalation
+count is stamped onto the <code>AsmIr</code> and every side-exit constructor reads
+it (§8.5).</li>
+<li><strong><code>has_exception_handler</code> still widens.</strong> An exception raised and rescued
+<em>inside</em> the callee returns normally without a deopt, so the walk never
+fires and the happy-path inference would be wrong (issue #405).
+<code>taint_for_unmodeled_rescue</code> (<code>state.rs</code>) does this widening.</li>
 </ul>
-<p>Note also that <code>taint_for_unmodeled_rescue</code> (<code>state.rs:598</code>) bundles the
-<code>ret</code> downgrade with clearing <code>invariants.side_effect_guard</code>; splitting the
-deopt reason from the rescue reason means deciding both, and the
-<code>side_effect_guard</code> half needs its own written argument.</p>
-<h2 id="7-gating-for-the-speculation-itself-5455"><a class="header" href="#7-gating-for-the-speculation-itself-5455">7. Gating for the speculation itself (§5.4–5.5)</a></h2>
-<p>Agreed scope: <strong>specialized <code>iseq_block</code> only, and only where the frame
-cannot be captured</strong> (<code>possibly_capture_without_block</code> / <code>has_block_arg</code>
-false). Generic block invocation is out of scope for now.</p>
-<p>The constraints that force this:</p>
+<h2 id="7-why-unboxed-values-stay-out-of-the-slots"><a class="header" href="#7-why-unboxed-values-stay-out-of-the-slots">7. Why unboxed values stay out of the slots</a></h2>
+<p><code>Lfp::mark</code> walks the frame’s register slots and marks each as a <code>Value</code>,
+so a raw <code>f64</code> in a local slot would be scanned as a heap pointer. An
+unboxed outer local therefore lives in the owning frame’s FP save / spill
+area, and the specialized block is pointed there (§5 step 5). Anything that
+reads the slot expecting a boxed <code>Value</code> (a captured <code>Proc</code>, <code>binding</code>,
+generic block invocation, moving the frame to the heap, the interpreter
+after a deopt) must see the value boxed back first, which is what the walk
+and the capture conversion (§1) guarantee.</p>
+<h2 id="8-implementation"><a class="header" href="#8-implementation">8. Implementation</a></h2>
+<h3 id="81-the-per-site-conversion-stub"><a class="header" href="#81-the-per-site-conversion-stub">8.1 The per-site conversion stub</a></h3>
+<p>At compile time each site’s <code>ChainReplay</code> (<code>jitgen.rs</code>: the site’s
+<code>WriteBack</code>, the frame’s spill <code>base</code>, the site’s <code>UsingFpr</code>, the call’s
+<code>dst</code> slot, and the call-site pc) is lowered by <code>Codegen::gen_chain_replay_stub</code>
+into a compiled conversion stub. The walk calls the stub with three frame
+pointers (callee bp, caller bp, caller <code>Lfp</code>), and the stub writes the
+suspended caller frame back.</p>
+<p>The layout facts the replay depends on:</p>
 <ul>
-<li><strong>GC.</strong> <code>Lfp::mark</code> (<code>frame.rs:284</code>) walks <code>meta.regs()</code> and marks every
-slot as a <code>Value</code>. A raw <code>f64</code> in a local slot would be scanned as a heap
-pointer, so unboxed values must stay in the FP spill area and the block
-must be pointed <em>there</em>, not at <code>[outer_lfp - slot]</code>.</li>
-<li><strong>Escape paths.</strong> Anything that reads <code>[outer_lfp - slot]</code> expecting a
-boxed <code>Value</code> breaks the speculation: a captured <code>Proc</code> called later,
-<code>binding</code> / <code>Binding#local_variable_get</code>, generic (non-specialized) block
-invocation, <code>move_frame_to_heap</code>, backtraces — and the interpreter itself
-once <em>the block</em> deopts and the VM runs the block’s body.</li>
-</ul>
-<h2 id="8-what-is-implemented-5-steps-13-eager-form"><a class="header" href="#8-what-is-implemented-5-steps-13-eager-form">8. What is implemented (§5 steps 1–3, eager form)</a></h2>
-<h3 id="81-the-write-back-is-replayed-by-a-compiled-per-site-stub-at-deopt-time"><a class="header" href="#81-the-write-back-is-replayed-by-a-compiled-per-site-stub-at-deopt-time">8.1 The write-back is replayed by a compiled per-site stub, at deopt time</a></h3>
-<p>Step 1’s runtime table exists, one step further along than designed. At
-compile time each site’s <code>ChainReplay</code> (<code>jitgen.rs</code> — the site’s <code>WriteBack</code>,
-the frame’s spill <code>base</code>, the site’s <code>UsingFpr</code>, the call’s <code>dst</code> slot, and
-the call-site pc) is lowered by <code>Codegen::gen_chain_replay_stub</code> into a
-<strong>compiled conversion stub</strong>, and <code>Codegen::chain_deopt_table</code> maps the
-call’s return address straight to that stub’s entry (<code>CodePtr -&gt; CodePtr</code>).
-The walk therefore carries no per-site data and clones nothing: it calls the
-stub with three frame pointers (callee bp, caller bp, caller <code>Lfp</code>) and the
-stub writes the suspended caller frame back <strong>during the walk</strong>.</p>
-<p>Layout facts the replay depends on (each re-verified against the emission
-code; they are load-bearing now):</p>
-<ul>
-<li>Every frame — VM, JIT, native wrapper — establishes <code>bp == cfp + BP_CFP</code>
-in its prologue (<code>Cfp::frame_bp</code>), so <code>callee_rbp = callee_cfp + 8</code> and
-the caller’s saved bp is <code>[callee_rbp]</code>.</li>
-<li>§3.3’s premise was wrong in one detail: <code>FprSave</code> does <strong>not</strong> spill the
-pool-resident floats into the frame’s <code>base</code>-relative spill area. The
-cont-mode save (<code>fpr_save_with_cont</code> / <code>emit_fpr_save</code>) puts them in an
-<code>rsp</code>-relative area allocated at the call — one 8-byte slot per set bit of
-the site’s <code>UsingFpr</code>, in bit order, at <code>[rsp + 16 + 8i]</code> — which after
-the call/prologue sits at <strong><code>callee_rbp + 32 + 8i</code></strong> (since
-<code>callee_rbp == rsp_after_FprSave - 16</code>). The formula is byte-identical on
-aarch64 (<code>emit_fpr_save</code> mirrors the x86 shape; <code>stp x29, x30</code> is the same
-16-byte adjustment as <code>call</code> + <code>pushq rbp</code>), so one arch-neutral replay
-serves both.</li>
+<li>Every frame (VM, JIT, native wrapper) establishes <code>bp == cfp + BP_CFP</code> in
+its prologue (<code>Cfp::frame_bp</code>), so <code>callee_rbp = callee_cfp + 8</code> and the
+caller’s saved bp is <code>[callee_rbp]</code>.</li>
+<li>Pool-resident floats live across the call in the cont-mode save area
+(<code>fpr_save_with_cont</code> / <code>emit_fpr_save</code>), allocated <code>rsp</code>-relative at the
+call: one 8-byte slot per set bit of the site’s <code>UsingFpr</code>, in bit order,
+at <code>[rsp + 16 + 8i]</code>, which after the call and prologue is
+<strong><code>callee_rbp + 32 + 8i</code></strong>. The formula is the same on aarch64
+(<code>stp x29, x30</code> is the same 16-byte adjustment as <code>call</code> + <code>pushq rbp</code>),
+so one arch-neutral replay serves both.</li>
 <li>Spilled <code>FPReg</code>s (ids <code>&gt;= PHYS_FPR_POOL</code>) live <code>base</code>-relative in the
-caller frame: <code>[caller_rbp - (base - 24 + 8n)]</code> (<code>PhysMap::resolve</code>,
-shared by both arches).</li>
-<li>The caller’s LFP is read through <code>caller_cfp.lfp()</code> — the cfp slot is
-redirected when a frame is promoted to the heap, exactly like the <code>r14</code>
-the emitted deopt write-back uses.</li>
+caller frame, at <code>[caller_rbp - (base - 24 + 8n)]</code> (<code>PhysMap::resolve</code>).</li>
+<li>The caller’s LFP is read through <code>caller_cfp.lfp()</code>, which follows a frame
+moved to the heap, as the emitted deopt write-back’s LFP register does.</li>
 </ul>
-<p><code>virtual_obj</code> / <code>forward_kwrest</code> emit calls to <code>runtime::create_array</code> (or
-<code>value_deep_copy</code> for a literal template) / <code>runtime::correct_rest_kw</code>
-against the dynamic caller’s frame reached through the saved bp — the same
-helpers and the same addressing the deopt path’s
-<code>gen_virtual_materialize</code> / <code>gen_forward_kwrest_materialize</code> use, which
-is why the stub form needs no Rust-side equivalents of its own. They run
-after the fpr/literal/void stores, so every deferred <code>dst</code> slot already holds
-its <code>nil</code> and the frame stays GC-consistent across the allocating helper
-calls. GC safety overall: slots always hold whole, valid (possibly stale)
-<code>Value</code>s, and the GC scans them as such, so the replay may allocate at any
-point.</p>
-<p>The stub reaches nothing on <code>Codegen</code> — it reads its three frame pointers and
-writes frame slots — so the walk applies each conversion in place, under the
-<code>CODEGEN</code> borrow it already holds; there is no plan to collect and hand back
-to the callers (<code>runtime::chain_deopt</code>, <code>Codegen::check_bop_redefine</code>).
-Write-back order within one frame is fixed (deferred materialization last);
-frames are converted in walk order, which is sound because the replays touch
-disjoint frames (rest/kwrest sources are raw slots, valid regardless of
-conversion order).</p>
-<h3 id="82-one-shared-continuation-stub--31s-raw-vm-entry-is-still-wrong-the-pad-slot-fixes-it"><a class="header" href="#82-one-shared-continuation-stub--31s-raw-vm-entry-is-still-wrong-the-pad-slot-fixes-it">8.2 One shared continuation stub — §3.1’s raw VM entry is still wrong, the pad slot fixes it</a></h3>
-<p>§3.1 proposes pointing every rewritten return-address slot at the VM’s
-shared post-call continuation, on the grounds that the sequence is entirely
-stack-driven and carries no per-site state. That is wrong for a reason §3.1
-missed: the shared continuation re-derives the destination slot and the
-resume pc from the bytecode <strong>assuming a 2-unit send instruction</strong>
-(<code>movzxw rdi, [r13 + 4]</code>; <code>addq r13, 32</code>; on error <code>entry_raise</code>’s
-<code>r13 - 16</code> lands on the send’s second unit, which the exception table still
-covers <em>for sends</em>). But operator call sites — <code>BinOp</code> / <code>Index</code> / …,
-<strong>1-unit</strong> bytecodes — dispatch through the same <code>send</code> emitter and register
-for chain deopt too. At such a site the raw VM continuation reads a garbage
-destination slot, resumes one whole instruction too far, and on a
-propagating exception looks up the exception table at the <em>following</em>
-instruction — which silently skips an <code>ensure</code> whose protected range ends at
-the operator (found by <code>Enumerator.new { |y| begin; y &lt;&lt; 1; ensure; … }</code>
-with a raising consumer block, once every error exit escalated).</p>
-<p>The fix keeps §3.1’s “one address serves every site” without decoding
-bytecode: <strong>one</strong> stub per arch (<code>gen_chain_cont_stub</code>, emitted with the VM
-handlers), plus a per-site continuation word the site’s conversion stub
-stores into the callee’s <strong>cont-frame pad slot</strong> (CFP+32 — the second half of
-the 16-byte cont frame, reserved by every caller and read by nothing on the
-normal return path). The word packs <code>conv(dst)</code> (0 = none)
-in the high 32 bits and the byte advance to the next instruction
-(<code>pc.next() - pc</code>, per-opcode-size correct: 16 or 32) in the low 32 bits.</p>
-<p>Entered by <code>ret</code> — the frame’s write-back already replayed at deopt time —
-the stub only has to:</p>
+<p><code>virtual_obj</code> / <code>forward_kwrest</code> call <code>runtime::create_array</code> (or
+<code>value_deep_copy</code> for a literal template) and <code>runtime::correct_rest_kw</code>,
+the same helpers and addressing that the deopt path’s
+<code>gen_virtual_materialize</code> / <code>gen_forward_kwrest_materialize</code> use. They run
+after the fpr / literal / void stores, so every deferred <code>dst</code> slot already
+holds <code>nil</code> and the frame stays GC-consistent across the allocating calls:
+slots always hold whole, valid (possibly stale) <code>Value</code>s.</p>
+<p>The stub reaches nothing on <code>Codegen</code>, so the walk applies each conversion
+in place, under the <code>CODEGEN</code> borrow it already holds. Frames are converted
+in walk order; the replays touch disjoint frames.</p>
+<h3 id="82-the-shared-continuation-stub"><a class="header" href="#82-the-shared-continuation-stub">8.2 The shared continuation stub</a></h3>
+<p>The rewritten slots point at <strong>one</strong> stub per arch (<code>gen_chain_cont_stub</code>,
+emitted with the VM handlers, address in <code>Codegen::chain_cont_stub</code>). Its
+per-site input is a continuation word that the site’s conversion stub stores
+into the callee’s <strong>cont-frame pad slot</strong> (CFP+32, the second half of the
+16-byte cont frame, which nothing reads on the normal return path). The word
+packs <code>conv(dst)</code> (0 = none) in the high 32 bits and the byte advance to the
+next instruction (<code>pc.next() - pc</code>: 16 or 32) in the low 32 bits, so 1-unit
+operator sites resume correctly.</p>
+<p>Entered by <code>ret</code>, the stub:</p>
 <ol>
-<li>run the <code>pop_frame</code> the hijacked <code>ret</code> skipped (<code>rbp</code>/<code>x29</code>-derived, so
-correct whatever the callee left in the global registers): restore
-<code>Executor::cfp</code> and the LFP register;</li>
-<li>read the call-site pc from the cont frame’s pc slot (<code>ContFramePc</code> wrote
-it at every JIT site; <code>Kernel#caller</code> reads the same slot) and the
-continuation word from the pad, then drop the cont frame;</li>
-<li>on the error signal (result 0), hand the call-site pc to <code>entry_raise</code>
-under each arch’s convention (x86 <code>pc + 1</code> before the <code>-16</code>, aarch64 <code>pc</code>
-unchanged);</li>
-<li>otherwise store the result into <code>dst</code> (if any) and resume the fetch loop
-at <code>pc + advance</code>.</li>
+<li>runs the <code>pop_frame</code> the hijacked <code>ret</code> skipped, derived from
+<code>rbp</code>/<code>x29</code>, restoring <code>Executor::cfp</code> and the LFP register;</li>
+<li>reads the call-site pc from the cont frame’s pc slot and the
+continuation word from the pad, then drops the cont frame;</li>
+<li>on the error signal (result 0), hands the call-site pc to <code>entry_raise</code>
+under each arch’s convention (x86-64 <code>pc + 1</code> before the <code>-16</code>, aarch64
+<code>pc</code> unchanged);</li>
+<li>otherwise stores the result into <code>dst</code> (if any) and resumes the fetch
+loop at <code>pc + advance</code>.</li>
 </ol>
-<p>The stub never allocates, so no GC concern; the dead <code>FprSave</code> area above
-the cont frame is simply left below the frame, as every side exit leaves
-it. There are no per-site handlers, no <code>SideExit::ChainExit</code>, and no
-<code>fpr_reload_cont</code> — the pool registers are dead at the stub (the replay
-consumed the save area).</p>
-<h3 id="83-how-it-is-exercised-without-a-firing-point"><a class="header" href="#83-how-it-is-exercised-without-a-firing-point">8.3 How it is exercised without a firing point</a></h3>
-<p>Steps 4–5’s speculation does not exist yet, so the <code>Float</code> guard that will
-fire the walk does not either. Two things exercise it meanwhile:</p>
-<ul>
-<li><strong>BOP eviction</strong>, in <em>every</em> build: it is now the walk’s only production
-caller, so <code>tests/redefine.rs</code> covers the mechanism unconditionally.
-<code>redefine_bop_onstack_caller</code> fails with the stale inlined <code>+</code> (8 instead
-of 999) if the suspended caller resumes its compiled body, so the test
-passing is a positive signal that the conversion happened, not just that
-nothing crashed.</li>
-<li><strong>Every side exit escalates</strong> (§8.6), unconditionally in every build
-(formerly the default-off <code>chain-deopt</code> cargo feature; promoted to the
-default after measurement — see §8.5): each deopt / recompile-deopt /
-error exit taken anywhere in the suite fires the walk from the deopting
-frame, so the deopt → replay → stub-return path — the one the speculation
-will actually take — is exercised at every deopt site the suite reaches,
-not only at BOP redefinitions.</li>
-</ul>
-<p>What this validates: the walk, the eager replay, the return-address rewrite,
-the stub’s frame/LFP restore and result/raise hand-off, across normal calls,
-generic yields, and specialized calls/yields. What it does <strong>not</strong> validate
-is the case chain deopt exists for — a frame whose local is <em>unboxed at the
-moment of conversion</em> — because without the <code>locals_to_S</code> relaxation no
-suspended frame ever holds one.</p>
-<p>The producers (<code>AbstractState::chain_exit</code>) are <strong>not</strong> gated: every call and
-yield site registers in every build, because with immediate eviction gone a
-site the table does not know is a site BOP eviction cannot convert (§10).
-The metadata cost is accepted. When step 5 lands, the per-site decision §6
-argues for rides on top of unconditional registration, not instead of it.</p>
-<h3 id="84-a-rewritten-return-address-slot-is-also-on-the-unwind-path"><a class="header" href="#84-a-rewritten-return-address-slot-is-also-on-the-unwind-path">8.4 A rewritten return-address slot is also on the unwind path</a></h3>
-<p>Worth knowing before building step 4, because it is not obvious: an
-exception does <strong>not</strong> bypass the rewritten slot. <code>entry_raise</code> with no
-in-frame handler unwinds by running the frame’s ordinary epilogue and
-<code>ret</code>ing with the error signal in <code>rax</code>/<code>x0</code> — so a propagating exception
-lands in the continuation stub too, and the stub’s error branch (§8.2)
-hands the call-site pc to <code>entry_raise</code>, which re-raises from the
-now-converted frame at the call site — running its <code>rescue</code>/<code>ensure</code> there
-or unwinding further. Non-local exits (<code>MethodReturn</code>, <code>Break</code>) take the
-same route, including <code>method_return_specialized</code>, whose <code>ret</code> lands in the
-stub via the slot belonging to the <em>outermost</em> inlined call — the one whose
-<code>dst</code> the value is destined for.</p>
-<p>This is what we want (the frame is converted before the VM inspects it for
-a <code>rescue</code>), and it means the stub must be correct for <code>rax == 0</code>, not only
-for a normal return. It is: the error branch touches neither <code>dst</code> nor the
-advance, and the frame’s write-back already ran at deopt time.</p>
-<h3 id="85-escalating-side-exits-5-step-4s-mechanism-6s-mechanical-guarantee"><a class="header" href="#85-escalating-side-exits-5-step-4s-mechanism-6s-mechanical-guarantee">8.5 Escalating side exits (§5 step 4’s mechanism, §6’s mechanical guarantee)</a></h3>
-<p>A frame compiled under the speculation must convert its suspended callers on
-<strong>every</strong> path that resumes the interpreter in-frame, not just the <code>Float</code>
-guard on the offending store: once the interpreter runs any of the frame’s
-bytecode it can reach an outer local through <code>Load/StoreDynVar</code>, a <code>binding</code>,
-or a capture, and would read the stale slot. §6 asks for a mechanical
-guarantee rather than review discipline, and this is it:</p>
-<ul>
-<li><code>JitContext::escalate_side_exits</code> is the single decision point. It is
-stamped onto each <code>AsmIr</code> at construction, and <strong>every</strong> side-exit
-constructor (<code>new_deopt</code> / <code>new_deopt_with_pc</code> / <code>deopt_from_point</code> /
-<code>new_recompile_deopt</code> / <code>new_error</code>) reads it — an emitter cannot forget
-to escalate because emitters do not choose. It returns <code>true</code>
-unconditionally: A/B measurement of blanket escalation (full suite,
-benchmark set, optcarrot) put the walk at ~160ns per escalation and
-≤1.6% wall-clock even on bedcov’s 1.8M-escalation worst case, every
-other benchmark inside noise — cheap enough that §6’s per-site gating is
-unnecessary for the escalation itself, and blanket escalation is exactly
-the invariant the speculation needs (a speculated frame’s callers
-convert on <em>every</em> interpreter resume below it, not only on the Float
-guard).</li>
-<li>An escalated <code>Deoptimize</code> / <code>RecompileDeoptimize</code> / <code>Error</code> handler calls
-<code>runtime::chain_deopt(vm)</code> <strong>after</strong> its write-back (the frame is fully
-homed) and before resuming the fetch loop / entering <code>entry_raise</code>. The
-runtime entry collects the plan under the <code>CODEGEN</code> borrow and applies it
-(replay + slot rewrite) after releasing it — the replay allocates (§8.1).
-The walk starts at the deopting frame’s own cfp, so its own
-return-address slot is rewritten too — that is what converts its caller
-when the now-interpreted frame eventually returns.</li>
-<li><code>Error</code> exits escalate because a raise can be rescued <em>in-frame</em> (an
+<p>The stub never allocates. The pool registers are dead at the stub, because
+the replay consumed the save area.</p>
+<h3 id="83-registration"><a class="header" href="#83-registration">8.3 Registration</a></h3>
+<p>Every call and yield site registers (<code>AbstractState::chain_exit</code> in
+<code>jitgen/compile/method_call.rs</code>, lowered to <code>AsmInst::ChainExit</code> /
+<code>LInst::ChainExit</code>, which emit no code). An unregistered site would be one
+that BOP eviction cannot convert, and §6’s return-state argument depends on
+registration too. <code>tests/redefine.rs</code> (<code>redefine_bop_onstack_caller</code> and
+others) checks the conversion positively: a suspended caller that resumed
+its compiled body would return the stale inlined result.</p>
+<h3 id="84-the-unwind-path-goes-through-the-rewritten-slot"><a class="header" href="#84-the-unwind-path-goes-through-the-rewritten-slot">8.4 The unwind path goes through the rewritten slot</a></h3>
+<p>An exception does not bypass a rewritten slot. <code>entry_raise</code> with no
+in-frame handler unwinds by running the frame’s epilogue and <code>ret</code>ing with
+the error signal in <code>rax</code>/<code>x0</code>, so a propagating exception lands in the
+continuation stub, whose error branch re-raises from the converted frame at
+the call site (running its <code>rescue</code> / <code>ensure</code> there, or unwinding
+further). Non-local exits (<code>MethodReturn</code>, <code>Break</code>) take the same route,
+including <code>method_return_specialized</code>, whose <code>ret</code> lands in the stub through
+the slot of the <em>outermost</em> inlined call, the one whose <code>dst</code> the value is
+destined for.</p>
+<h3 id="85-the-walk-and-escalation"><a class="header" href="#85-the-walk-and-escalation">8.5 The walk and escalation</a></h3>
+<p><code>Codegen::chain_deopt_into(cfp, frames)</code> walks the CFP chain from <code>cfp</code>,
+rewriting each suspended caller through the return address its callee
+holds. <code>frames</code> bounds the walk (<code>None</code> walks the whole chain). Frames whose
+return address is VM code or an invoker are skipped, but the walk continues
+past them, since a chain may alternate VM and JIT frames. A frame converted
+by an earlier walk is skipped the same way, because its rewritten return
+address is the stub, a VM address. This matters: interpreted inner frames
+may have updated its slots through <code>outer_lfp</code> since, and a second replay
+would clobber them with stale floats.</p>
+<p>Escalation is decided in one place. <code>JitContext::chain_deopt_frames</code> is the
+frame’s depth in its compilation unit; <code>AsmIr::new</code> stamps it onto the IR
+(<code>AsmIr::chain_frames</code>), and every side-exit constructor (<code>new_deopt</code>,
+<code>new_deopt_with_pc</code>, <code>deopt_from_point</code>, <code>new_recompile_deopt</code>, <code>new_error</code>)
+reads it, so no emitter can forget. A <code>Deoptimize</code> / <code>RecompileDeoptimize</code>
+/ <code>Error</code> handler with a non-zero count calls <code>runtime::chain_deopt(vm, frames)</code> after its own write-back, before resuming the fetch loop or
+entering <code>entry_raise</code>. The walk starts at the deopting frame, so its own
+return-address slot is rewritten too, which converts its caller when the
+now-interpreted frame returns.</p>
+<p>A frame at depth 0 is its unit’s root and does not escalate. Both things
+escalation protects are confined to one unit: a narrowed return state is
+applied only by <code>def_rax2acc_return</code> on the specialized path, and only a
+specialized block inside the unit reads an outer frame’s unboxed <code>Float</code>.
+An unrewritten slot of a root frame that raises lands in the caller’s
+compiled post-call error check, the ordinary JIT error path.</p>
+<p><code>Error</code> exits escalate because a raise can be rescued in-frame (an
 interpreter resume like any deopt) or unwind through the suspended callers
-— §8.4’s path, which requires the slots to have been rewritten.</li>
-<li><code>Evict</code> handlers do <strong>not</strong> escalate — and are in fact no longer entered
-at all: immediate eviction was their only entry (§10). The side-exit slot
-survives because <code>AsmEvict</code> is the id under which a call site’s return
-address is recorded for <code>chain_exit</code>.</li>
-</ul>
-<p>Every JIT call/yield site registers, so the walk converts every suspended
-JIT frame it reaches — strictly more conversion than the speculation will
-need, which is sound for the same reason BOP eviction is. A frame converted
-by an earlier walk is skipped the same way a VM frame is — its rewritten
-return address <em>is</em> a VM address (the stub) — which is load-bearing:
-interpreted inner frames may have updated its slots through <code>outer_lfp</code>
-since, and a second replay would clobber them with stale floats.</p>
-<p>BOP eviction goes through the same walk (<code>Codegen::chain_deopt_into</code>) as an
-escalated side exit; there is one CFP walk and one conversion mechanism.</p>
+(§8.4). <code>Evict</code> handlers are never entered: the <code>AsmEvict</code> id survives only
+as the key under which a call site’s return address is recorded (§3.4).</p>
+<p>BOP eviction (<code>Codegen::check_bop_redefine</code>) walks whole chains, because it
+must convert frames across unit boundaries. A capture
+(<code>Codegen::convert_for_capture</code>) walks the capturing call site’s unit.</p>
 <h3 id="86-where-the-code-is"><a class="header" href="#86-where-the-code-is">8.6 Where the code is</a></h3>
 <div class="table-wrapper">
 <table>
@@ -603,222 +427,74 @@ escalated side exit; there is one CFP walk and one conversion mechanism.</p>
 <tr><th>Piece</th><th>Location</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ChainExitSpec</code> (compile-time), <code>ChainReplay</code>, <code>gen_chain_replay_stub</code> (the compiled per-site conversion, x86-64)</td><td><code>jitgen.rs</code> (aarch64 form in <code>arch/aarch64/compile/mod.rs</code>)</td></tr>
-<tr><td><code>AsmInst::ChainExit</code> (registration, no code emitted)</td><td><code>jitgen/asmir.rs</code>; lowered in <code>jitgen/asmir/compile_shared.rs</code></td></tr>
+<tr><td><code>ChainExitSpec</code> (compile time), <code>ChainReplay</code>, <code>gen_chain_replay_stub</code> (x86-64)</td><td><code>jitgen.rs</code> (aarch64 form in <code>arch/aarch64/compile/mod.rs</code>)</td></tr>
+<tr><td><code>AsmInst::ChainExit</code> (registration, no code)</td><td><code>jitgen/asmir.rs</code>; lowered in <code>jitgen/asmir/compile_shared.rs</code></td></tr>
 <tr><td><code>LInst::ChainExit</code></td><td><code>jitgen/lir.rs</code></td></tr>
-<tr><td>Producers (call / specialized call / yield / specialized yield)</td><td><code>AbstractState::chain_exit</code>, <code>jitgen/compile/method_call.rs</code></td></tr>
+<tr><td>Producers (call, specialized call, yield, specialized yield)</td><td><code>AbstractState::chain_exit</code>, <code>jitgen/compile/method_call.rs</code></td></tr>
 <tr><td>Shared continuation stub</td><td><code>gen_chain_cont_stub</code> (<code>arch/x86_64/vmgen.rs</code>, <code>arch/aarch64/vmgen.rs</code>), address in <code>Codegen::chain_cont_stub</code></td></tr>
-<tr><td>Deferred rest / kwrest materialization the replay stub calls</td><td><code>runtime::create_array</code>, <code>runtime::correct_rest_kw</code> (<code>codegen/runtime.rs</code>)</td></tr>
-<tr><td>Runtime table, the walk</td><td><code>chain_deopt_table</code> (return address -&gt; stub entry), <code>register_chain_exit</code>, <code>chain_deopt_into</code> (<code>codegen.rs</code>)</td></tr>
-<tr><td>Escalation switch + runtime entry</td><td><code>JitContext::escalate_side_exits</code> (<code>jitgen/context.rs</code>), <code>AsmIr::escalate_exits</code> (<code>jitgen/asmir.rs</code>), <code>runtime::chain_deopt</code> (<code>codegen/runtime.rs</code>)</td></tr>
-<tr><td>Frame readers the walk uses (the return-address and cont-frame-pad <em>writes</em> are emitted into the replay stub, so there are no Rust-side writers)</td><td><code>Cfp::return_addr</code>, <code>Cfp::frame_bp</code>, <code>Cfp::lfp</code> (<code>executor/frame.rs</code>)</td></tr>
+<tr><td>Deferred rest / kwrest materialization</td><td><code>runtime::create_array</code>, <code>runtime::correct_rest_kw</code> (<code>codegen/runtime.rs</code>)</td></tr>
+<tr><td>Runtime table, the walk</td><td><code>chain_deopt_table</code>, <code>register_chain_exit</code>, <code>chain_deopt_into</code>, <code>convert_for_capture</code> (<code>codegen.rs</code>)</td></tr>
+<tr><td>Escalation count and runtime entry</td><td><code>JitContext::chain_deopt_frames</code> (<code>jitgen/context.rs</code>), <code>AsmIr::chain_frames</code> (<code>jitgen/asmir.rs</code>), <code>runtime::chain_deopt</code> (<code>codegen/runtime.rs</code>)</td></tr>
+<tr><td>Frame readers the walk uses</td><td><code>Cfp::return_addr</code>, <code>Cfp::frame_bp</code>, <code>Cfp::lfp</code> (<code>executor/frame.rs</code>); the slot writes are emitted into the replay stub</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="9-the-lazy-write-back-was-a-deviation--record-of-the-eager-conversion"><a class="header" href="#9-the-lazy-write-back-was-a-deviation--record-of-the-eager-conversion">9. The lazy write-back was a deviation — record of the eager conversion</a></h2>
-<p><strong>Resolved.</strong> The mechanism was first built in a lazy, per-site-handler
-form; this section records what that form did, why it was unsound to build
-the speculation on, and the conversion plan — which has since landed (§8
-describes the eager implementation). §9.1–9.2 describe the <em>former</em> build.</p>
-<h3 id="91-what-the-built-mechanism-actually-did"><a class="header" href="#91-what-the-built-mechanism-actually-did">9.1 What the built mechanism actually did</a></h3>
-<p><code>Codegen::chain_deopt</code> (<code>codegen.rs</code>) rewrote each suspended frame’s
-return-address slot to that site’s chain-exit handler — <strong>and nothing
-else</strong>. The frame’s write-back runs only when control returns to it: the
-innermost frame <code>ret</code>s, lands in the handler, the handler writes that one
-frame back and tails into the VM continuation; then the next frame out, and
-so on. Only the frame that <em>raised</em> the deopt is written back eagerly (by
-its own escalated side exit, before it calls <code>runtime::chain_deopt</code>).</p>
-<p>So immediately after a deopt in <code>A → B → C</code> at <code>C</code>:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>frame</th><th>local slots</th></tr>
-</thead>
-<tbody>
-<tr><td>C</td><td>correct (its own side exit wrote them)</td></tr>
-<tr><td>B, A</td><td><strong>stale</strong> — write-back deferred to their <code>ret</code>s</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="92-why-that-is-wrong-and-why-nothing-catches-it-today"><a class="header" href="#92-why-that-is-wrong-and-why-nothing-catches-it-today">9.2 Why that is wrong, and why nothing catches it today</a></h3>
-<p>The intended design (§2) is that the walk converts the whole chain at deopt
-time: <strong>all</strong> frames written back, return addresses pointed at the <strong>VM’s
-shared post-call continuation</strong> — control never re-enters JIT code, and no
-per-site handler exists at all. (Note the tension in the built form: a
-per-site handler is only reachable <em>because</em> the return address points at
-it rather than at the VM — the lazy write-back and the per-site handlers
-are two faces of the same deviation.)</p>
-<p>The soundness gap: once <code>C</code> is running in the interpreter, anything that
-reads an outer frame’s locals through <code>outer_lfp</code> — a block body touching
-<code>A</code>’s variables, <code>binding</code>, a backtrace with argument values — reads <code>A</code>’s
-<strong>slots</strong>, which still hold whatever was there before <code>A</code>’s floats were
-promoted to <code>LinkMode::F</code>. Today this cannot be observed solely because
-<code>locals_to_S</code> boxes every local into its slot before <em>every</em> block-passing
-call, so every frame on an <code>outer</code> chain happens to have correct slots.
-§5 step 5 removes exactly that guarantee; the lazy form breaks the moment
-it lands.</p>
-<p>The <code>chain-deopt</code> feature suite (3203/3203 green) was therefore a regression
-base for the <em>conversion machinery</em> — stack rewriting, <code>ret</code>-entry handler
-state, unwind interaction — not evidence that lazy write-back was sound.</p>
-<h3 id="93-the-conversion--landed"><a class="header" href="#93-the-conversion--landed">9.3 The conversion — landed</a></h3>
-<ol>
-<li><del>Extend the walk to replay each suspended frame’s write-back <strong>during</strong>
-<code>chain_deopt</code>, then point its return address at the shared VM entry.</del>
-Done — with §8.2’s correction: the raw VM send continuation is wrong for
-1-unit operator sites, so the rewritten slots point at one shared stub
-(<code>gen_chain_cont_stub</code>) that reads the per-site <code>dst</code>/advance word the
-walk stored in the cont-frame pad slot.</li>
-<li><del>The replay needs, per return address: the <code>WriteBack</code>, the frame’s
-spill <code>base</code>, and the site’s <code>UsingFpr</code> save-area layout.</del> Done —
-<code>ChainReplay</code> carries exactly that (plus <code>dst</code> and the site pc for the
-stub’s continuation word); the layout facts are restated, verified, in
-§8.1. <code>virtual_obj</code> / <code>forward_kwrest</code> call <code>runtime::create_array</code> /
-<code>runtime::correct_rest_kw</code> — GC-safe because every source value is
-in a scanned frame slot.</li>
-<li><del>Remove the per-site chain-exit handlers and the <code>DestLabel</code> table —
-<code>chain_deopt_table</code> maps <code>return_addr</code> to the replay data instead.</del>
-Done — <code>SideExit::ChainExit</code> / <code>LSideExitKind::ChainExit</code>,
-<code>gen_chain_exit_with_label</code> / <code>a64_gen_chain_exit</code>, and
-<code>fpr_reload_cont</code> / <code>a64_fpr_reload_cont</code> are deleted; §8.4’s unwind
-path now terminates in the stub’s error branch.</li>
-<li><del>Re-run the <code>chain-deopt</code> feature suite; it must stay green through the
-conversion.</del> Done — 3203/3203 green in the eager form (and the default
-suite unchanged).</li>
-</ol>
-<p>Ordering: this preceded §5 steps 4–5, as required. The <code>locals_to_S</code>
-relaxation is now unblocked.</p>
-<h2 id="10-immediate-eviction-is-gone"><a class="header" href="#10-immediate-eviction-is-gone">10. Immediate eviction is gone</a></h2>
-<p><strong>Landed.</strong> Chain conversion is the only mechanism that drops an on-stack JIT
-frame to the interpreter.</p>
-<p>Immediate eviction existed because a basic-op redefinition inside a callee
-makes the <em>caller’s</em> already-compiled continuation stale — its inlined integer
-arithmetic and constant folds assume the builtin op — and the callee’s entry
-guards cannot protect a frame that is already suspended. With no way to
-convert a suspended frame, the only lever was the code itself: record each
-call’s return continuation as a patch point and, on redefinition, overwrite it
-with a <code>jmp</code>/<code>B</code> to that site’s <code>Evict</code> handler, so the frame deopted one
-instruction after it resumed.</p>
-<p>Chain conversion subsumes that completely — it drops the same frames to the
-interpreter, from the stack rather than from the code — with three things the
-patching form could not offer:</p>
+<h2 id="9-eager-conversion"><a class="header" href="#9-eager-conversion">9. Eager conversion</a></h2>
+<h3 id="93-the-whole-chain-is-converted-at-deopt-time"><a class="header" href="#93-the-whole-chain-is-converted-at-deopt-time">9.3 The whole chain is converted at deopt time</a></h3>
+<p>The walk replays every suspended frame’s write-back <em>during</em> the walk and
+points its return address at the shared continuation stub. A lazy form that
+wrote each frame back only when control returned to it is not sound: until
+then, anything reading an outer frame’s locals through <code>outer_lfp</code> (a block
+body, <code>binding</code>, a backtrace) would read stale slots, which matters as soon
+as a frame’s slots do not hold its locals (§5 step 5). The eager form also
+needs no per-site handlers: the rewritten slot always points at the one
+shared stub, and the per-site part is the conversion stub the walk calls.</p>
+<h2 id="10-chain-conversion-replaced-code-patching"><a class="header" href="#10-chain-conversion-replaced-code-patching">10. Chain conversion replaced code patching</a></h2>
+<p>Before chain conversion existed, a basic-op redefinition dropped suspended
+frames by patching each call’s return continuation in the code with a jump
+to that site’s <code>Evict</code> handler. Chain conversion replaced that entirely:</p>
 <ul>
-<li>a compiled body still valid for <em>future</em> invocations survives, because no
+<li>a compiled body still valid for future invocations survives, because no
 machine code is rewritten;</li>
-<li>on aarch64 it removes a self-modifying-code path, with its
-writable/I-cache-invalidate dance around every patched word (the remaining
-SMC users are <code>patch_call_to_entry</code> and the recompilation patch points, which
-are unrelated);</li>
-<li>it is the mechanism the unboxed-locals speculation needs anyway, so there is
-one walk to reason about instead of two that must agree.</li>
+<li>aarch64 loses a self-modifying-code path and its writable / I-cache
+dance around every patched word;</li>
+<li>there is one walk to reason about instead of two that must agree.</li>
 </ul>
-<p>The single precondition was that <strong>every</strong> call and yield site register a
-<code>chain_deopt_table</code> entry, since an unregistered site is one the walk leaves
-running its stale body. §8.3’s feature gate on <code>AbstractState::chain_exit</code> was
-therefore removed; every build pays the metadata.</p>
-<p>Removed with it: <code>Codegen::patch_return_to_deopt</code> (both arches),
-<code>get_deopt_with_return_addr</code> and the <code>return_addr_table</code> it read,
-<code>emit_immediate_evict</code> (both arches), and <code>AsmInst::ImmediateEvict</code> /
-<code>LInst::ImmediateEvict</code> with their dispatch arms. <code>asm_return_addr_table</code>
-stays — it is how <code>AsmInst::ChainExit</code>, pushed after the call when the return
-address is no longer at hand, names the site it belongs to. <code>AsmEvict</code> and
-<code>SideExit::Evict</code> stay for the same reason, though nothing branches to an
-<code>Evict</code> handler any more; retiring that emission is a separate cleanup.</p>
-<p><code>Codegen::evict_suspended_frames</code> and <code>Codegen::chain_deopt</code> were the same CFP
-walk once the patch fallback was gone, and are now one function
-(<code>chain_deopt</code>), used by both <code>check_bop_redefine</code> and <code>runtime::chain_deopt</code>.</p>
 <h3 id="101-the-other-threads-chains-and-the-frame-at-a-poll"><a class="header" href="#101-the-other-threads-chains-and-the-frame-at-a-poll">10.1 The other threads’ chains, and the frame at a poll</a></h3>
-<p>A basic-op redefinition is the one caller of the walk whose stale frames are
-not all on the redefining thread’s stack. Every other Ruby thread is
-suspended under it — a kernel thread waiting for the GVL (doc/threads.md
-§12) — and each holds
-compiled frames that inlined the operator just replaced. <code>check_bop_redefine</code>
-therefore walks every chain: its own, then the chain of each executor
-<code>scheduler::suspended_executors</code> returns (the context a thread parked or
-yielded in — <code>resume_exec</code>, published by <code>park</code>, <code>pass</code> and <code>without_gvl</code>
-in both models — followed by its <code>parent_fiber</code> links, so a thread parked
+<p>A basic-op redefinition is the one caller of the walk whose stale frames
+are not all on the redefining thread’s stack. Every other Ruby thread is
+suspended under it (a kernel thread waiting for the GVL, <code>doc/threads.md</code>
+§12), and each may hold compiled frames that inlined the operator just
+replaced. <code>check_bop_redefine</code> therefore walks every chain: its own, then
+the chain of each executor <code>scheduler::suspended_executors</code> returns (the
+context a thread parked or yielded in, published by <code>park</code>, <code>pass</code> and
+<code>without_gvl</code>, followed by its <code>parent_fiber</code> links, so a thread parked
 inside a fiber contributes the fiber’s frames and the resumer’s). Those
-frames are as quiescent as the caller’s own: nothing runs on them until
-this thread lets go.</p>
-<p>The walk converts <em>callers</em> — a frame is rewritten through the return
-address its callee holds — so a chain’s innermost compiled frame is beyond
-it. On the redefining thread that frame is the one running the <code>def</code>, and
-<code>AsmInst::CheckBOP</code> after <code>MethodDef</code> takes care of it. On another thread
-the innermost frame is whatever it let go from: a call site (<code>sleep</code>, a
+frames are as quiescent as the caller’s own.</p>
+<p>The walk converts <em>callers</em>, through the return address their callee
+holds, so a chain’s innermost compiled frame is beyond it. On the
+redefining thread that frame is the one running the <code>def</code>, and
+<code>AsmInst::CheckBOP</code> after <code>MethodDef</code> handles it. On another thread the
+innermost frame is whatever it let go from: a call site (<code>sleep</code>,
 <code>Queue#pop</code>, <code>Thread.pass</code>, all of which push a frame whose return address
-the walk finds) or a <strong>safepoint poll</strong> — a timeslice tick or a signal taken
-at a <code>LoopStart</code> / method-entry poll, where there is no callee frame and the
-compiled body would simply continue. That frame leaves from the poll itself:
-<code>ISeqInfo::bop_evictions</code> counts evictions per iseq, <code>executor::execute_gc</code>
-snapshots the polling frame’s count on entry and, if it moved while the
-frame was away, returns <code>POLL_DEOPT</code> instead of <code>nil</code>; the compiled poll’s
-cold path compares for it and jumps to the poll’s own deopt exit
-(<code>AsmInst::ExecGc::deopt</code>, <code>AsmIr::new_poll_deopt</code>), resuming the
-interpreter at <code>LoopStart</code> itself or at the instruction after <code>InitMethod</code>.
-That exit deliberately does not set <code>had_deopt</code> (§6): by the time it can
-fire, the walk has already rewritten every caller of the frame, so no
-compiled continuation exists for the interpreter to surprise — and marking
-it would put <code>had_deopt</code> on every body, since every method entry polls.
-The same exit covers the redefining thread’s own poll when a trap handler
-or a finalizer run from the poll does the redefinition.</p>
-<p>What stays out of reach in every model is a fiber that is <em>suspended</em>
-(not parked) inside one of those threads: it is not in any chain the walk
-sees, and it polls nothing until resumed. Regression tests:
-<code>builtins::thread::tests::bop_redefinition_reaches_*</code> (parked, parked in a
-fiber, yielded through <code>Thread.pass</code>, preempted at a poll).</p>
-<h2 id="11-the-speculation-as-shipped-5-steps-45--since-removed"><a class="header" href="#11-the-speculation-as-shipped-5-steps-45--since-removed">11. The speculation as shipped (§5 steps 4–5) — since removed</a></h2>
-<p><em>Historical.</em> None of the identifiers below exist in the tree any more;
-the section is kept as the record of the design that was tried.</p>
-<p><strong>Scope</strong> (§7, enforced by <code>float_speculation_qualifies</code> +
-poison hooks): a block-passing call site whose callee is a plain iseq and
-whose literal block is an iseq with no capture surface
-(<code>possibly_capture_without_block</code> / <code>has_block_arg</code> false), compiled
-outside a dispatch arm. Everything subtler is caught during the subtree
-compile by the poison hooks — a generic block-passing call, a generic
-yield, a block-handler materialization (<code>BlockArgProxy</code> / <code>BlockArg</code>), or
-a no-capture invalidation reaching the speculating frame — and flips the
-site to an unspeculated recompile.</p>
-<p><strong>Step 5 — the relaxation.</strong> At a qualifying site,
-<code>locals_to_S_keep_F</code> demotes every local <em>except</em> pure-<code>F</code> ones and
-Float literals (<code>occlusion = 0.0</code> is materialized to <code>F</code>); the kept set
-is armed on the frame (<code>begin_float_speculation</code>) for the duration of
-the specialized-subtree compile. The unboxed local’s canonical home
-during the call is memory the machinery already maintains:</p>
-<ul>
-<li>pool-resident <code>F</code> → the call’s cont-mode save slot
-(<code>[callee_rbp + 32 + 8·rank]</code>, rank = the register’s ascending-bit
-rank in the site’s <code>UsingFpr</code> — the exact layout <code>emit_fpr_save</code>
-writes and <code>ChainReplay</code> §8.1 reads);</li>
-<li>spilled <code>F</code> → its own <code>[rbp - (base - 24 + 8n)]</code> spill slot.</li>
-</ul>
-<p>A specialized block resolving <code>Load/StoreDynVar</code> against an armed outer
-frame (<code>speculated_dynvar</code>) compiles a single f64 move at
-<code>[rbp + Σ frame-sizes + disp]</code> — the same late-resolved
-<code>DynVarOffset::Hint</code> chain the boxed specialized access uses. After the
-call nothing needs fixing: <code>fpr_restore_cont</code> reloads pool registers
-from the (possibly block-updated) save slots, a spilled local reads its
-own slot, and the site’s <code>ChainReplay</code> boxes from exactly the locations
-the block writes.</p>
-<p><strong>Step 4 — the Float guard.</strong> A store’s source must <em>be</em> a Float, not
-coerce to one: a proven-Float source stores its f64 directly; a
-Float-guarded stack source goes through <code>load_fpr</code>’s guard + unbox,
-whose (escalated, §8.5) deopt converts the whole chain before the
-offending store runs — the interpreter then re-executes the store
-against the boxed frame. A statically non-Float source poisons the
-attempt instead (<code>speculated_store_src</code> returns <code>None</code>): the store
-would fail every execution, so the site recompiles unspeculated.</p>
-<p><strong>Nesting.</strong> A qualified site whose subtree compiles without a single
-capture-relevant event (<code>JitContext::capture_events</code> snapshot) keeps
-the caller’s no-capture invariant instead of running the blanket
-post-call unset — which is what lets an enclosing frame’s speculation
-survive an inner qualified block call (<code>nphi.times { ntheta.times { occlusion += … } }</code>, the motivating aobench shape, speculates through
-both levels).</p>
-<p><strong>Pinning.</strong> The kept pool floats are <code>pin_fpr</code>-ed from the demote
-point to the end of the site emission so an allocation in between
-cannot spill one out of the save slot the compiled block addresses.</p>
-<p><strong>Poisoned retry.</strong> The first (speculated) subtree compile is discarded
-wholesale on poison — its specialized bodies are emitted but never
-referenced — and the site recompiles the subtree against the
-post-<code>locals_to_S</code> state under a fresh patch point.</p>
+the walk finds) or a <strong>safepoint poll</strong> (a timeslice tick or a signal taken
+at a <code>LoopStart</code> / method-entry poll), where there is no callee frame. That
+frame leaves from the poll itself: <code>ISeqInfo::bop_evictions</code> counts
+evictions per iseq, <code>executor::execute_gc</code> snapshots the polling frame’s
+count on entry and, if it moved while the frame was away, returns
+<code>POLL_DEOPT</code> instead of <code>nil</code>; the compiled poll’s cold path compares for it
+and jumps to the poll’s own deopt exit (<code>AsmInst::ExecGc::deopt</code>,
+<code>AsmIr::new_poll_deopt</code>), resuming the interpreter at <code>LoopStart</code> or at the
+instruction after <code>InitMethod</code>. That exit does not set <code>had_deopt</code>: by the
+time it can fire, the walk has already rewritten every caller of the frame,
+and marking it would put <code>had_deopt</code> on every body, since every method
+entry polls. The same exit covers the redefining thread’s own poll when a
+trap handler or a finalizer run from the poll does the redefinition.</p>
+<p>A fiber that is <em>suspended</em> (not parked) inside one of those threads stays
+out of reach: it is in no chain the walk sees, and it polls nothing until
+resumed. Regression tests: <code>builtins::thread::tests::bop_redefinition_reaches_*</code>
+(parked, parked in a fiber, yielded through <code>Thread.pass</code>, preempted at a
+poll).</p>
 
                     </main>
 

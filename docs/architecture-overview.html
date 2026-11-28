@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -222,7 +222,7 @@ Native machine code
 </thead>
 <tbody>
 <tr><td>Value representation (64-bit tagged union)</td><td><a href="value-representation.html">Value Representation</a></td><td>—</td></tr>
-<tr><td>JIT compiler (TraceIR / AsmIR / register allocation)</td><td><a href="jit-compiler.html">JIT Compiler</a></td><td><a href="design/jit.html"><code>jit.md</code></a>, <a href="design/lir.html"><code>lir.md</code></a>, <a href="design/regalloc_separation.html"><code>regalloc_separation.md</code></a></td></tr>
+<tr><td>JIT compiler (TraceIR / AsmIR / register allocation)</td><td><a href="jit-compiler.html">JIT Compiler</a></td><td><a href="design/jit.html"><code>jit.md</code></a>, <a href="design/lir.html"><code>lir.md</code></a>, <a href="design/jit_invariants.html"><code>jit_invariants.md</code></a></td></tr>
 <tr><td>Garbage collection (generational mark-and-sweep)</td><td><a href="garbage-collection.html">Garbage Collection</a></td><td><a href="design/gc.html"><code>gc.md</code></a></td></tr>
 <tr><td>Threads and fibers</td><td><a href="threads-and-fibers.html">Threads and Fibers</a></td><td><a href="design/threads.html"><code>threads.md</code></a></td></tr>
 <tr><td>Stack frames and method calls</td><td><a href="stack-frames-and-method-calls.html">Stack Frames and Method Calls</a></td><td><a href="design/stack_frame.html"><code>stack_frame.md</code></a>, <a href="design/method_args.html"><code>method_args.md</code></a></td></tr>
@@ -246,29 +246,34 @@ Native machine code
 │   └── builtins/           built-in Ruby classes implemented in Rust
 ├── monoruby/builtins/      built-in library code written in Ruby
 ├── monoruby_attr/          proc macros (#[monoruby_builtin], …)
+├── monoruby_ext_sys/, monoruby_ext/   C ABI (and safe Rust over it) for dynamically loaded extensions
+├── monoruby_capi/          CRuby-compatible C API layer, and CRuby's own stdlib C extensions built on it
+├── ext/                    native halves of gems (sqlite3, zstd, psych, nokogiri, …) as loadable extensions
 ├── rubymap/, hashbrown/    order-preserving hash map for Ruby Hash
 └── doc/                    detailed design documents
 </code></pre>
 <h2 id="key-global-registers-jit--vm-tier"><a class="header" href="#key-global-registers-jit--vm-tier">Key global registers (JIT / VM tier)</a></h2>
-<p>On x86-64, JIT-compiled code keeps interpreter state in fixed registers (the aarch64 backend uses an equivalent fixed assignment):</p>
+<p>Machine code keeps interpreter state in fixed registers:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Register</th><th>Holds</th></tr>
+<tr><th>x86-64</th><th>aarch64</th><th>Holds</th></tr>
 </thead>
 <tbody>
-<tr><td><code>rbx</code></td><td><code>&amp;mut Executor</code></td></tr>
-<tr><td><code>r12</code></td><td><code>&amp;mut Globals</code></td></tr>
-<tr><td><code>r13</code></td><td>program counter</td></tr>
-<tr><td><code>r14</code></td><td>local frame pointer (LFP)</td></tr>
+<tr><td><code>rbx</code></td><td><code>x19</code></td><td><code>&amp;mut Executor</code></td></tr>
+<tr><td><code>r12</code></td><td><code>x20</code></td><td><code>&amp;mut Globals</code></td></tr>
+<tr><td><code>r13</code></td><td><code>x21</code></td><td>program counter (VM tier)</td></tr>
+<tr><td><code>r14</code></td><td><code>x22</code></td><td>local frame pointer (LFP)</td></tr>
+<tr><td><code>r15</code></td><td><code>x23</code></td><td>accumulator (VM tier only)</td></tr>
 </tbody>
 </table>
 </div>
+<p>Inside JIT code <code>r13</code> (aarch64: <code>x24</code>) instead caches the buffer of <code>self</code>’s heap ivar table (<code>SELF_IVAR_BASE</code>); compiled code keeps no fixed accumulator.</p>
 <h2 id="further-reading"><a class="header" href="#further-reading">Further reading</a></h2>
 <ul>
-<li><a href="https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install">Build and Install</a> — how to build and run monoruby</li>
-<li><a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> — bytecode / TraceIR / assembly dumps</li>
-<li><a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code> directory</a> — the full set of design documents, including C-extension design notes, encoding design, and progress notes</li>
+<li><a href="installation.html">Installation and Build</a> — how to build and run monoruby</li>
+<li><a href="development.html">Development and Build Options</a> — bytecode / TraceIR / assembly dumps and the other Cargo features</li>
+<li><a href="https://github.com/sisshiki1969/monoruby/tree/master/doc"><code>doc/</code> directory</a> — the full set of design documents, indexed in its <code>README.md</code></li>
 </ul>
 
                     </main>

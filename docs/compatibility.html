@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -290,7 +290,7 @@ ruby/spec</a> for the layout and the commands.</p>
 needed; the backtrace string is not built until something asks for it. See
 <a href="design/exception_handling.html">Exception handling</a>.</li>
 <li><strong>The garbage collector is non-moving</strong>, single-threaded and
-stop-the-world (generational since June 2026). Compiled code relies on
+stop-the-world, and generational. Compiled code relies on
 objects not moving. See <a href="design/gc.html">GC — mechanism and
 implementation</a>.</li>
 <li><strong>Threads are real kernel threads behind a GVL.</strong> Each Ruby <code>Thread</code> is an
@@ -299,17 +299,14 @@ safepoints (with 10 ms time-slice preemption) and around blocking
 syscalls. See <a href="design/threads.html">Thread / Fiber / non-blocking IO /
 preemption</a>.</li>
 </ul>
-<p>C extensions are no longer on this list. Since October 2026 monoruby ships a
-CRuby-compatible C API layer: an extension written for CRuby is rebuilt
+<p>C extensions are not on this list: monoruby ships a CRuby-compatible C API
+layer. an extension written for CRuby is rebuilt
 against monoruby’s headers (API- rather than ABI-compatible) and loaded by a
 plain <code>require</code>, <code>extconf.rb</code> + <code>make</code> and <code>gem install</code> work against it, and
 CRuby’s own <code>ext/date</code>, <code>ext/stringio</code>, <code>ext/zlib</code>, <code>ext/socket</code>,
-<code>ext/openssl</code> and <code>ext/bigdecimal</code> are built from unmodified upstream source.
-That is what moved the <code>library</code> group from 57.6% to 98.5%. The layer is
-documented in <a href="design/c_api.html">CRuby-compatible C API layer</a> and <a href="design/native_extension_loading.html">Native
-extension loading</a>; the older <a href="design/c_extention.html">C
-extension support</a> design study predates it and
-describes the problem, not the shipped solution.</p>
+<code>ext/openssl</code>, <code>ext/etc</code> and <code>ext/bigdecimal</code> are built from upstream source.
+The layer is documented in <a href="design/c_api.html">CRuby-compatible C API layer</a> and
+<a href="design/native_extension_loading.html">Native extension loading</a>.</p>
 
                     </main>
 

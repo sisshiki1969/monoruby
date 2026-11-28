@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -493,16 +493,21 @@ VM と JIT で共通なので、フレームの作り直しは不要である。
 古いままでは壊れた値を読む。</p>
 <p><code>runtime::chain_deopt</code> は cfp チェーンを歩いて、各 JIT フレームについて</p>
 <ol>
-<li>スピルされたレジスタをスロットへ書き戻し（Rust 側で replay）、</li>
-<li><strong>スタック上の返りアドレススロット</strong>を VM の継続スタブへ書き換える。</li>
+<li>スピルされたレジスタをスロットへ書き戻し（サイトごとにコンパイル済みの
+変換スタブ <code>gen_chain_replay_stub</code> を呼ぶ）、</li>
+<li><strong>スタック上の返りアドレススロット</strong>を共有の継続スタブ
+（<code>gen_chain_cont_stub</code>）へ書き換える。</li>
 </ol>
 <p>これで制御は二度と JIT コードへ戻らず、各 <code>ret</code> がインタプリタに着地する。
 コードには一切触らないので、他のフレームや他スレッドに影響しない。</p>
-<p>エスケープは<strong>個々の emitter が選ぶのではない</strong>: <code>escalate_side_exits</code> が
+<p>エスカレーションは<strong>個々の emitter が選ぶのではない</strong>:
+<code>JitContext::chain_deopt_frames</code>（コンパイル単位内でのフレームの深さ）が
 <code>AsmIr</code> に一度スタンプされ、すべての側方退出コンストラクタがそれを読む。
-現在は無条件に真（実測で 1 回 ~160ns、最悪ケースでも 1.6% 以内）。
+深さ 0 の単位ルートは変換すべき呼び出し元を持たないのでエスカレートせず、
+深さ <code>d</code> のフレームは同じ単位の <code>d</code> 個の呼び出し元フレームだけを変換する。
 <code>Error</code> 退出も対象である — 例外はフレーム内で <code>rescue</code> されるかもしれず、
-それは deopt と同じ「インタプリタでの再開」だからである。
+それは deopt と同じ「インタプリタでの再開」だからである
+（<code>doc/chain_deopt.md</code> §8.5）。
 一度変換済みのフレームは（返りアドレスが既に VM のものなので）スキップされる。
 二重 replay は、その後インタプリタが更新した値を古い float で上書きしてしまう。</p>
 <p>BOP エビクション（§3.3）もこの同じ walk を通る。変換機構は 1 つだけである。</p>
@@ -529,7 +534,7 @@ VM と JIT で共通なので、フレームの作り直しは不要である。
 <tr><td>salvage（I1/I2）</td><td>不要。コードは生き続け、ワードを書き換えるだけ</td></tr>
 <tr><td>再コンパイル</td><td>走行中のフレームは、再コンパイルを起動したその退出でインタプリタへ戻る（write-back 済み）。エントリのパッチポイントを新本体へ向け直すので、次回の呼び出し／次回のループ入口から新本体が使われる</td></tr>
 <tr><td>BOP エビクション</td><td><strong>必要</strong>。走行中の本体は誤った演算をインライン化しているので <code>chain_deopt_into</code> で全 JIT フレームを変換する</td></tr>
-<tr><td>側方退出</td><td><strong>必要</strong>。<code>chain_deopt</code> で呼び出し元チェーンを変換する</td></tr>
+<tr><td>側方退出</td><td>単位ルート以外では<strong>必要</strong>。<code>chain_deopt</code> で同じコンパイル単位の呼び出し元フレームを変換する</td></tr>
 </tbody>
 </table>
 </div>

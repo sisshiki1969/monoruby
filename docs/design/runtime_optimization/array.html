@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-afb61271.js"></script>
+        <script src="../../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,8 +180,7 @@
                         <h1 id="array-の実装と最適化"><a class="header" href="#array-の実装と最適化">Array の実装と最適化</a></h1>
 <p>Array は Ruby プログラムの「ただの並び」であると同時に、<code>each</code> / <code>map</code> /
 <code>[]</code> / <code>&lt;&lt;</code> が最内ループに現れる型でもある。optcarrot では <code>Array#&lt;&lt;</code> と
-<code>Array#[]=</code> のスライス形が最上位のホットスポットだった
-（<a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a> §3）。</p>
+<code>Array#[]=</code> のスライス形が最上位のホットスポットだった。</p>
 <p>この文書は、Array がメモリ上でどう置かれ、VM と JIT が <code>[]</code> / <code>[]=</code> / <code>&lt;&lt;</code> /
 リテラル生成 / 多重代入をどう処理し、どの組み込みメソッドが Ruby で書かれて
 いてそれがなぜかをまとめ、最後に CRuby との実装差異を並べる。共通の前提
@@ -419,8 +418,7 @@ raise せず <code>generic</code> → <code>set_array_integer_index</code>（正
 <p><code>array_shl</code> は <code>guard_frozen</code> を明示的に出す。<code>emit_array_shl</code> のインライン
 格納は <code>Array::push</code> を迂回し、<code>push</code> 自体は frozen を見ないので、frozen な
 レシーバは JIT を抜けてインタプリタに <code>FrozenError</code> を出させる必要がある —
-これはインライン化と同時に直した実バグである
-（<a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a> §3.2）。</p>
+インライン格納が frozen チェックを飛ばさないための措置である。</p>
 <p><code>emit_array_shl</code>（<code>x86_64/compile/builtin.rs</code>）: <code>capa &lt;= 5</code> ⇔ 未あふれ
 なので、どちらの常駐でも「2 ロード + 1 ストア」の高速経路になる。
 <code>cmpq rax, 5</code> が<strong>inline バッファ満杯の判定のフラグも同時に立てている</strong>ので
@@ -500,8 +498,7 @@ nil 埋め無し、raise 無し）。<code>rest_pos</code> あり・<code>len ==
 evict する。<strong>直接発火経路には class-version ガードが無く、健全性は記録した
 依存だけに拠る</strong>。<code>Hash#[]=</code> が意図的に表に無いのはこのためで、通常の
 class-version ガード付き経路に残す（<code>index_hash_assign_redefinition</code> テスト）。
-効果は <a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a>（<code>Array#[]</code> 再定義
-時 0.30 → 0.030 → 0.009 s）。</p>
+仕組みは <a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a> §4。</p>
 <h3 id="38-arraynew-と-classnew"><a class="header" href="#38-arraynew-と-classnew">3.8 <code>Array.new</code> と <code>Class#new</code></a></h3>
 <p><code>Array.new</code> は native では定義されていない。Ruby の <code>Class#new</code> トランポリン
 （<code>o = __builtin_allocate__; o.__builtin_initialize__(...)</code>）を継いで、Ruby
@@ -523,9 +520,9 @@ CRuby と一致させ、<code>yield</code> はユーザーの <code>Array.new { 
 単相になる。</p>
 <p>rest 引数 <code>Array</code> の遅延実体化（D1）は
 <a href="../arg_forwarding_jit.html"><code>../arg_forwarding_jit.md</code></a> §3.4 にある。
-<code>WriteBack::forward_rest</code> が <code>(dst, src, len)</code> を持ち、deopt 時に
-<code>runtime::create_array</code> で作る。リテラルの write back が <code>forward_rest</code> より
-先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
+<code>WriteBack::virtual_obj</code> が <code>(dst, VirtualSrc::Slots { src, len, .. })</code> を持ち、
+deopt 時に <code>runtime::create_array</code> で作る。リテラルの write back が
+<code>virtual_obj</code> より先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
 からである（<a href="../jit_invariants.html"><code>../jit_invariants.md</code></a>）。</p>
 <hr>
 <h2 id="4-ruby-で書かれているメソッド"><a class="header" href="#4-ruby-で書かれているメソッド">4. Ruby で書かれているメソッド</a></h2>
@@ -565,12 +562,10 @@ nil で埋めない）。</p>
 <p>逆に <strong><code>Array#sum</code> は意図的に Ruby で開き直さない</strong>（Rust の Fixnum 高速
 経路を迂回してしまうため）。<code>sample</code> / <code>shuffle</code> / <code>shuffle!</code> は <code>random:</code>
 の解決と <code>RAND_UPTO</code> を共有するため Rust のまま。</p>
-<p>このトレードオフは <a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a> に記録
-されている: <code>Integer#&lt;</code> を再定義すると monoruby では <code>Array#map</code>（の
-<code>while i &lt; size</code>）が壊れるが、C 実装の CRuby は影響を受けない。
-<code>Array#size</code> を再定義すると <code>Kernel#p</code> の内部が <code>ArgumentError</code> になるのも
-同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
-である。上の primitive が塞ぐのは <code>builtins/array.rb</code> がレシーバ自身を読む
+<p>組み込みを Ruby で書くと、CRuby では C なので届かない再定義が届きうる。
+演算子の再定義は内部ビルトインのフレームに届かない
+（<a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a> §6）が、<code>size</code> / <code>[]</code> の
+ような通常のメソッドはそうではない。上の primitive が塞ぐのは <code>builtins/array.rb</code> がレシーバ自身を読む
 箇所で、<code>enumerable.rb</code> などが作業用の素の <code>Array</code> に対して呼ぶ <code>size</code> /
 <code>[]</code> は <code>Array</code> 自体の再定義を受けたままである。</p>
 <hr>
@@ -683,12 +678,10 @@ ruby/spec どおりに踏む。</li>
 <tr><td><code>codegen/arch/x86_64/compile/index.rs</code> のテスト</td><td>添字境界（±100000、伸長、<code>a[-3]=</code> のエラー）</td></tr>
 <tr><td><code>codegen/jitgen/compile/index.rs</code> のテスト</td><td><code>index_redefinition_evicts</code> / <code>index_polymorphic_array_and_method</code> / <code>index_array_subclass_override</code> / <code>index_private_receiver</code> / <code>index_hash_assign_redefinition</code></td></tr>
 <tr><td><code>builtins/array.rs</code> の <code>array_literal_minmax_fusion</code></td><td><code>[a, b].min</code> 融合</td></tr>
-<tr><td><a href="../optcarrot_opt_profile.html"><code>../optcarrot_opt_profile.md</code></a></td><td><code>&lt;&lt;</code> / <code>rotate!</code> / <code>expand_array</code> / スライス代入の計測と経緯</td></tr>
-<tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td>BOP の差分掃討（48 ケース）、Ruby 実装組み込みの露出</td></tr>
+<tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td>演算子の再定義の検知と無効化、Ruby で書いたビルトインと再定義</td></tr>
 <tr><td><a href="../lir.html"><code>../lir.md</code></a></td><td><code>GuardArrayTy</code> / <code>GuardFrozen</code> / <code>ArrayLenFixnum</code> の LIR</td></tr>
 <tr><td><a href="../arg_forwarding_jit.html"><code>../arg_forwarding_jit.md</code></a></td><td>rest Array の遅延実体化（D1）</td></tr>
 <tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td>バリア、temp スタックの root、<code>flat_map</code> の事例</td></tr>
-<tr><td><a href="../progress_2025-2026.html"><code>../progress_2025-2026.md</code></a></td><td><code>Array#[]</code> / <code>#[]=</code> のインライン化（#269）などの変更履歴</td></tr>
 </tbody>
 </table>
 </div>

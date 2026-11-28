@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Progress summary (April 2025 – April 2026) - monoruby</title>
+        <title>Hidden instance variables - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,282 +177,177 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="monoruby-progress-summary-april-2025--april-2026"><a class="header" href="#monoruby-progress-summary-april-2025--april-2026">monoruby Progress Summary (April 2025 – April 2026)</a></h1>
-<p>Over the past year monoruby advanced through roughly 500 commits, expanding language coverage, hardening the JIT, and dramatically improving CRuby compatibility.</p>
-<hr>
-<h2 id="overview"><a class="header" href="#overview">Overview</a></h2>
+                        <h1 id="hidden-instance-variables"><a class="header" href="#hidden-instance-variables">Hidden instance variables</a></h1>
+<p>Some of monoruby’s built-in classes are written in Ruby where CRuby
+writes them in C: <code>Thread::Mutex</code>, <code>Thread::Queue</code>, <code>Thread::SizedQueue</code>,
+<code>Thread::ConditionVariable</code>, <code>Monitor</code>, <code>ThreadGroup</code>,
+<code>Thread::Backtrace::Location</code>, <code>Process::Waiter</code>, the Ruby half of
+<code>Thread</code> — and, since #1950, <code>Process::Status</code>, <code>Dir</code>, <code>File::Stat</code>,
+<code>Enumerator::ArithmeticSequence</code> / <code>Lazy</code> / <code>Chain</code> / <code>Product</code>, the
+<code>errno</code> / <code>signo</code> / <code>key</code> / <code>matchee</code> fields of the exceptions that carry
+one, the conversion errors’ fields, <code>Digest</code>’s buffer, <code>StringScanner</code>,
+<code>Ractor</code> and <code>GC</code>’s flags. In CRuby their
+state is a C struct behind the object. Nothing in Ruby can see that
+struct, and that is observable:</p>
+<pre><code class="language-ruby">m = Thread::Mutex.new; m.lock
+m.inspect                 # =&gt; "#&lt;Thread::Mutex:0x...&gt;" — no owner shown
+m.instance_variables      # =&gt; []
+Thread::Mutex.new.freeze.lock           # works: the lock is not frozen state
+class MyQueue &lt; Thread::Queue
+  def initialize; super; @mutex = nil; @closed = 7; end   # its own business
+end
+</code></pre>
+<p>Kept in ordinary instance variables, the same state shows up in
+<code>inspect</code>, <code>instance_variables</code>, <code>instance_variable_get</code> and anything
+that walks an object graph; a subclass that happens to use the same name
+overwrites it; and every lock is an instance variable write, which a
+frozen object refuses (#1937).</p>
+<p>A <strong>hidden instance variable</strong> is a slot like any other — the same
+<code>IvarId</code> in the class’s table, the same inline / heap storage, the same
+JIT fast paths — whose <em>name</em> begins with <code>/</code>. No Ruby source can spell
+such a name, so:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Period</th><th>Key themes</th></tr>
+<tr><th></th><th>ordinary <code>@x</code></th><th>hidden</th></tr>
 </thead>
 <tbody>
-<tr><td>Apr–Jun 2025</td><td>Standard library expansion, Onigmo regex engine integration</td></tr>
-<tr><td>Jul–Sep 2025</td><td>Full keyword-argument support, Hash/Enumerable improvements, JIT refactoring</td></tr>
-<tr><td>Oct–Dec 2025</td><td>JIT abstract-interpretation improvements, optimizations, ruby-bench support</td></tr>
-<tr><td>Jan–Feb 2026</td><td>FFI/Fiddle support, continuation frames, further optimizations</td></tr>
-<tr><td>Mar–Apr 2026</td><td>Large-scale ruby/spec compatibility push, crash/panic elimination</td></tr>
+<tr><td><code>instance_variables</code>, <code>inspect</code>, <code>Marshal</code>, <code>pp</code></td><td>listed</td><td>not listed (<code>Store::get_ivars</code>, <code>RValue::get_ivars</code>)</td></tr>
+<tr><td><code>instance_variable_get</code> / <code>_set</code> / <code>_defined?</code> / <code>remove_</code></td><td>reach it</td><td>cannot name it (<code>@__x</code> there is the <em>ordinary</em> variable of that name)</td></tr>
+<tr><td>a subclass’s own <code>@x</code></td><td>the same variable</td><td>a different variable</td></tr>
+<tr><td>store on a frozen object</td><td><code>FrozenError</code></td><td>allowed</td></tr>
+<tr><td><code>dup</code> / <code>clone</code></td><td>copied</td><td>copied (reset it in <code>initialize_copy</code> where a copy must start fresh, as <code>Mutex</code> does)</td></tr>
+<tr><td>GC</td><td>marked</td><td>marked</td></tr>
 </tbody>
 </table>
 </div>
-<hr>
-<h2 id="language-features"><a class="header" href="#language-features">Language Features</a></h2>
-<h3 id="parser"><a class="header" href="#parser">Parser</a></h3>
+<p>The Rust side has used such names for a long time (<code>IdentId::_NAME</code> is
+<code>/name</code>, a Struct class’s <code>/members</code>, a Time’s <code>/zone</code>, the JSON
+generator’s <code>State</code> fields). What is new is a way to name them from
+Ruby.</p>
+<h2 id="naming-one-from-ruby"><a class="header" href="#naming-one-from-ruby">Naming one from Ruby</a></h2>
+<pre><code class="language-ruby"># monoruby-hidden-ivars: true
+
+class Thread::Mutex
+  def locked?
+    (o = @__owner) ? o.alive? : false     # the hidden slot `/__owner`
+  end
+  attr_accessor :__held_next               # over the hidden `/__held_next`
+end
+</code></pre>
+<p>In a file whose leading comment block carries the magic comment
+<code># monoruby-hidden-ivars: true</code> (same placement rules as
+<code>frozen_string_literal</code>; <code>-</code> and <code>_</code> are interchangeable):</p>
 <ul>
-<li>Splat in multiple-assignment LHS: <code>*a = 100</code></li>
-<li><code>when *ary</code> syntax</li>
-<li><code>%W</code> word-array literals</li>
-<li><code>=begin</code>/<code>=end</code> block comments</li>
-<li>Brace-less hash literals (<code>foo: 1, bar: 2</code>)</li>
-<li>Squiggly heredoc <code>&lt;&lt;~</code></li>
-<li>Reserved words (<code>self</code>/<code>true</code>/<code>false</code>) as keyword-argument labels</li>
-<li>Anonymous block forwarding: <code>def foo(&amp;); bar(&amp;) end</code> (#128)</li>
-<li><code>def **</code> pattern (used by BigDecimal)</li>
-<li>Fixed rescue-modifier scoping (#181)</li>
-<li>Fixed <code>do...end</code> block incorrectly attaching to <code>Foo::BAR</code> instead of the outer call (#144)</li>
+<li>an instance variable spelled <code>@__name</code> is the hidden slot <code>/__name</code> —
+everywhere the file can write one: reads, assignments, <code>||=</code> / <code>+=</code>,
+multiple assignment, <code>defined?(@__name)</code>, <code>"#{@__name}"</code> and <code>"#@__name"</code>
+(<code>BytecodeGen::ivar_ident</code>);</li>
+<li><code>attr_reader</code> / <code>attr_writer</code> / <code>attr_accessor</code> <em>called from that file</em>
+with a name beginning <code>__</code> define accessors over the hidden slot
+(<code>Executor::attr_ivar_name</code>). The accessor keeps what makes an <code>attr_*</code>
+method different from a <code>def</code>: the JIT inlines it, and calling it is
+not a point where the thread can be switched or interrupted —
+<code>Mutex#try_lock</code> and <code>#unlock</code> depend on that;</li>
+<li>every other instance variable in the file (<code>@name</code> without the double
+underscore) is an ordinary one. <code>builtins/monitor.rb</code> uses both: the
+<code>Monitor</code> class, which is C in CRuby, keeps <code>@__mutex</code> / <code>@__owner</code> /
+<code>@__count</code>, while <code>MonitorMixin</code>, which is Ruby in CRuby too, keeps its
+ordinary <code>@mon_data</code>.</li>
 </ul>
-<h3 id="runtime--closures"><a class="header" href="#runtime--closures">Runtime / Closures</a></h3>
+<p>Without the magic comment <code>@__name</code> is an ordinary instance variable, so
+no existing program changes meaning, and code evaluated from a string
+(<code>eval</code>, <code>instance_eval("...")</code>) is a source of its own and never sees a
+file’s hidden slots.</p>
+<p>The Rust side reaches the same slot by its real name:
+<code>globals.store.get_ivar(thread, IdentId::get_id("/__spawn_location"))</code>.
+Moving a variable to a hidden slot therefore means renaming it in the
+Rust code that reads it as well (<code>grep 'get_id("@'</code>) — the scheduler
+reads a thread’s <code>/__name</code>, <code>/__report_on_exception</code> and
+<code>/__abort_on_exception</code> this way.</p>
+<h2 id="frozen-objects"><a class="header" href="#frozen-objects">Frozen objects</a></h2>
+<p>A store into a hidden slot does not check the frozen flag:</p>
 <ul>
-<li><code>defined? super</code></li>
-<li>SIGINT handled as a Ruby-level exception</li>
-<li><code>retry</code> statement (#109)</li>
-<li><code>return</code> inside <code>eval</code> now propagates correctly (#232)</li>
-<li><code>yield</code> correctly traverses Fiber boundaries (#187, #188)</li>
-<li><code>method_missing</code> accepts splat / hash-splat / block arguments (#143)</li>
-<li>Improved backtraces</li>
+<li>the interpreter’s <code>set_instance_var_with_cache</code> (also the <code>attr_writer</code>
+wrapper) skips the check when <code>name.is_hidden_ivar()</code>;</li>
+<li>the JIT’s <code>StoreIvar</code> and inlined <code>attr_writer</code> emit no <code>GuardFrozen</code>
+for a hidden name — and, having checked nothing, add no “this object is
+not frozen” proof to the straight-line facts later stores rely on.</li>
 </ul>
-<hr>
-<h2 id="standard-library-expansion"><a class="header" href="#standard-library-expansion">Standard Library Expansion</a></h2>
-<h3 id="regexp--matchdata"><a class="header" href="#regexp--matchdata">Regexp / MatchData</a></h3>
+<p><code>frozen?</code>, <code>freeze</code>, and stores into the object’s ordinary instance
+variables are untouched: <code>Thread::Mutex.new.freeze.instance_variable_set(:@a, 1)</code>
+is a <code>FrozenError</code>, as in CRuby.</p>
+<h2 id="when-to-use-it"><a class="header" href="#when-to-use-it">When to use it</a></h2>
+<p>For state CRuby keeps out of Ruby’s sight: a class that is C in CRuby and
+Ruby here. Not for a class that is Ruby in CRuby as well — its instance
+variables are part of its observable behaviour (<code>MonitorMixin</code>’s
+<code>@mon_data</code> shows in <code>inspect</code> in CRuby too).</p>
+<p>The magic comment is honoured in any file, not only monoruby’s own; a
+program that used it could keep slots of its own that reflection does not
+show and <code>freeze</code> does not protect. That is a monoruby extension with no
+effect on programs that do not ask for it.</p>
+<h2 id="what-moving-a-class-involves"><a class="header" href="#what-moving-a-class-involves">What moving a class involves</a></h2>
+<p>Besides renaming <code>@name</code> to <code>@__name</code> under the magic comment:</p>
 <ul>
-<li><strong>Onigmo regex engine</strong> (#71, May 2025) — Rust bindings for Ruby’s standard regex engine</li>
-<li><code>Regexp</code> class implementation</li>
-<li><code>MatchData</code> class (<code>[]</code>, back-references, special variables <code>$1</code>–<code>$9</code>, …)</li>
-<li>Interpolated symbols and back-references in <code>alias</code> (#147)</li>
+<li><strong>Readers.</strong> <code>attr_reader :name</code> reads the <em>ordinary</em> <code>@name</code>; write
+<code>def name; @__name; end</code> (or <code>attr_reader :__name</code> when the method
+itself may carry the prefix).</li>
+<li><strong>Another object’s state.</strong> <code>other.instance_variable_get(:@name)</code> no
+longer reaches it. Inside <code>initialize_copy</code> the slot has already been
+copied, so <code>@__buffer = @__buffer.dup</code> does; elsewhere go through a
+private helper (<code>other.__send__(:__chain_enums)</code>). In <code>builtins/*.rb</code> a
+<code>__</code>-prefixed helper is left out of the reflection lists
+(<code>is_internal_helper</code>); in <code>stdlib/*.rb</code> it is not, so prefer the copied
+slot there.</li>
+<li><strong>Rust readers</strong> of the variable: <code>get_id("@name")</code> becomes
+<code>get_id("/__name")</code> (<code>fill_stat_ivars</code>, <code>dir_path_ivar</code>, the scheduler).</li>
+<li><strong>Marshal.</strong> Hidden slots are not dumped. Where CRuby dumps a field of
+the C struct under a name without <code>@</code> — an exception’s <code>key</code>,
+<code>receiver</code>, <code>name</code>, <code>args</code>, <code>status</code>, <code>tag</code>, <code>result</code>, <code>errno</code>, <code>signo</code>,
+<code>matchee</code>, the conversion errors’ fields, <code>Process::Status</code>’s <code>status</code>
+and <code>pid</code> — <code>marshal.rs</code> maps the wire name to the slot in both
+directions (<code>EXCEPTION_FIELDS</code>, <code>OBJECT_FIELDS</code>; #2005). A field of a
+loaded exception that no class claims is kept under <code>/marshal/&lt;name&gt;</code>
+and written back.
+A class whose CRuby object is a C struct with no <code>_dump_data</code> (<code>Dir</code>,
+<code>File::Stat</code>, <code>StringScanner</code>, <code>Digest::Base</code>, <code>ThreadGroup</code>, …) says
+so with a class-level <code>@__no_dump_data = true</code>; <code>Marshal.dump</code> of an
+instance (or of a subclass’s) raises CRuby’s <code>no _dump_data is defined for class X</code> instead of writing an object with no state.</li>
+<li><strong>Frozen objects.</strong> State in hidden slots no longer makes a frozen
+object unusable, which is CRuby’s behaviour for most of these classes
+(<code>StringScanner#scan</code>, <code>Digest#update</code>, an <code>Enumerator::Chain</code>). Where
+CRuby does check the flag (<code>Dir</code>, through <code>GetDIR</code>) the Ruby code checks
+it itself (<code>Dir#__dir_check</code>).</li>
+<li><strong>Copies.</strong> <code>dup</code> copies hidden slots like any other. A class whose
+CRuby copy starts uninitialized, or which owns a resource, resets them in
+<code>initialize_copy</code> (<code>Dir</code> must not share its descriptor).</li>
 </ul>
-<h3 id="rational--complex"><a class="header" href="#rational--complex">Rational / Complex</a></h3>
-<ul>
-<li><strong>Rational reimplemented as a native Rust type</strong> with literal support (#266, Apr 2026)</li>
-<li>Full arithmetic / comparison operators and <code>to_f</code>/<code>to_i</code>/<code>to_r</code> (#224)</li>
-<li>Complex literals are now always frozen</li>
-</ul>
-<h3 id="array"><a class="header" href="#array">Array</a></h3>
-<ul>
-<li><code>flatten!</code>, <code>reverse_each</code>, <code>shuffle!</code>, <code>to_h</code>, <code>union</code>, <code>intersect?</code>, <code>product</code></li>
-<li><code>|</code> (union), <code>&amp;</code> (intersection)</li>
-<li><code>eql?</code>, <code>slice</code>, <code>bsearch</code>, <code>replace</code>, <code>fill</code> (including crash fixes)</li>
-<li><code>values_at</code> (#260)</li>
-<li><code>Array#[]</code> and <code>#[]=</code> defined as inlinable methods (#269)</li>
-</ul>
-<h3 id="string"><a class="header" href="#string">String</a></h3>
-<ul>
-<li><code>rindex</code>, <code>delete</code>, <code>delete_prefix</code>, <code>upcase!</code>, <code>downcase!</code></li>
-<li><code>String.try_convert</code>, <code>String.new</code></li>
-<li><code>succ!</code>/<code>next!</code>, <code>insert</code>, <code>byteindex</code>, <code>to_c</code>, <code>to_r</code></li>
-<li><code>encode</code>/<code>encode!</code> (stubs), <code>codepoints</code> (#260)</li>
-<li><code>concat</code>, <code>prepend</code>, <code>reverse</code>, <code>chop</code>, <code>squeeze</code>, <code>partition</code>, <code>upto</code></li>
-<li><code>String#bytesize</code> JIT-inlined (#139)</li>
-</ul>
-<h3 id="hash"><a class="header" href="#hash">Hash</a></h3>
-<ul>
-<li><code>replace</code>, <code>clone</code>, <code>filter!</code></li>
-<li><code>assoc</code>, <code>rassoc</code>, <code>shift</code>, <code>key</code>, <code>keep_if</code></li>
-<li><code>delete_if</code>, <code>reject!</code>, <code>default_proc=</code></li>
-<li>Comparison operators <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> (#196)</li>
-<li><code>Hash.[]</code> class method (#191)</li>
-<li>Customizable <code>hash</code> / <code>eql?</code> methods (#76, Sep 2025)</li>
-</ul>
-<h3 id="enumerable--enumerator"><a class="header" href="#enumerable--enumerator">Enumerable / Enumerator</a></h3>
-<ul>
-<li><code>find</code>, <code>filter</code>, <code>filter_map</code>, <code>one?</code>, <code>min_by</code>, <code>take_while</code></li>
-<li><code>each_with_object</code>, <code>to_a</code>, <code>none?</code></li>
-<li><code>step</code>, <code>lazy</code>, <code>permutation</code>, <code>curry</code> (#227)</li>
-</ul>
-<h3 id="io--file--dir"><a class="header" href="#io--file--dir">IO / File / Dir</a></h3>
-<ul>
-<li><code>IO#flush</code>, <code>IO#closed?</code>, <code>IO.popen</code> (r+/w modes)</li>
-<li><code>IO.select</code>, <code>IO#fileno</code>, <code>IO#write</code> (variadic), <code>IO#syswrite</code>, <code>IO.sysopen</code> (#230)</li>
-<li><code>IO.for_fd</code> (#260)</li>
-<li><code>File.size</code>, <code>File.size?</code> (#247)</li>
-<li><code>File.delete</code>, <code>File.chmod</code>, <code>File.symlink</code>, <code>File.readlines</code></li>
-<li><code>File.stat</code> / <code>File::Stat</code>, <code>File.umask</code>, <code>File.fnmatch</code>, <code>File.absolute_path</code>, <code>File.split</code></li>
-<li><code>File.zero?</code> (#260)</li>
-<li><code>Dir.glob</code> / <code>Dir[]</code> (#106), <code>Dir.mkdir</code> / <code>Dir.rmdir</code> / <code>Dir.entries</code></li>
-<li><code>Dir.exist?</code> (#208), <code>Dir.open</code> / <code>Dir.new</code>, Dir instance methods (#256)</li>
-<li><code>Kernel#open</code> (#256)</li>
-</ul>
-<h3 id="numeric--math"><a class="header" href="#numeric--math">Numeric / Math</a></h3>
-<ul>
-<li>Dozens of missing methods added (#189, #193, #223)</li>
-<li>All standard <code>Math</code> module functions implemented (#192)</li>
-<li>Correct <code>/</code> and <code>%</code> semantics (sign, truncation direction) (#97)</li>
-<li><code>Integer#div</code>, <code>Integer#ceildiv</code> (#267)</li>
-<li>Full overhaul of the coerce protocol (#225, #226, #249, #250)</li>
-</ul>
-<h3 id="encoding"><a class="header" href="#encoding">Encoding</a></h3>
-<ul>
-<li><code>Encoding.find</code> expanded to ~70 encoding names and aliases (#246)</li>
-<li>~60 <code>Encoding</code> constants added (US_ASCII, ISO-8859-<em>, Shift_JIS, EUC_JP, IBM</em>, …) (#242)</li>
-<li><code>Encoding.default_external</code> / <code>internal</code> stubs</li>
-</ul>
-<h3 id="module--class--object"><a class="header" href="#module--class--object">Module / Class / Object</a></h3>
-<ul>
-<li><code>Module#ancestors</code>, <code>Module#private_instance_methods</code></li>
-<li><code>Module#undef_method</code> (#73, Jun 2025)</li>
-<li><code>Module#method_added</code>, <code>Kernel#__method__</code></li>
-<li><code>Module#define_method</code> (fully correct)</li>
-<li><code>Object#singleton_methods</code>, <code>Object#methods</code></li>
-<li><code>Module.new</code> with block (#174)</li>
-<li><code>Class.new</code> with block (#163)</li>
-<li>Per-class <code>Class#allocate</code> (#164)</li>
-<li><code>Object#clone</code>, <code>initialize_copy</code>, <code>initialize_clone</code>, <code>initialize_dup</code> (#153, #154)</li>
-<li><code>define_singleton_method</code> (#155)</li>
-<li><code>BasicObject</code> spec compliance improvements (#166, #168)</li>
-<li><code>singleton_class</code> fixes (#167)</li>
-</ul>
-<h3 id="other-classes"><a class="header" href="#other-classes">Other Classes</a></h3>
-<ul>
-<li><strong>Marshal support</strong> (#125, Mar 2026)</li>
-<li><strong>Thread class</strong> — minimal single-threaded implementation (#222)</li>
-<li><strong>SizedQueue, ConditionVariable</strong> (#260)</li>
-<li><code>Method#to_proc</code>, <code>Method#source_location</code></li>
-<li><code>Method</code> / <code>UnboundMethod</code> builtin methods (#216)</li>
-<li><code>Exception#set_backtrace</code> (#156)</li>
-<li><code>Range#bsearch</code>, <code>Range#min/max/count/minmax</code> (endless-range support)</li>
-<li><code>Struct</code> subclass support</li>
-<li><code>Kernel#autoload</code>, <code>Kernel#load</code> (#105)</li>
-<li><code>Kernel#exec</code> (#145), <code>Kernel#format</code> / <code>Kernel#sprintf</code> (#162)</li>
-<li><code>$0</code>, <code>Dir.pwd</code>, <code>Dir.chdir</code></li>
-<li><code>Process::Status</code>, <code>Signal.list</code></li>
-<li><strong>Frozen-object support</strong> (#240) — correct <code>freeze</code> / <code>frozen?</code> behavior throughout</li>
-<li>Stack-overflow detection</li>
-</ul>
-<hr>
-<h2 id="jit-compiler-improvements"><a class="header" href="#jit-compiler-improvements">JIT Compiler Improvements</a></h2>
-<h3 id="architecture"><a class="header" href="#architecture">Architecture</a></h3>
-<ul>
-<li><strong><code>CacheMap</code> introduction</strong> (#75, Sep 2025) — better inline-cache management</li>
-<li><strong><code>StackFrame</code> introduction</strong> — abstraction for JIT stack frames</li>
-<li><strong>Constant functions</strong> (#77, Sep 2025) — pure constant computations optimized away</li>
-<li><strong><code>Effect</code> tracking</strong> (#89, Dec 2025) — side-effect information per function</li>
-<li><strong><code>Immediate</code> bytecode instruction</strong> (#95, Jan 2026)</li>
-<li><strong>Continuation frames</strong> (#101, Feb 2026)</li>
-<li><strong>Fixpoint iteration for abstract interpretation</strong> (#81, Nov 2025) — more precise type inference</li>
-<li><code>LinkMode::None</code> / <code>LinkMode::MaybeNone</code> (#79, Nov 2025)</li>
-<li><code>InlineFuncInfo::CFunc_F_F</code> (#80, Nov 2025)</li>
-<li><code>Codegen</code> detached from <code>Globals</code></li>
-<li><code>RecompileReason</code> introduced</li>
-</ul>
-<h3 id="optimizations"><a class="header" href="#optimizations">Optimizations</a></h3>
-<ul>
-<li><strong>Binary-op JIT optimization</strong> (#87, Dec 2025) — faster Float/Integer arithmetic</li>
-<li><strong><code>f ** 2</code> special-cased</strong> (Apr 2025)</li>
-<li><strong>Rest-param and keyword-rest-param JIT optimization</strong> (#96, Feb 2026)</li>
-<li><strong>Range class optimization</strong> (#98, Feb 2026)</li>
-<li><strong>Eliminated unnecessary locals write-back</strong></li>
-<li><strong>Frozen-literal allocation avoidance</strong> (Feb 2026)</li>
-<li><strong><code>String#bytesize</code> inlined</strong> (#139, Mar 2026)</li>
-<li><strong>Constant folding across method/block boundaries</strong> (#90, Dec 2025)</li>
-<li><strong><code>Array#[]</code> and <code>#[]=</code> inlined</strong> (#269, Apr 2026)</li>
-<li><code>inlinegen</code> can now use class information of the first argument (Apr 2026)</li>
-</ul>
-<h3 id="bug-fixes"><a class="header" href="#bug-fixes">Bug Fixes</a></h3>
-<ul>
-<li>Wrong x86-64 condition codes for NaN float comparisons (#186)</li>
-<li>GC crash on JIT constant slots (#185)</li>
-<li>Panic after BOP (basic-op) redefinition (#220)</li>
-<li>Stale type information in JIT <code>locals_to_S</code> (#112)</li>
-<li>Temporary-receiver-slot bug in safe navigation operator (<code>&amp;.</code>)</li>
-<li>Bignum JIT dispatch falling through to wrong path (#271)</li>
-</ul>
-<hr>
-<h2 id="external-library--ecosystem-support"><a class="header" href="#external-library--ecosystem-support">External Library / Ecosystem Support</a></h2>
-<h3 id="ffi--fiddle"><a class="header" href="#ffi--fiddle">FFI / Fiddle</a></h3>
-<ul>
-<li><strong>fiddle support</strong> (Feb 2026) — Ruby bindings to C libraries</li>
-<li><strong>ffi support</strong> (Feb 2026) — compatibility with the <code>ffi</code> gem</li>
-<li><strong>SQLite3 FFI bridge</strong> (#160, Mar 2026) — support for the <code>sqlite3</code> gem</li>
-<li><strong>one shared native-call primitive set</strong> (Aug 2026) — <code>Fiddle.___dlopen</code> /
-<code>___call</code> / <code>___read</code> / <code>___write</code> / … (<code>src/builtins/fiddle.rs</code>) are now the
-single place C is reached from. <code>gem/ffi_c.rb</code> calls them instead of a
-duplicate registration under <code>FFI</code> (which also gains the JIT inliners for
-<code>___read</code> / <code>___write</code>), and the <code>sqlite3</code> bridge calls them directly rather
-than through <code>FFI::Library</code>, so it no longer needs the host <code>ffi</code> gem.</li>
-</ul>
-<h3 id="benchmarks"><a class="header" href="#benchmarks">Benchmarks</a></h3>
-<ul>
-<li><strong>ruby-bench support</strong> (#88, Dec 2025)</li>
-<li><strong>optcarrot</strong> kept running continuously (#115, Mar 2026)</li>
-<li><strong>rubyboy</strong> benchmark support (#111)</li>
-<li><strong>lee</strong> benchmark support (#117, #120)</li>
-</ul>
-<h3 id="infrastructure"><a class="header" href="#infrastructure">Infrastructure</a></h3>
-<ul>
-<li><code>ruruby-parse</code> vendored into the workspace (Apr 2025)</li>
-<li><code>CLAUDE.md</code> AI-assistant guide added (#107)</li>
-<li><code>bin/spec</code> — script for batch-running all 58 ruby/spec core categories</li>
-<li><code>bin/compare</code> command added (Mar 2026)</li>
-<li><code>--disable-gems</code> CLI option (Mar 2026)</li>
-</ul>
-<hr>
-<h2 id="rubyspec-compatibility"><a class="header" href="#rubyspec-compatibility">ruby/spec Compatibility</a></h2>
-<p>A large-scale compatibility drive (mainly Feb–Apr 2026) pushed ruby/spec core pass rates substantially:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Metric</th><th style="text-align: right">Before (≈ Feb 2026)</th><th style="text-align: right">After (Apr 2026)</th></tr>
-</thead>
-<tbody>
-<tr><td>F+E (Fail + Error)</td><td style="text-align: right">~14,000</td><td style="text-align: right">~10,300</td></tr>
-<tr><td>Pass rate</td><td style="text-align: right">~60 %</td><td style="text-align: right">~73.6 %</td></tr>
-<tr><td>Crashes</td><td style="text-align: right">many</td><td style="text-align: right">0</td></tr>
-<tr><td><code>cargo test</code></td><td style="text-align: right">568 pass / 10 fail</td><td style="text-align: right">756 pass / 0 fail</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="areas-fixed"><a class="header" href="#areas-fixed">Areas fixed</a></h3>
-<ul>
-<li><strong>Implicit type conversions</strong> (<code>to_int</code>/<code>to_str</code>/<code>to_f</code>/<code>to_ary</code>/<code>to_hash</code>) across all builtins</li>
-<li><strong>Coerce protocol</strong> for numeric binary operators</li>
-<li><strong>TypeError / ArgumentError messages</strong> matching CRuby format</li>
-<li><strong>Errno exceptions</strong> — <code>RuntimeError</code> → proper <code>Errno::ENOENT</code> / <code>EACCES</code> / … everywhere</li>
-<li><strong>IOError</strong> for closed-stream operations</li>
-<li><strong>Float formatting</strong> (<code>inf</code>, <code>-0.0</code>, scientific-notation thresholds)</li>
-<li><strong>Frozen-object enforcement</strong> — freeze check added in JIT fast paths</li>
-<li><strong>Method arities</strong> — 30+ builtin methods corrected (#243, #245)</li>
-<li><strong>Integer spec</strong> — 10+ sub-categories fixed (#263, #265, #268, #270, #272)</li>
-<li><strong>Rational</strong> fully reimplemented (#266)</li>
-</ul>
-<hr>
-<h2 id="code-quality--infrastructure"><a class="header" href="#code-quality--infrastructure">Code Quality / Infrastructure</a></h2>
-<ul>
-<li><strong><code>SAFETY</code> comments</strong> on all <code>unsafe</code> blocks (#94, Jan 2026)</li>
-<li><code>RubyHash</code> trait for Hash abstraction (#76)</li>
-<li><code>RubyEql</code>, <code>RubyDiv</code>, <code>RubyMod</code>, <code>RubyDivMod</code> traits introduced</li>
-<li><strong>Local-frame capture prevented during JIT execution</strong> (#93, Jan 2026)</li>
-<li>Library files copied to <code>~/.monoruby/lib/</code> at build time (#119)</li>
-<li>Codecov coverage tracked continuously</li>
-</ul>
-<hr>
-<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
-<p>Over this one-year period monoruby achieved:</p>
-<ol>
-<li><strong>Onigmo regex engine integration</strong> — full Ruby-compatible regular expressions</li>
-<li><strong>FFI / Fiddle / SQLite3</strong> support — interoperability with native C libraries and gems</li>
-<li><strong>Hundreds of builtin methods</strong> added or corrected</li>
-<li><strong>ruby/spec pass rate raised from ~60 % to 73.6 %</strong> (F+E reduced 14,000 → 10,300)</li>
-<li><strong>Continuous JIT improvements</strong> — fixpoint type inference, constant functions, continuation frames, constant folding</li>
-<li><strong>Zero crashes in <code>cargo test</code></strong> — from 10 failures to a clean 756/0</li>
-</ol>
+<p>A class that is a Struct in CRuby is a Struct here rather than a class
+with hidden slots: <code>Process::Tms</code>, <code>Etc::Passwd</code>, <code>Etc::Group</code>.</p>
+<h2 id="tests"><a class="header" href="#tests">Tests</a></h2>
+<p><code>monoruby/tests/hidden_ivars.rs</code>: the synchronization classes against
+CRuby (no state in <code>inspect</code> / <code>instance_variables</code>, frozen ones still
+lock, subclasses with colliding names), and the mechanism itself
+(<code>hidden_ivars_magic_comment</code>, monoruby-only).
+<code>monoruby/tests/hidden_state.rs</code>: the classes moved by #1950 — no
+instance variables, nothing in <code>inspect</code>, subclasses with colliding
+names, frozen objects, copies, the Struct classes and the Marshal round
+trip of the exception fields.
+<code>monoruby/tests/marshal_exception_fields.rs</code>: what <code>Marshal</code> writes for
+an exception (field names, order, <code>bt_locations</code>), the round trip of
+every builtin exception’s fields, and the objects that cannot be dumped.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/profiler.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/super_resolution.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
+                            <a rel="next prefetch" href="../design/error_highlight.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -460,10 +355,13 @@ than through <code>FFI::Library</code>, so it no longer needs the host <code>ffi
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/profiler.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/super_resolution.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
+                    <a rel="next prefetch" href="../design/error_highlight.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
             </nav>
 
         </div>

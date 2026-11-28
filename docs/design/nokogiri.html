@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,14 +177,14 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="nokogiri-を-monoruby-で動かす方法の検討"><a class="header" href="#nokogiri-を-monoruby-で動かす方法の検討">nokogiri を monoruby で動かす方法の検討</a></h1>
+                        <h1 id="nokogiri-の実装"><a class="header" href="#nokogiri-の実装">nokogiri の実装</a></h1>
 <p>nokogiri は C 拡張（libxml2 / libxslt / gumbo）の上に Ruby を載せた gem で、
-monoruby では <code>require "nokogiri"</code> が <code>nokogiri/nokogiri</code> の LoadError で止まる
-（precompiled gem の <code>.so</code> は CRuby ABI なので読めない）。本稿は、psych
-（<code>doc/…</code> の libyaml 移植）・zlib（<code>libz-sys</code> 同梱）と同じ「gem の Ruby 半分は
-そのまま、ネイティブ半分を monoruby 側で提供する」路線を nokogiri に適用する
-場合の設計と、代替案との比較をまとめる。<code>doc/c_extention.md</code>（CRuby C API 互換層）
-との関係も述べる。</p>
+precompiled gem の <code>.so</code> は CRuby ABI なので monoruby では読めない。monoruby は
+psych と同じく「gem の Ruby 半分はそのまま、ネイティブ半分を monoruby 側で
+提供する」形で nokogiri を動かしている。ネイティブ半分は Rust で書き直した
+拡張 <code>ext/nokogiri</code>（<code>nokogiri_native</code>）で、libxml2 / libxslt / gumbo は
+nokogiri のパッチを当てた C ソースを同梱してビルドする。本稿はその設計と、
+選ばなかった代替案（CRuby C API 互換層、純 Rust）との比較をまとめる。</p>
 <p>調査対象: nokogiri 1.19.1（x86_64-linux precompiled gem）と 1.18.9（source gem）。</p>
 <h2 id="1-nokogiri-の構造と規模"><a class="header" href="#1-nokogiri-の構造と規模">1. nokogiri の構造と規模</a></h2>
 <div class="table-wrapper">
@@ -228,7 +228,7 @@ XSLT / Schema / RelaxNG / Reader / SAX が全部手に入る。psych・zlib で
 <code>config.h</code> を Linux / macOS 向けに固定する）。ノードの寿命管理（後述）は
 nokogiri の C コードで最も込み入った部分で、そこはそのまま移植が要る。</li>
 </ul>
-<h3 id="b-cruby-c-api-互換層docc_extentionmd-の-path-cで-nokogiri-の-c-拡張をそのまま動かす"><a class="header" href="#b-cruby-c-api-互換層docc_extentionmd-の-path-cで-nokogiri-の-c-拡張をそのまま動かす">B. CRuby C API 互換層（<code>doc/c_extention.md</code> の Path C）で nokogiri の C 拡張をそのまま動かす</a></h3>
+<h3 id="b-cruby-c-api-互換層docc_apimdで-nokogiri-の-c-拡張をそのまま動かす"><a class="header" href="#b-cruby-c-api-互換層docc_apimdで-nokogiri-の-c-拡張をそのまま動かす">B. CRuby C API 互換層（<code>doc/c_api.md</code>）で nokogiri の C 拡張をそのまま動かす</a></h3>
 <p><code>ruby.h</code> 互換ヘッダと <code>rb_*</code> シムを作り、<code>gem install nokogiri</code> の再コンパイル
 で nokogiri.so を monoruby 向けに生成する。</p>
 <ul>
@@ -238,8 +238,8 @@ nokogiri の C コードで最も込み入った部分で、そこはそのま�
 関数付き）、<code>rb_protect</code> / <code>rb_ensure</code> / <code>rb_rescue</code> の例外モデル、
 <code>rb_enc_*</code>、IO コールバック（<code>rb_io_*</code> 27 箇所）まで要る。C 拡張層の
 「最小ライン」（hello world の <code>.so</code>）から nokogiri までの距離が非常に長く、
-最初のマイルストーンとしては重い。<code>doc/c_extention.md</code> §4 のレイアウト
-不一致（<code>RSTRING_PTR</code> 等）も nokogiri は踏む（<code>StringValueCStr</code> 85 箇所）。</li>
+最初のマイルストーンとしては重い。<code>RSTRING_PTR</code> 等のレイアウト前提も
+nokogiri は踏む（<code>StringValueCStr</code> 85 箇所）。</li>
 </ul>
 <h3 id="c-純-rust-で再実装html5ever--quick-xml--自前-dom--xpath"><a class="header" href="#c-純-rust-で再実装html5ever--quick-xml--自前-dom--xpath">C. 純 Rust で再実装（html5ever / quick-xml + 自前 DOM + XPath）</a></h3>
 <p>crates.io の状況（2026-09）: <code>html5ever</code> 0.39（HTML5、Servo 由来で
@@ -271,30 +271,27 @@ monoruby の方針（psych・zlib・json）と合わない。「よくあるス�
 </tbody>
 </table>
 </div>
-<p><strong>推奨は A。</strong> B は長期の別プロジェクトとして価値があるが、nokogiri を動かす
-最短路ではない。A で作る Rust 側のオブジェクト・寿命モデルは、将来 B を
-やるときの <code>TypedData</code> の設計にも流用できる。</p>
+<p><strong>A を採った。</strong> B は nokogiri を動かす最短路ではなかった。A で作った Rust
+側のオブジェクト・寿命モデルは、後に作った C API 層の <code>TypedData</code> の設計にも
+流用している。</p>
 <h2 id="3-a-の設計"><a class="header" href="#3-a-の設計">3. A の設計</a></h2>
 <h3 id="31-crate-構成"><a class="header" href="#31-crate-構成">3.1 crate 構成</a></h3>
 <pre><code>monoruby/
-├── libxml2-src/        # workspace crate: libxml2 + libxslt (+libexslt) を cc でビルド
+├── libxml2-src/        # workspace crate: libxml2 + libxslt (+libexslt) + gumbo-parser を cc でビルド
 │   ├── build.rs        # ~60 + ~40 ファイルを直接コンパイル、config.h は同梱の固定版
 │   ├── vendor/         # nokogiri の dependencies.yml と同じ版に patches/ を適用したもの
 │   └── src/lib.rs      # 使う 227 関数の extern "C" 宣言（手書き。bindgen は使わない）
-├── gumbo-src/          # nokogiri 同梱の gumbo-parser（42 ファイル）を cc でビルド
-├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib）
-│   │                   # 当初は monoruby/src/builtins/nokogiri/ にあり、
-│   │                   # doc/native_extension_loading.md の 3 で拡張に出た
+├── ext/nokogiri/       # ext/nokogiri の移植（crate nokogiri_native、cdylib、
+│   │                   # doc/native_extension_loading.md）
 │   └── src/            # document.rs, node.rs, node_set.rs, xpath.rs, sax.rs, reader.rs,
 │       │               #   xslt.rs, schema.rs, dtd.rs, html5.rs, misc.rs
 │       └── lib.rs      # クラス登録（Init_nokogiri_native）、寿命モデルの共通部
 └── monoruby/gem/nokogiri/            # gem の lib/nokogiri/** を vendoring
     └── nokogiri/nokogiri.rb          # C 拡張の代わりに読まれるスタブ（定数定義など）
 </code></pre>
-<p>libz-sys の前例どおり、C ソースは monoruby のビルドで静的リンクする。
+<p>C ソースは拡張のビルドで静的リンクする。
 iconv は libxml2 の encoding 変換に必要で、glibc と macOS は libc に持つので
-libiconv は同梱しない（nokogiri の precompiled ビルドだけが同梱している）。
-zlib は既存の libz-sys を共有する。</p>
+libiconv は同梱しない（nokogiri の precompiled ビルドだけが同梱している）。</p>
 <p>libxml2 は nokogiri のパッチを当てた版を使う。とくに <code>0009-allow-wildcard- namespaces</code>（<code>*:foo</code> の XPath）と <code>0019-xpath-…static-hash-table</code> は
 nokogiri の挙動そのものなので外せない。</p>
 <h3 id="32-オブジェクトと寿命"><a class="header" href="#32-オブジェクトと寿命">3.2 オブジェクトと寿命</a></h3>
@@ -358,7 +355,7 @@ C 拡張が定義していた定数（<code>Nokogiri::LIBXML_COMPILED_VERSION</c
 骨格をここで定義する。Ruby 半分は gem のものを無改造で使う。<code>extension.rb</code>
 は <code>nokogiri/#{RUBY_VERSION}/nokogiri</code> を試してから <code>nokogiri/nokogiri</code> に
 落ちるので、後者をスタブで受ければ足りる。</p>
-<h2 id="4-進め方と検証"><a class="header" href="#4-進め方と検証">4. 進め方と検証</a></h2>
+<h2 id="4-段階と検証"><a class="header" href="#4-段階と検証">4. 段階と検証</a></h2>
 <p>ruby-bench に nokogiri のベンチマークは無いので、動機は「動かす」こと自体と
 Rails 系（rails-dom-testing、loofah、rails-html-sanitizer は nokogiri 必須）
 の解放。段階:</p>
@@ -383,25 +380,19 @@ CSS → XPath は Ruby 側なので <code>css</code> / <code>at_css</code> は�
 から。</li>
 <li><code>tests/ruby_bench_outputs.rs</code> と同じ形の CRuby 出力比較テスト（同じ
 HTML / XML を両方でパースして <code>to_xml</code> / <code>xpath</code> の結果を突き合わせる）。
-同じ libxml2 なので byte 単位で一致するはず。</li>
+同じ libxml2 なので byte 単位で一致する（<code>tests/nokogiri.rs</code>）。</li>
 </ul>
-<h2 id="5-見積りの目安"><a class="header" href="#5-見積りの目安">5. 見積りの目安</a></h2>
-<p>既存の native stand-in は yaml.rs 496 行（libyaml-safer の上）、zlib.rs 635 行、
-prism.rs 172 行で、いずれも下に完成したライブラリがある。nokogiri は
-<code>ext/nokogiri</code> 10k 行の移植が本体で、<code>RValue</code> の新種別と GC 連携、
-libxml2 のビルドが付く。段階 1〜3 で ext の 6 割程度（Node 54 + Document 12</p>
-<ul>
-<li>NodeSet 12 + XPathContext 5 + HTML4 + SyntaxError）を占め、そこまでで
-一般的な用途（スクレイピング、Rails のビュー検証、loofah のサニタイズ）は動く。</li>
-</ul>
-<p>B（C API 互換層）を将来やるなら、ここで作る <code>ObjTy::XML_*</code> の mark / drop の
-形がそのまま <code>TypedData</code> の受け皿になるので、A の作業は無駄にならない。</p>
-<h2 id="6-実装状況xslt-以外の全段階2026-09"><a class="header" href="#6-実装状況xslt-以外の全段階2026-09">6. 実装状況（XSLT 以外の全段階、2026-09）</a></h2>
+<h2 id="5-ネイティブオブジェクトと-c-api-層"><a class="header" href="#5-ネイティブオブジェクトと-c-api-層">5. ネイティブオブジェクトと C API 層</a></h2>
+<p>libxml2 のポインタを包むオブジェクトはネイティブオブジェクト
+（<code>MR_CLASS_NATIVE</code> のクラス、<code>native!</code> で宣言したペイロード、それぞれの
+<code>mark</code> / <code>Drop</code>）で、§3.2 の寿命モデルはこの形で表している。C API 層
+（<code>doc/c_api.md</code>）の <code>TypedData</code> / <code>Data</code> も同じコアのネイティブペイロードに
+載っている。</p>
+<h2 id="6-実装状況"><a class="header" href="#6-実装状況">6. 実装状況</a></h2>
 <p><code>libxml2-src/</code>（libxml2 2.13.9 + nokogiri 1.19.7 の patches、<code>cc</code> でビルド、
 <code>config.h</code> は手書き、<code>xmlversion.h</code> は build.rs が生成）、
-<code>ext/nokogiri/</code>（Rust 側、monoruby 拡張 <code>nokogiri_native</code>。もとは
-<code>monoruby/src/builtins/nokogiri/</code> で、<code>doc/native_extension_loading.md</code> の
-手順 3 で <code>monoruby_ext</code> の <code>Ctx</code> 越しに書き直してコアの外に出した）、
+<code>ext/nokogiri/</code>（Rust 側、monoruby 拡張 <code>nokogiri_native</code>。<code>monoruby_ext</code> の
+<code>Ctx</code> 越しに書かれている、<code>doc/native_extension_loading.md</code>）、
 <code>monoruby/gem/nokogiri/</code>（gem 1.19.7 の Ruby 半分をそのまま +
 <code>nokogiri/nokogiri.rb</code> のスタブ、拡張を <code>require</code> する）。
 <code>tests/nokogiri.rs</code> が CRuby の nokogiri gem と同じスクリプトを走らせて出力を
@@ -582,7 +573,7 @@ Rust では書けない。<code>libxml2-src/glue/monoruby_glue.c</code> に C �
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../design/c_extention.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/ruby_spec_skip_tags.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -596,7 +587,7 @@ Rust では書けない。<code>libxml2-src/glue/monoruby_glue.c</code> に C �
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../design/c_extention.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/ruby_spec_skip_tags.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

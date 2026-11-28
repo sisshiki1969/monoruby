@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,7 +190,7 @@
 <h2 id="blocking-io-and-kernel-waits"><a class="header" href="#blocking-io-and-kernel-waits">Blocking IO and kernel waits</a></h2>
 <p>Blocking-IO builtins go through a common wrapper that checks buffered data, probes readiness with a zero-timeout poll, and otherwise <strong>parks the thread on the fd</strong>, releasing the GVL. <code>IO.select</code>, non-blocking TCP <code>connect</code>, and <code>accept</code> retry-loops use the same park. Syscalls that cannot be waited for on an fd (<code>flock</code>, a FIFO <code>open</code>, <code>waitpid</code>, <code>getaddrinfo</code>, a blocking FFI or C-extension call) run on the calling kernel thread with the GVL released; an interrupt reaches them through <code>SIGVTALRM</code> (<code>EINTR</code>).</p>
 <h2 id="synchronization-primitives-and-interrupts"><a class="header" href="#synchronization-primitives-and-interrupts">Synchronization primitives and interrupts</a></h2>
-<p><code>Mutex</code>, <code>Queue</code>, <code>SizedQueue</code>, and <code>ConditionVariable</code> are implemented <strong>in Ruby</strong> (in <code>builtins/startup.rb</code>), relying on safepoint-free straight-line test-and-set plus a <em>park permit</em> mechanism that closes the classic lost-wakeup race. Locks abandoned by a dead thread are reclaimed by the next acquirer, and <code>Mutex#owned?</code> is per-Fiber.</p>
+<p><code>Mutex</code>, <code>Queue</code>, <code>SizedQueue</code>, and <code>ConditionVariable</code> are implemented <strong>in Ruby</strong> (in <code>builtins/thread.rb</code>), relying on safepoint-free straight-line test-and-set plus a <em>park permit</em> mechanism that closes the classic lost-wakeup race. Locks abandoned by a dead thread are reclaimed by the next acquirer, and <code>Mutex#owned?</code> is per-Fiber.</p>
 <p><code>Thread#kill</code> / <code>#raise</code> are queued on the target: a parked target is woken and unwinds <strong>from its exact blocking point</strong> (running <code>ensure</code> blocks); a running target is caught at its next safepoint, so even busy loops are killable. <code>Thread.handle_interrupt</code> masking is honored at mask boundaries. Signals are converted on the main thread, as in CRuby — see <a href="design/signal.html"><code>doc/signal.md</code></a>.</p>
 <h2 id="fibers"><a class="header" href="#fibers">Fibers</a></h2>
 <p>Fibers switch stacks within a thread (an asymmetric resume/yield chain); they are unrelated to thread switching, which is the GVL handoff. A thread may park while deep inside a nested Fiber and simply continues there when it wakes.</p>

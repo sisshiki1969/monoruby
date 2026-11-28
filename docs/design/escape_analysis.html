@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,10 +187,9 @@ at its use whether the object is needed at all. The same object can be
 handed, still elided, into a specialized callee’s parameter — as the
 literal argument of <code>size([a, b])</code>, or as the <code>*rest</code> parameter the
 callee binds <code>f(a, b)</code> into (§6).</p>
-<p>This replaced <code>try_fuse_array_minmax</code>, a peephole that recognized exactly
-<code>array</code> + <code>min</code>/<code>max</code> on the next instruction. The pattern-specific part is
-now data: what a callee may be handed instead of a real Array is its
-<strong>receiver escape summary</strong>, declared next to the builtin.</p>
+<p>The pattern-specific part is data: what a callee may be handed instead of
+a real Array is its <strong>receiver escape summary</strong>, declared next to the
+builtin.</p>
 <p>Source: <code>codegen/jitgen/compile/escape.rs</code>; the state half in
 <code>state/slot.rs</code> (<code>SlotState::virtuals</code>, <code>LinkMode::from_caller</code>) and
 <code>state.rs</code>; the side-exit half in <code>WriteBack::virtual_obj</code>

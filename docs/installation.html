@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -276,7 +276,7 @@ reproducible build. It does two things:</p>
 <ol>
 <li>
 <p><strong>Bakes the reported Ruby version.</strong> <code>MONORUBY_RUBY_VERSION</code> is read from
-<code>monoruby/vendor/ruby-stdlib/.ruby-version</code> (currently <strong>4.0.2</strong>) and
+<code>monoruby/vendor/ruby-stdlib/.ruby-version</code> (currently <strong>4.0.9</strong>) and
 reported at run time as <code>RUBY_VERSION</code>. Taking it from the vendored
 snapshot rather than a host <code>ruby</code> keeps the version monoruby reports in
 step with the stdlib it actually ships.</p>
@@ -320,7 +320,12 @@ discover <code>$LOAD_PATH</code> and <code>Gem.paths.path</code>, and caches the
 <code>~/.monoruby/{library_path,gem_path}</code> so the ~50 ms spawn is paid once per
 machine. Precedence is <code>MONORUBY_GEM_PATH</code> / <code>MONORUBY_LOAD_PATH</code>, then
 <code>GEM_PATH</code>, then the cache files, then the probe. <code>MONORUBY_REPROBE=1</code>
-forces a fresh probe. With no host Ruby, those caches stay empty and the
+forces a fresh probe, and a <code>gem install</code> on the host is picked up on the
+next start. The Ruby probed is not simply <code>ruby</code> on <code>PATH</code>: <code>ruby</code> on
+<code>PATH</code> and every versioned rbenv / rvm / asdf / mise install are ranked by
+distance from the vendored pin and the closest wins (the same rule the
+test harness uses); the choice is recorded in <code>~/.monoruby/probed_ruby</code>,
+and <code>MONORUBY_RUBY=&lt;path&gt;</code> pins one explicitly. With no host Ruby, those caches stay empty and the
 vendored stdlib still loads normally — you will just see this on startup:</p>
 <pre><code class="language-text">Warning: failed to read library path file: "~/.monoruby/library_path". Ruby may not be installed.
 </code></pre>

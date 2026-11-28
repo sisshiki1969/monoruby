@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,11 +193,11 @@
 </thead>
 <tbody>
 <tr><td>ペンディングビットマップ・signo↔例外・disposition</td><td><code>codegen/signal_table.rs</code></td></tr>
-<tr><td>ハンドラスタブ(async-signal-safe)</td><td><code>codegen/arch/{x86_64,aarch64}/jit_module.rs</code>(<code>signal_handler_for</code>)</td></tr>
-<tr><td>sigaction インストール・スタブ事前生成</td><td><code>codegen/codegen.rs</code></td></tr>
+<tr><td>ハンドラ(async-signal-safe)</td><td><code>codegen/signal_table.rs</code>(<code>signal_handler</code>)/ <code>poll_flag.rs</code></td></tr>
+<tr><td>sigaction インストール</td><td><code>codegen.rs</code>(<code>install_signal_handler</code> ほか)</td></tr>
 <tr><td>セーフポイント配送</td><td><code>executor.rs</code>(<code>execute_gc</code>)</td></tr>
 <tr><td><code>Signal</code> / <code>Kernel#trap</code> ビルトイン・名前表</td><td><code>builtins/process.rs</code> / <code>builtins/kernel.rs</code></td></tr>
-<tr><td>trap テーブル(GC ルート)</td><td><code>globals/globals.rs</code></td></tr>
+<tr><td>trap テーブル(GC ルート)</td><td><code>globals.rs</code></td></tr>
 <tr><td><code>signal_interrupt</code> マーカー</td><td><code>globals/error.rs</code></td></tr>
 <tr><td>ブロッキング IO 統合</td><td><code>builtins/io.rs</code>(<code>blocking_io_region</code>)/ <code>value/rvalue/io.rs</code></td></tr>
 <tr><td>ハングウォッチドッグ</td><td><code>watchdog.rs</code></td></tr>
@@ -253,11 +253,9 @@ libc 呼び出しに触れられない。そこで <strong>2 段階</strong>に�
 ロックなし・確保なし・TLS なし・libc 呼び出しなし。poll ワードのアドレスは
 <code>poll_flag.rs</code> のプロセスグローバルなレジストリ(<code>AtomicUsize</code>、最後に登録した
 <code>Codegen</code> が勝つ — <code>sigaction</code> のプロセスワイド性と対応)から取得する。</p>
-<p>かつては signo ごとに JIT asm スタブ(<code>addl [alloc_flag], 10; orl [pending], bit</code>)を
-事前生成していたが、(1) lock なし RMW がプリエンプトタイマの <code>fetch_or</code> と競合して
-どちらかの更新を失いうる、(2) インストール元 <code>Codegen</code> の解放後にシグナルが来ると
-解放済み JIT メモリを実行する、という 2 つの欠陥があり、Rust ハンドラ+アトミック演算に
-置き換えた。</p>
+<p>ハンドラを JIT コードにしないのは、(1) lock なし RMW だとプリエンプトタイマの
+<code>fetch_or</code> と競合してどちらかの更新を失いうる、(2) インストール元 <code>Codegen</code> の解放後に
+シグナルが来ると解放済み JIT メモリを実行する、の 2 点を避けるため。</p>
 <hr>
 <h2 id="3-sigaction-のインストールa3"><a class="header" href="#3-sigaction-のインストールa3">3. sigaction のインストール(A3)</a></h2>
 <p><code>codegen.rs</code> の <code>sigaction_to</code> / <code>install_signal_handler</code> がプロセスワイドに <code>libc::sigaction</code> する。</p>
@@ -314,17 +312,6 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 (<code>current == main</code>)の poll だけが drain する。CRuby と同じく、非メインスレッド
 実行中に届いたシグナルはメインの次の poll まで保留される(非メインのホルダは
 その poll で GVL を譲る、<code>doc/threads.md</code> §12.8)。</p>
-<p>2026-11 まであった M:1 グリーンスケジューラでは、これに加えてスケジューラの
-機構と入口(<code>pass</code> / <code>sleep</code> / <code>join</code>)の内側を <code>SCHED_CALL_DEPTH</code> で除外して
-いた。保存中のコンテキストの上に積んだ Ruby フレームが復帰時にもう一度実行される
-のを防ぐためで、コンテキストを保存して切り替えない 1:1 モデルでは不要になった。</p>
-<blockquote>
-<p>これを怠ると、<code>sleep</code> で park したスレッドが 1 本あるだけでカウンタが恒久的に
-1 以上に張り付き、以後 <code>Signal.trap</code> ハンドラが<strong>二度と走らなくなる</strong>。
-<code>nil until flag</code> は無限に回り、次のブロッキング書き込みが内部マーカー
-<code>__monoruby_signal_interrupt__</code>(§ マーカー)を RuntimeError として表に出す。
-回帰テスト: <code>process.rs</code> の <code>signal_delivered_while_another_thread_is_parked</code>。</p>
-</blockquote>
 <hr>
 <h2 id="5-signo--既定例外a4signo_to_error"><a class="header" href="#5-signo--既定例外a4signo_to_error">5. signo → 既定例外(A4;<code>signo_to_error</code>)</a></h2>
 <p><code>Signal.trap</code> ハンドラが無い場合、<code>Default</code>/<code>SystemDefault</code> は既定例外に落ちる:</p>
@@ -358,7 +345,7 @@ USR1, USR2)へ自動で <code>sigaction</code>。CHLD/CONT/WINCH/TSTP や PIPE �
 <li>disposition はコマンド引数(<code>command_disposition</code>)かブロック
 (<code>Handler(generate_proc(...))</code>)から決まる(コマンド優先)。</li>
 <li><strong>先に OS レベルでインストールし、その後 trap テーブルへ記録</strong>する。<code>CODEGEN</code> 借用下で
-disposition ごとに <code>install_signal_stub</code> / <code>install_signal_ignore</code> /
+disposition ごとに <code>install_signal_handler</code> / <code>install_signal_ignore</code> /
 <code>install_signal_default</code> / <code>install_signal_system_default</code> を呼ぶ。失敗時は <code>Errno</code>。
 <code>set_signal_disposition</code> が<strong>前の disposition</strong> を返し、<code>disposition_to_value</code> で Ruby 値に
 変換して返す。</li>
@@ -423,7 +410,7 @@ SignalException を read の外へ raise、trap ハンドラなら実行して�
 </ol>
 <h3 id="その他の-eintrpoll-経路いずれも-sa_restart-なし"><a class="header" href="#その他の-eintrpoll-経路いずれも-sa_restart-なし">その他の EINTR→poll 経路(いずれも <code>SA_RESTART</code> なし)</a></h3>
 <p><code>Process.waitpid</code>、<code>Kernel#sleep</code>(nanosleep 前に保留シグナルを drain)、<code>IO#write</code>/flush、
-スケジューラの待機(<code>park_until_deadline</code> / fd 待ち)、<code>native_pool</code>(素の EINTR は再試行)。
+スレッドの park(<code>scheduler/native.rs</code> の <code>park</code> / fd 待ち)、<code>native_pool</code>(素の EINTR は再試行)。
 <strong>自分宛の <code>Process.kill</code></strong> は、単一スレッドではシグナルが <code>kill(2)</code> 復帰前に配送されビットが
 既に立っているので、<code>kill</code> 呼び出し内で <code>execute_gc</code> を<strong>インライン</strong>で回して配送する(CRuby 同様)。</p>
 <hr>

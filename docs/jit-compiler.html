@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,33 +177,37 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub/bridge code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> (register allocation), and <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins).</p>
+                        <p>monoruby executes bytecode in the VM until code gets hot, then compiles it to specialized machine code. This page is an overview; the detailed documents are <a href="design/jit.html"><code>doc/jit.md</code></a> (stub code), <a href="design/lir.html"><code>doc/lir.md</code></a> (the low-level IR), <a href="design/inline.html"><code>doc/inline.md</code></a> (inline builtins), <a href="design/jit_invariants.html"><code>doc/jit_invariants.md</code></a> (what compiled code speculates on) and <a href="design/jit_invalidation.html"><code>doc/jit_invalidation.md</code></a> (version guards and salvage).</p>
 <h2 id="when-compilation-triggers"><a class="header" href="#when-compilation-triggers">When compilation triggers</a></h2>
 <ul>
 <li><strong>Method JIT</strong> — after ≥ 20 calls (<code>COUNT_START_COMPILE</code>; 5 in test mode)</li>
 <li><strong>Loop JIT</strong> — after ≥ 100 iterations of a loop (<code>COUNT_LOOP_START_COMPILE</code>; 15 in test mode), compiling the enclosing method from the loop entry</li>
 </ul>
-<p>Each function starts with a small <em>wrapper</em> that decrements a counter and falls through to the VM until the counter expires, then triggers compilation and patches itself.</p>
+<p>Each function starts behind a small <em>wrapper</em> that decrements a counter and enters the VM until the counter expires, then compiles the function and patches the wrapper to jump to the compiled code.</p>
 <h2 id="ir-pipeline"><a class="header" href="#ir-pipeline">IR pipeline</a></h2>
-<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR ──▶ machine code (monoasm)
-                (type feedback from inline caches)        (per-arch encoder)
+<pre><code>bytecode ──abstract interpretation──▶ TraceIR ──▶ AsmIR ──▶ LIR / emit_* ──▶ machine code (monoasm)
+                (type feedback from inline caches)              (per-arch encoder)
 </code></pre>
 <ul>
 <li><strong>TraceIR</strong> — bytecode annotated with type information gathered from the VM tier’s inline caches.</li>
 <li><strong>AsmIR</strong> (<code>AsmInst</code>) — arch-neutral, register-allocated assembly IR produced by an abstract interpreter that tracks, per slot, whether a value lives on the stack, in a floating-point register (unboxed <code>f64</code>), both, or is a compile-time constant (<code>LinkMode</code>).</li>
-<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with offsets and labels resolved; the single seam where bytes are emitted. Each architecture implements one <code>encode_linst</code> (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
+<li><strong>LIR</strong> (<code>LInst</code>) — arch-neutral machine-level ops with logical addressing, encoded by each architecture’s <code>encode_linst</code>. Moves, memory, ALU, branches, guards, integer and float arithmetic and side exits go through it; an <code>AsmInst</code> whose lowering is a single per-arch runtime-call helper calls that <code>emit_*</code> helper directly (see <a href="aarch64-backend.html">aarch64 Backend</a>).</li>
 </ul>
 <h2 id="specialization-and-inline-caches"><a class="header" href="#specialization-and-inline-caches">Specialization and inline caches</a></h2>
-<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a miss falls through to the next guard or to the VM. Method calls inside JIT code are resolved through inline caches and guarded by a <strong>class-version</strong> check, so redefining a method invalidates dependent code. Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Monomorphic methods can additionally be <strong>specialized inline</strong> — the callee’s frame is inlined into the caller.</p>
-<h2 id="deoptimization-and-recompilation"><a class="header" href="#deoptimization-and-recompilation">Deoptimization and recompilation</a></h2>
-<p>JIT code is speculative. Guards — receiver class, class version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. Repeated deopts trigger <strong>recompilation</strong> with the newly observed classes (e.g. polymorphic call sites, <code>method_missing</code> dispatch, newly resolved constants/ivars). Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>.</p>
+<p>Compiled code is specialized <strong>per receiver class</strong>. The method entry is a chain of self-class guard stubs: each guard tests the receiver’s class and jumps to the machine code compiled for that class; a class that misses the whole chain runs in the VM, and gets a compiled body of its own only after the stub has seen it repeatedly (the <em>megamorphic gate</em>). Method calls inside JIT code are resolved from inline caches and guarded by a <strong>class-version</strong> check.</p>
+<p>Small hot builtins (<code>Array#[]</code>, <code>Integer</code> arithmetic, <code>Math.sqrt</code>, <code>Object#is_a?</code>, <code>Struct</code> accessors, <code>Class#new</code>, <code>Fiber.yield</code>, …) are inlined directly by generator functions that can both consult the abstract state (folding results at compile time when types are proven) and emit code; a failed inline attempt rolls back cleanly and falls back to a normal call. Ruby callees can be <strong>specialized</strong> for the call site, and small loop-free callees, <code>Class#new</code>’s <code>initialize</code> and small <code>yield</code> blocks run <strong>frameless</strong>, inline in a window of the caller’s frame.</p>
+<p>Array and Range literals consumed where they are built (<code>[a, b].max</code>, <code>(lo..hi).include?(x)</code>, <code>when 1..5</code>) and <code>*rest</code> / <code>...</code> arguments handed into specialized callees are not allocated at all — see <a href="design/escape_analysis.html">Escape analysis</a>.</p>
+<h2 id="deoptimization-salvage-and-recompilation"><a class="header" href="#deoptimization-salvage-and-recompilation">Deoptimization, salvage and recompilation</a></h2>
+<p>JIT code is speculative. Guards — receiver class, class version, constant version, array type, frozen state, fixnum overflow, basic-operator (BOP) redefinition, frame capture — branch to <strong>side exits</strong> that write register-resident values back to the frame and resume in the VM at the equivalent program point. A side exit also converts the suspended JIT frames of the same compilation unit into interpreter frames (<a href="design/chain_deopt.html">chain deopt</a>).</p>
+<p>The class and constant version counters are global, so any <code>def</code> or constant assignment anywhere moves them. A version-guard failure therefore first re-validates what the compilation unit actually assumed (its resolved call sites, its folded constants); if every assumption still holds, the unit is stamped with the current version and the code stands (<strong>salvage</strong>). Only a genuine change, or a guard that keeps missing for a new reason (a polymorphic site, a newly resolved ivar or constant), triggers <strong>recompilation</strong>. BOP redefinition is not salvaged: it evicts the dependent code (<a href="design/bop_redefinition.html">Basic-op redefinition</a>).</p>
+<p>Deopt logging is available with the <code>deopt</code> Cargo feature, recompile/deopt statistics with <code>profile</code>; <a href="design/deopt_log.html">Reading the deopt log</a> explains the format.</p>
 <h2 id="register-allocation"><a class="header" href="#register-allocation">Register allocation</a></h2>
 <ul>
-<li><strong>Floating point</strong> — virtual FP registers (<code>VirtFPReg</code>) allocated greedily over the physical pool (14 xmm registers on x86-64), with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
-<li><strong>General purpose</strong> — a per-basic-block local GP register allocator keeps boxed values (notably Fixnums) in a small pool of scratch registers within a block, eliding redundant fixnum guards, and flushes the pool at calls and GC safepoints (pool registers are not GC roots).</li>
+<li><strong>Floating point</strong> — virtual FP registers (<code>FPReg</code>) allocated greedily over a pool of 14 physical registers, with automatic <strong>spill-to-stack</strong> when the pool is exhausted; loop entries specialize float-typed slots so hot numeric loops keep values unboxed in registers.</li>
+<li><strong>General purpose</strong> — a per-basic-block local allocator (<code>jitgen/gp_alloc.rs</code>) keeps Fixnum operands and results in a small register set (<code>r8</code>–<code>r11</code> on x86-64) within a block, reusing a register when a slot it already holds is read again and eliding redundant Fixnum guards. Every other operation, and every block boundary, flushes the residents to their frame homes; pool registers are not GC roots, so only Fixnums live there.</li>
 </ul>
-<p>The long-form design discussion — separating type inference from placement, the retirement of the dedicated accumulator register, and measured results — is in <a href="design/regalloc_separation.html"><code>doc/regalloc_separation.md</code></a> and <a href="design/lir.html"><code>doc/lir.md</code></a>.</p>
-<h2 id="argument-forwarding-d1"><a class="header" href="#argument-forwarding-d1">Argument forwarding (D1)</a></h2>
+<p>JIT code keeps no fixed accumulator register; <code>r15</code> is the VM tier’s accumulator only.</p>
+<h2 id="argument-forwarding"><a class="header" href="#argument-forwarding">Argument forwarding</a></h2>
 <p><code>def f(...)</code> forwarding is compiled as an opaque pipe: for simple callees the rest-Array / keyword-Hash allocation is elided entirely and arguments are copied (or lazily deferred) straight from the caller’s frame, with deopt-safe lazy materialization if a side exit or frame capture ever needs the real objects. See <a href="design/arg_forwarding_jit.html"><code>doc/arg_forwarding_jit.md</code></a>.</p>
 <h2 id="observing-the-jit"><a class="header" href="#observing-the-jit">Observing the JIT</a></h2>
 <div class="table-wrapper">
@@ -215,6 +219,7 @@
 <tr><td><code>dump-bc</code> / <code>emit-bc</code></td><td>bytecode</td></tr>
 <tr><td><code>dump-traceir</code></td><td>TraceIR</td></tr>
 <tr><td><code>emit-asm</code></td><td>generated assembly</td></tr>
+<tr><td><code>emit-cfg</code></td><td>control-flow graph per compiled function (DOT)</td></tr>
 <tr><td><code>jit-log</code> / <code>jit-debug</code></td><td>compilation events / detailed debug</td></tr>
 <tr><td><code>deopt</code></td><td>deoptimization log</td></tr>
 <tr><td><code>profile</code></td><td>deopt &amp; recompile statistics</td></tr>
@@ -222,7 +227,7 @@
 </tbody>
 </table>
 </div>
-<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. See <a href="https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning">Build options for performance tuning</a> for example output.</p>
+<p>The JIT is always built in; disable it at runtime with <code>--no-jit</code>. <a href="development.html#worked-example-reading-the-pipeline">Development and Build Options</a> walks through the dumps for one function.</p>
 
                     </main>
 

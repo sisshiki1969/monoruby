@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -499,10 +499,9 @@ forwarding callsite に対しても、</p>
 自体が消える。call を消すこと自体が転送の consume なので、<code>ir.set_deferred_rest()</code>
 を立てて caller 側スキップを維持する（さもないと誰も見ない Array を作る）。</li>
 </ul>
-<p>が効く。（かつてはここに <code>compile/frameless.rs::ivar_store_body</code> による
-ivar ストア展開もあったが、<code>recv.new(args)</code> は現在 bytecodegen が付ける
-<code>initialize</code> twin call site（<code>CallSiteInfo::class_new_init</code>）経由で
-frameless callee として本体をインライン出力するので、認識器は削除された。）
+<p>が効く。<code>recv.new(args)</code> は bytecodegen が付ける <code>initialize</code> twin call
+site（<code>CallSiteInfo::class_new_init</code>）経由で、frameless callee として本体を
+インライン出力する。
 Ruby レベルの <code>Class#new</code> は <code>o.__builtin_initialize__(...)</code>
 （<code>bypass_visibility</code> 付きの forwarding call）という形なので、
 <code>X.new(a, b)</code> が <strong>allocate + ivar ストア 2 本</strong>にまで落ちる。これが実利上

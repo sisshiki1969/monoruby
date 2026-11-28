@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -243,16 +243,26 @@ run time with <code>--no-jit</code>. (The old <code>jit</code> / <code>jit_x86</
 <tr><th>Feature</th><th>Effect</th></tr>
 </thead>
 <tbody>
-<tr><td><code>stress-spill-pool</code></td><td>Shrink <code>PHYS_FPR_POOL</code> to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths</td></tr>
-<tr><td><code>shadow-placement</code></td><td>Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering. The gate for the abstract-interpreter / register-allocation separation</td></tr>
+<tr><td><code>stress-spill-pool</code></td><td>Shrink <code>PHYS_FPR_POOL</code> to 2 so almost every float-resident slot becomes a spilled virtual FP register, stressing the spill paths. CI runs the test suite with it</td></tr>
+<tr><td><code>shadow-placement</code></td><td>Record every physical FP placement in emission order, producing a per-compile fingerprint of the lowering</td></tr>
 <tr><td><code>phys-table</code></td><td>Move the physical FP placement <em>policy</em> out of the resolver into an explicit table-backed function. Byte-identical to the formula it replaces</td></tr>
+<tr><td><code>fixpoint-join</code></td><td>Record a loop’s back edge as the join with the previously recorded one, so recorded back edges only ever climb</td></tr>
 <tr><td><code>mimalloc</code></td><td>Route the global allocator’s delegation to mimalloc instead of glibc, changing exactly one variable for an A/B</td></tr>
 </tbody>
 </table>
 </div>
-<p>The last three are gated on measurement and are off until their A/B clears;
-see <a href="design/regalloc_separation.html">Separating the abstract interpreter from register
-allocation</a>.</p>
+<p>All but <code>stress-spill-pool</code> are experiments, off until an A/B justifies them.</p>
+<h3 id="encodings"><a class="header" href="#encodings">Encodings</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>no-cjk-tables</code></td><td>Answer the CJK encodings from <code>encoding_rs</code> alone, without monoruby’s correction tables. Only for <code>bin/gen-cjk-tables</code>, which diffs the codec against CRuby to generate those tables</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="worked-example-reading-the-pipeline"><a class="header" href="#worked-example-reading-the-pipeline">Worked example: reading the pipeline</a></h2>
 <p>Everyone loves Fibonacci, so all three dumps below are of the same
 <code>benchmark/app_fib.rb</code>:</p>
@@ -387,7 +397,7 @@ The final <code>sub r9,0x1; add r9,r8</code> strips one tag bit before adding. S
 <a href="value-representation.html">Value Representation</a>.</li>
 <li><strong>No accumulator register.</strong> Values live in whatever GP register the
 per-basic-block allocator picked (<code>r8</code> and <code>r9</code> here), with the frame at
-<code>[rbp-…]</code>. The fixed <code>r15</code> accumulator was retired in June 2026.</li>
+<code>[rbp-…]</code>; <code>r15</code> is the VM tier’s accumulator only.</li>
 <li><strong><code>cmp rsp,[rbx+0x18]</code> before each call</strong> is the stack-limit check; <code>rbx</code>
 holds <code>&amp;mut Executor</code>.</li>
 </ul>
@@ -454,7 +464,7 @@ touching <code>Dir.home</code> / <code>Dir.pwd</code>, absolute checkout paths, 
 monoruby is re-verified against a live CRuby before failing — grep test output
 for <code>re-verifying against a live ruby</code> to find tests that should move to the
 <code>_live</code> helpers.</p>
-<p>Running the suite needs a host <code>ruby</code> matching the vendored pin (<strong>4.0.2</strong>,
+<p>Running the suite needs a host <code>ruby</code> matching the vendored pin (<strong>4.0.9</strong>,
 from <code>monoruby/vendor/ruby-stdlib/.ruby-version</code>). Since Ruby 3.4 <code>bigdecimal</code>
 is no longer a default gem, so install it explicitly or every
 <code>tests/bigdecimal.rs</code> test fails with <code>LoadError</code>:</p>

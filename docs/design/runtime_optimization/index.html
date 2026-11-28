@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-afb61271.js"></script>
+        <script src="../../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -246,9 +246,10 @@ inline / identity / 索引の表現を <code>hashindex_pure</code> に渡す、<
 <p><code>builtins/*.rb</code> の <code>Array#each</code> / <code>Hash#each</code> / <code>Array#initialize</code> などが
 Ruby なのは、JIT がインライン展開するのが <code>FuncKind::ISeq</code> の呼び出し先だけ
 だからで、ホットなサイトではメソッド本体とブロックが <code>yield</code> の位置に展開
-される。代償として、CRuby の C 実装なら無傷な <code>Integer#&lt;</code> や <code>Array#size</code> の
-再定義が組み込みの内部に及ぶ（意図したトレードオフ、
-<a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a>）。</p>
+される。代償として、CRuby の C 実装なら無傷な <code>Array#size</code> のような
+メソッドの再定義が組み込みの内部に及ぶ（意図したトレードオフ）。演算子の
+再定義は内部ビルトインのフレームに届かないようにしてある
+（<a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a> §6）。</p>
 <h3 id="計測の規律"><a class="header" href="#計測の規律">計測の規律</a></h3>
 <p>各文書の数値は、同じ計測機で<strong>交互ラウンドの中央値の最小値</strong>を取り、
 マイクロベンチは「同じループから対象操作だけ抜いたもの」を baseline として
@@ -259,7 +260,7 @@ Ruby なのは、JIT がインライン展開するのが <code>FuncKind::ISeq</
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../../design/super_resolution.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../../design/error_highlight.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -273,7 +274,7 @@ Ruby なのは、JIT がインライン展開するのが <code>FuncKind::ISeq</
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../../design/super_resolution.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../../design/error_highlight.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

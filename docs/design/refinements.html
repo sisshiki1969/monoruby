@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,7 +183,7 @@
 <code>#import_methods</code>, and <code>Module#refinements</code> / <code>Module.used_refinements</code> /
 <code>Module.used_modules</code> report the truth. The interpreter and the JIT both
 resolve through an activated refinement.</p>
-<p>This document is the design record: §§1–5 are the problem — what
+<p>This document is the design record: §§1–3 are the problem — what
 refinements do to method resolution and where each of monoruby’s
 resolution paths would break under the naive approach — and §§6–7 are the
 implementation that avoids it. Read it together with <code>doc/cref.md</code> (the
@@ -430,52 +430,6 @@ relative to a cref, and <code>super</code> inside a refined method means “the 
 this refinement shadows”. Neither is expressible in a position-in-the-real-
 chain model; <code>super</code> from a refinement needs its own resolution rule.</p>
 <hr>
-<h2 id="4-why-the-cheap-version-would-have-been-worse-than-nothing"><a class="header" href="#4-why-the-cheap-version-would-have-been-worse-than-nothing">4. Why the cheap version would have been worse than nothing</a></h2>
-<p>A stub <code>refine</code> that creates an anonymous module, evaluates the block in
-it and returns it — no activation — was prototyped and measured. It
-unblocks 55 of the 59 <code>core/binding</code> examples (see §5) because the blocker
-there is a fixture that merely <em>calls</em> <code>refine</code> at load time.</p>
-<p>It was not kept, and the real thing was implemented instead. Without
-activation, <code>refine</code> turns every refinement-using
-program from a clear <code>NoMethodError</code> at the <code>refine</code> call into a silently
-wrong result at every refined call site. The same trade-off applies to
-<code>using</code>, which is why the existing <code>Module#using</code> is documented as
-“activates the (necessarily empty) set of refinements” — it is only honest
-because <code>refine</code> cannot produce a non-empty one.</p>
-<hr>
-<h2 id="5-what-it-is-worth-in-rubyspec"><a class="header" href="#5-what-it-is-worth-in-rubyspec">5. What it is worth, in ruby/spec</a></h2>
-<p>Measured against CRuby 4.0.2, current tree:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>category</th><th>monoruby</th><th>note</th></tr>
-</thead>
-<tbody>
-<tr><td><code>core/refinement</code></td><td>25 examples, <strong>25 errors</strong></td><td>nothing implemented</td></tr>
-<tr><td><code>core/module</code></td><td>11 F / 66 E, of which <strong>62</strong> mention refine</td><td><code>refine_spec</code>, <code>using_spec</code>, <code>module_eval</code> refinement scope, …</td></tr>
-<tr><td><code>core/main</code></td><td>3 F / 6 E, of which <strong>5</strong></td><td><code>main.using</code></td></tr>
-<tr><td><code>core/kernel</code></td><td>4 F / 11 E, of which <strong>2</strong></td><td><code>Kernel#eval</code> refinement scope</td></tr>
-<tr><td><code>language/pattern_matching</code></td><td><strong>2</strong> E</td><td><code>#deconstruct</code> via refinement</td></tr>
-<tr><td><code>core/binding</code></td><td>0 F / <strong>7</strong> E</td><td>see below</td></tr>
-</tbody>
-</table>
-</div>
-<p><code>core/binding</code> is a special case worth separating. Its 7 errors are not 7
-failing examples — they are 7 spec <em>files</em> that fail to load, because
-<code>core/binding/fixtures/classes.rb:54</code> calls <code>refine</code>. That takes 59
-examples out of the run (monoruby executes 39 of CRuby’s 98). <strong>Exactly one
-of those 59 needs refinements to work</strong> (<code>Binding#eval reflects refinements activated in the binding scope</code>); the other 58 only need <code>refine</code> to
-exist.</p>
-<p>So the ledger is roughly:</p>
-<ul>
-<li>~96 examples need real refinements,</li>
-<li>~58 examples are collateral damage from a fixture that only needs the
-method to be defined.</li>
-</ul>
-<p>That asymmetry is the argument for eventually implementing refinements
-properly rather than stubbing them: the stub buys the 58 at the cost of
-making the 96 fail silently instead of loudly.</p>
-<hr>
 <h2 id="6-an-implementation-strategy-that-keeps-the-performance"><a class="header" href="#6-an-implementation-strategy-that-keeps-the-performance">6. An implementation strategy that keeps the performance</a></h2>
 <p>The naive framing of §3 — “every cache key has to grow a cref” — is what
 makes refinements look prohibitive. It is avoidable. The design below rests
@@ -523,7 +477,8 @@ per scope during startup, never in a loop.</p>
 (<code>no_to_str</code>, <code>neq_basic_at</code>, …) <strong>keep their existing key</strong>, and simply
 refuse to serve a name in <code>refined_names</code>;</li>
 <li>those names — and only those — take
-<code>search_method_with_refinements(recv_class, name, set_id)</code>.</li>
+the refined search (<code>Store::search_method_refined</code> and the
+<code>find_method_for_*_refined</code> entries in <code>globals/store/class.rs</code>).</li>
 </ul>
 <p>A program that refines <code>String#blank?</code> pays nothing on <code>Array#each</code>,
 <code>Integer#+</code>, or any of the other tens of thousands of call sites. The tax
@@ -531,13 +486,12 @@ is proportional to how much is refined, which is the right shape and is
 what keeps a refinement-using program fast, not just a refinement-free one.</p>
 <h3 id="63-where-the-mutable-cell-lives"><a class="header" href="#63-where-the-mutable-cell-lives">6.3 Where the mutable cell lives</a></h3>
 <p>Only toplevel / class-module bodies / eval-at-toplevel own one (§7.1), and
-now it holds a <code>u32</code>. §7.2 option <strong>(B)</strong> — a side table on the <code>Executor</code>
-keyed by LEP, alongside the existing <code>deferred_unwind</code> — stays the
-recommendation: no frame-layout change, correct per execution, and
-allocated only once a refinement exists.</p>
-<p>A block finds its own set by the same outer-chain walk to the LEP that
-<code>$~</code> already does. A method finds its own on its <code>FuncInfo</code>, written by
-<code>def</code>. (<code>def</code> re-executing under a <em>different</em> set writes a different id;
+it holds a <code>u32</code>. It lives on the body’s <code>ISeqInfo::refinements</code> (§7.2
+option <strong>C</strong>): no frame-layout change, and <code>None</code> for every body that
+neither defines a method nor runs <code>using</code>.</p>
+<p>A block without a cell of its own resolves through its lexical parent’s,
+so it sees a <code>using</code> that runs in that parent after the block was
+created. A method’s cell is the snapshot <code>def</code> took. (<code>def</code> re-executing under a <em>different</em> set writes a different id;
 since <code>using</code> already bumped the version, that is self-correcting rather
 than stale — unlike <code>lexical_context</code>, which has no such guard.)</p>
 <h3 id="64-the-zero-cost-gate"><a class="header" href="#64-the-zero-cost-gate">6.4 The zero-cost gate</a></h3>
@@ -652,32 +606,6 @@ chain (§3.7).</li>
 use, then that frame’s set id. Only reached with the gate on. (Called by
 the Ruby-written core they see no refinement — §6.10.)</li>
 </ul>
-<h3 id="69-order-of-work--as-landed"><a class="header" href="#69-order-of-work--as-landed">6.9 Order of work — as landed</a></h3>
-<p>Each step shipped on its own, with the spec ledger and (from step 3) the
-<code>emit-asm</code> baseline checked at every one.</p>
-<ol>
-<li><code>refine</code> / <code>using</code> build and intern sets; <code>Module#refinements</code> and
-<code>used_refinements</code> stop being mocks. Lookup still ignores them, so
-nothing can regress yet.</li>
-<li><code>search_method_with_refinements</code> + <code>refined_names</code> + the gate. <code>using</code>
-bumps <code>class_version</code>. Correct end-to-end through the VM; the JIT still
-refuses to compile any iseq with a non-empty set (deopt to VM), which is
-safe because the gate keeps that path cold.</li>
-<li><code>RefinementSetId</code> into <code>JitContext</code> and <code>inline_cache_map</code>; lift the
-step-2 refusal. This is the step that must not move the emit-asm
-baseline for the gate-off case.</li>
-<li>Inline-generator gate, <code>super</code>, reflection.</li>
-</ol>
-<p>Steps 1–2 were shippable on their own: refinements worked, refinement-using
-code was slower than it needed to be, and nothing else in the system
-changed speed. Step 3 is where the §3.4 hazard is actually closed, which
-is why the JIT kept refusing until it landed — a refusal is a performance
-choice, a wrong <code>FuncId</code> is not.</p>
-<p>Over core/{refinement,module,main,binding,kernel,proc,class,basicobject}
-and language, the four steps took 137 failing examples to 30. What is left
-is §6.7’s basic ops, the per-iseq cell’s re-execution case, and one
-<code>import_methods</code> example that is not a defect (monoruby implements Zlib in
-Ruby, so importing from it legitimately succeeds).</p>
 <h3 id="610-whose-lookup-is-it--call-site-ruby-level-funcall-or-funcall"><a class="header" href="#610-whose-lookup-is-it--call-site-ruby-level-funcall-or-funcall">6.10 Whose lookup is it — call site, Ruby-level funcall, or funcall</a></h3>
 <p>A refinement reaches the call sites <em>written</em> in the scope that activated
 it. Everything else that looks a method up is a builtin doing so, and
@@ -841,15 +769,17 @@ scope’s cell, blocks read their mother’s, <code>def</code> snapshots.</p>
 per iseq, so re-entrant execution of a scope that runs <code>using</code> (a recursive
 or concurrently-loaded <code>Class.new { using … }</code>, the same file required on
 two threads) shares it. Rare, given §7.1’s table — but silently wrong when
-it happens, which is the failure mode §4 argues against.</p>
-<h3 id="73-recommendation"><a class="header" href="#73-recommendation">7.3 Recommendation</a></h3>
-<p>(B). It leaves the frame layout alone, is correct per execution rather than
-per iseq, and costs nothing while no refinement has been activated. (A) is
-the more faithful model and is known-feasible, but it taxes every call in
-every program for a feature most never use; it is the right answer only if
-per-frame cref turns out to be wanted for other reasons too — <code>doc/cref.md</code>
-lists several places where monoruby’s single VM-wide <code>lexical_class</code> stack
-already diverges from CRuby, so that is not far-fetched.</p>
+it happens.</p>
+<h3 id="73-what-was-chosen"><a class="header" href="#73-what-was-chosen">7.3 What was chosen</a></h3>
+<p>(C), <code>ISeqInfo::refinements</code>. It leaves the frame layout alone and costs
+nothing while no refinement has been activated. Its one gap is the
+staleness above: a block that runs <code>using</code> and is executed more than once
+keeps the previous execution’s set as its base, which shows only when each
+execution activates a <em>different</em> refinement (<code>Module.new { using make_refinement }</code> in a loop). A class body does not have the problem:
+<code>enter_classdef</code> re-seeds its cell on every entry. (A) remains the faithful
+model if a per-frame cref is ever wanted for other reasons — <code>doc/cref.md</code>
+lists places where monoruby’s VM-wide <code>lexical_class</code> stack diverges from
+CRuby.</p>
 
                     </main>
 

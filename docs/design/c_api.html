@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,8 +180,7 @@
                         <h1 id="cruby-互換-c-apimonoruby_capi"><a class="header" href="#cruby-互換-c-apimonoruby_capi">CRuby 互換 C API（<code>monoruby_capi/</code>）</a></h1>
 <p>CRuby 向けに書かれた C 拡張を、<strong>ソースのまま</strong> monoruby 用にビルドして
 <code>require</code> できるようにする層。<code>doc/native_extension_loading.md</code> §4 の段階 5
-（「必要なら A を <code>mr_*</code> の上に積む」）にあたる。設計検討の経緯は
-<code>doc/c_extention.md</code>（2026-08）。</p>
+（「必要なら A を <code>mr_*</code> の上に積む」）にあたる。</p>
 <hr>
 <h2 id="1-使い方"><a class="header" href="#1-使い方">1. 使い方</a></h2>
 <pre><code class="language-sh">root=~/.monoruby/v&lt;version&gt;      # globals::install_root()
@@ -289,8 +288,7 @@ CRuby の隠し ivar）は <code>/</code> を前に付けたコア側の隠し i
 を気にせず <code>rb_funcall</code> を挟める。monoruby の GC は precise なので、層が
 C に渡す<strong>ヒープ上の <code>VALUE</code> はすべて temp stack に積む</strong>（<code>root()</code>）。
 temp stack はメソッド呼び出し（と <code>Init_</code>）が戻ったときにインタプリタが
-切り詰める。TruffleRuby の <code>ExtensionCallStack</code> と同じ考え方
-（<code>doc/c_extention.md</code> §3.4）。</p>
+切り詰める。TruffleRuby の <code>ExtensionCallStack</code> と同じ考え方である。</p>
 <p>新しく作った値だけでなく、<strong>ほかのオブジェクトから読み出した値も積む</strong>:
 <code>rb_ary_entry</code>（<code>RARRAY_AREF</code>）、<code>RARRAY_CONST_PTR</code> のコピーの要素、
 <code>rb_gv_get</code>、<code>rb_backref_get</code>、<code>rb_lastline_get</code>。読んだあと元の場所から
@@ -1650,7 +1648,7 @@ super を区別しない。<code>rb_errinfo</code> は Ruby の <code>$!</code> 
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/encoding_char_iteration_design.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/runtime_optimization/regexp.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -1664,7 +1662,7 @@ super を区別しない。<code>rb_errinfo</code> は Ruby の <code>$!</code> 
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/encoding_char_iteration_design.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/runtime_optimization/regexp.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Per-encoding character iteration design - monoruby</title>
+        <title>error_highlight, did_you_mean and syntax_suggest - monoruby</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,193 +177,214 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="design-per-encoding-character-iteration-layer"><a class="header" href="#design-per-encoding-character-iteration-layer">Design: Per-Encoding Character Iteration Layer</a></h1>
-<p>Status: <strong>proposed</strong> (foundation design; precedes implementation)</p>
-<h2 id="1-goal"><a class="header" href="#1-goal">1. Goal</a></h2>
-<p>Remove the implicit “every String is UTF-8” assumption from monoruby’s
-String operations by introducing a per-encoding character-boundary
-layer, so that character-indexed operations (<code>length</code>, <code>[]</code>, <code>chars</code>,
-<code>each_char</code>, <code>reverse</code>, <code>slice</code>, <code>scrub</code>, <code>=~</code>, …) are correct for
-non-UTF-8 encodings (EUC-JP, Shift_JIS, ISO-2022-JP, ISO-8859-*,
-UTF-16/32) the way CRuby’s <code>rb_enc_*</code> / <code>mbclen</code> machinery is.</p>
-<p>Out of scope (separate efforts, tracked elsewhere): <code>rb_enc_compatible</code>
-unification (analysis item ③), <code>Encoding::Converter</code> (⑤), Onigmo
-multi-encoding regex scanning (⑦), source-encoding propagation (⑥).
-This document is strictly the <strong>character-boundary foundation</strong> (①).</p>
-<h2 id="2-current-state-code-grounded"><a class="header" href="#2-current-state-code-grounded">2. Current state (code-grounded)</a></h2>
-<p><code>RStringInner</code> (<code>monoruby/src/value/rvalue/string.rs</code>) already stores
-<code>content: Vec&lt;u8&gt;</code> + <code>ty: Encoding</code> + <code>cr: Cell&lt;CodeRange&gt;</code>, and a
-partial foundation exists:</p>
-<ul>
-<li><code>char_length()</code> — per-encoding length, but <strong>EUC-JP/Shift_JIS fall
-back to byte count</strong> (<code>Encoding::EucJp | Encoding::Sjis(_) =&gt; self.content.len()</code>), and ISO-2022-JP round-trips through
-<code>encoding_rs</code> only for the count.</li>
-<li><code>iter_char_bytes() -&gt; CharByteIter</code> — encoding-aware byte-slice
-iterator, but its <code>next()</code> width table treats <strong>EUC-JP, Shift_JIS,
-ISO-2022-JP as 1 byte/char</strong> (incorrect: those are multibyte).</li>
-<li><code>conv_char_index</code> / <code>byte_to_char_index</code> / <code>from_substring</code> — exist
-but assume the same (incomplete) width logic.</li>
-<li><code>to_str() -&gt; Cow&lt;str&gt;</code> — for non-UTF-8-compatible encodings returns a
-<strong><code>\xHH</code>-escaped rendering</strong>, not the real characters. Many builtins
-call <code>to_str()</code> and therefore misbehave on non-UTF-8 input.</li>
-</ul>
-<p>So the structural seam (<code>CharByteIter</code>) is in place; the missing piece
-is <strong>correct per-encoding character-width decoding</strong> plus a disciplined
-migration of UTF-8-assuming call sites onto that seam.</p>
-<h2 id="3-design"><a class="header" href="#3-design">3. Design</a></h2>
-<h3 id="31-encodingcodec--the-character-boundary-trait"><a class="header" href="#31-encodingcodec--the-character-boundary-trait">3.1 <code>EncodingCodec</code> — the character-boundary trait</a></h3>
-<p>Introduce a single decision function (not a trait object; a <code>match</code> on
-<code>Encoding</code> keeps it allocation-free and inlinable, matching the
-existing <code>CharByteIter</code> style):</p>
-<pre><code>/// Length in bytes of the character starting at `bytes[0]` under
-/// `enc`, given the *preceding* decoder state (for stateful
-/// encodings). Returns `CharLen`:
-///   - `Char(n)`   : a well-formed character of `n` bytes
-///   - `Invalid(n)`: `n` bytes that do not form a valid character
-///                   (CRuby counts these as 1 "character" each for
-///                    `length`, and `scrub` replaces them)
-enum CharLen { Char(usize), Invalid(usize) }
+                        <h1 id="error_highlight"><a class="header" href="#error_highlight">error_highlight</a></h1>
+<p>The source line and the caret under the report of an uncaught
+<code>NameError</code>, <code>TypeError</code> or <code>ArgumentError</code>:</p>
+<pre><code>t.rb:2:in '&lt;main&gt;': undefined method 'foo' for nil (NoMethodError)
 
-fn char_len(enc: Encoding, st: &amp;mut DecodeState, bytes: &amp;[u8]) -&gt; CharLen
+x.foo(1)
+ ^^^^
 </code></pre>
-<p><code>DecodeState</code> is <code>()</code> for all stateless encodings and a small enum only
-for <code>Iso2022Jp</code> (<code>Ascii | Jisx0208 | Jisx0201</code>), updated when an <code>ESC</code>
-sequence is consumed. Stateless encodings ignore it; this keeps the hot
-path (UTF-8/ASCII) branch-predictable.</p>
-<p>Per-encoding rules:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Encoding</th><th>rule</th></tr>
-</thead>
-<tbody>
-<tr><td><code>UsAscii</code></td><td><code>b &lt; 0x80 → Char(1)</code>; else <code>Invalid(1)</code></td></tr>
-<tr><td><code>Ascii8</code></td><td>always <code>Char(1)</code> (binary: every byte is a “character”)</td></tr>
-<tr><td><code>Iso8859(_)</code></td><td>always <code>Char(1)</code></td></tr>
-<tr><td><code>Utf8</code></td><td>existing UTF-8 lead-byte logic (reuse current code)</td></tr>
-<tr><td><code>Utf16Le/Be</code></td><td>surrogate-pair aware: <code>Char(2)</code> or <code>Char(4)</code>; trailing odd byte <code>Invalid(1)</code></td></tr>
-<tr><td><code>Utf32Le/Be</code></td><td><code>Char(4)</code>; trailing <code>&lt;4</code> bytes <code>Invalid(rem)</code></td></tr>
-<tr><td><code>EucJp</code></td><td><code>0x00–0x8D,0x90–0x9F → Char(1)</code>; <code>0x8E → Char(2)</code> (JIS X 0201 kana); <code>0x8F → Char(3)</code> (JIS X 0212); <code>0xA1–0xFE</code> lead → <code>Char(2)</code>; malformed → <code>Invalid(1)</code></td></tr>
-<tr><td><code>Sjis(_)</code></td><td><code>0x00–0x80,0xA0,0xFD–0xFF → Char(1)</code>; <code>0xA1–0xDF → Char(1)</code> (half-width kana); <code>0x81–0x9F,0xE0–0xFC</code> lead + valid trail <code>0x40–0x7E,0x80–0xFC → Char(2)</code>; else <code>Invalid(1)</code></td></tr>
-<tr><td><code>Iso2022Jp</code></td><td><code>ESC</code>-sequence → consume the 3-byte escape as zero characters (state change); in ASCII/JISX0201 state <code>Char(1)</code>; in JISX0208 state <code>Char(2)</code>; malformed → <code>Invalid(1)</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>These tables are the canonical Ruby <code>onigenc_mbc_enc_len</code> equivalents;
-they are pure functions over bytes (+ ISO-2022-JP state) and fully unit
--testable against CRuby (<code>"...".force_encoding(e).each_char.to_a</code>).</p>
-<h3 id="32-wiring-it-in"><a class="header" href="#32-wiring-it-in">3.2 Wiring it in</a></h3>
+<p>This is the <code>error_highlight</code> default gem, vendored unmodified
+(<code>vendor/ruby-stdlib/error_highlight/</code>, 0.7.2 with Ruby 4.0.9). It
+prepends <code>ErrorHighlight::CoreExt#detailed_message</code> to the three
+classes; that method asks <code>ErrorHighlight.spot(exception)</code> for the
+extent to underline and appends the snippet. monoruby supplies the two
+things the gem takes from the VM: when it is loaded, and which node a
+backtrace location was executing.</p>
+<h2 id="when-it-is-loaded"><a class="header" href="#when-it-is-loaded">When it is loaded</a></h2>
+<p>CRuby’s <code>gem_prelude.rb</code> requires it at every start. Here that would be
+about 6% of startup (14M of 226M instructions) for something only a
+failing program shows, so <code>builtins/gem_prelude.rb</code> registers
+<code>ErrorHighlight</code> as an <strong>autoload</strong>, as it does <code>Gem</code>:</p>
+<ul>
+<li><code>defined?(ErrorHighlight)</code> and <code>Object.constants</code> report the constant;
+any reference to it loads the gem.</li>
+<li><code>Exception#detailed_message</code> (<code>builtins/exception.rb</code>) loads it the
+first time it is asked about an exception of one of the three classes
+while the autoload is still pending. Loading prepends <code>CoreExt</code> to the
+receiver’s class too late for the call already under way, so that one
+call invokes <code>CoreExt#detailed_message</code> directly
+(<code>__error_highlight_message</code>); its <code>super</code> returns to
+<code>Exception#detailed_message</code>, which now has nothing left to load. A
+subclass’s own <code>detailed_message</code> that calls <code>super</code> therefore sees
+the same string on the first call as on every later one.</li>
+<li><code>message</code>, <code>full_message</code> of other classes, and a rescued error nobody
+asks about load nothing.</li>
+</ul>
+<p>The one visible difference from CRuby: until the load,
+<code>NameError.ancestors</code> (and the other two) lack <code>ErrorHighlight::CoreExt</code>.</p>
+<p><code>--disable-error_highlight</code> and <code>--disable-gems</code> leave the constant
+undefined, as in CRuby (<code>Globals::no_error_highlight</code>).</p>
+<p>A module prepended to one of the three classes has to end up <em>above</em>
+<code>CoreExt</code>, as it does on CRuby where error_highlight was there first:
+did_you_mean’s <code>Correctable</code> on NameError, for a report to read message,
+snippet, suggestions, or a program’s own decoration. So <code>Module#prepend</code>
+on NameError, TypeError or ArgumentError runs the pending autoload before
+it prepends anything (<code>Exception.__load_error_highlight</code>, the same entry
+the first message uses).</p>
+<h2 id="did_you_mean"><a class="header" href="#did_you_mean">did_you_mean</a></h2>
+<p>did_you_mean is the other library CRuby’s <code>gem_prelude</code> requires at
+boot, and it is handled the same way: the vendored copy is CRuby’s,
+<code>builtins/did_you_mean_prelude.rb</code> registers <code>DidYouMean</code> as an
+autoload, and <code>Exception#detailed_message</code> runs it for the first
+NameError, KeyError, LoadError or NoMatchingPatternKeyError it is asked
+about (<code>Exception.__load_did_you_mean</code>). <code>--disable-did_you_mean</code> and
+<code>--disable-gems</code> leave the constant undefined
+(<code>Globals::no_did_you_mean</code>).</p>
+<p>Two things are particular to it:</p>
+<ul>
+<li>The gem adds public methods (<code>corrections</code>, <code>spell_checker</code>,
+<code>original_message</code>) that a program may call before any message was
+asked for. The prelude defines stand-ins for them on the four classes,
+which load the library and call again;
+<code>stdlib/monoruby_hooks/did_you_mean.rb</code>, run by the load hook right
+after the gem’s <code>core_ext/name_error.rb</code>, removes them, so that once
+the library is in, the methods are <code>DidYouMean::Correctable</code>’s alone.
+Until then <code>NameError.instance_methods(false)</code> lists the stand-ins.</li>
+<li>CRuby requires error_highlight first and did_you_mean second, so on a
+NameError <code>DidYouMean::Correctable</code> sits on top of
+<code>ErrorHighlight::CoreExt</code>. <code>Module#prepend</code> keeps that order whichever
+of the two is asked for first: did_you_mean’s own prepend loads a
+pending error_highlight underneath, and error_highlight’s own prepend
+leaves a pending did_you_mean pending.</li>
+</ul>
+<p>The checker for a misspelled local variable reads
+<code>NameError#local_variables</code>: the locals of the Ruby frame the error was
+created in (<code>NameError.new</code>), or, for one the interpreter raised, of the
+frame CRuby’s <code>name_err_init_attr</code> picks — the failing frame for a
+missing method or variable, its caller for a constant or class variable
+that is not there.</p>
+<p><code>monoruby/tests/syntax_report_did_you_mean_source_names.rs</code> compares the
+corrections, the reports and <code>local_variables</code> with the host CRuby.</p>
+<h2 id="syntax_suggest"><a class="header" href="#syntax_suggest">syntax_suggest</a></h2>
+<p>The last thing CRuby’s <code>gem_prelude</code> requires is
+<code>syntax_suggest/core_ext</code>. It defines <code>SyntaxSuggest</code> and prepends an
+anonymous module to SyntaxError whose <code>detailed_message</code> puts the
+library’s own diagnosis in front of the message of a SyntaxError whose
+<code>#path</code> is a file that can be read:</p>
+<pre><code>c.rb: --&gt; c.rb
+
+Unmatched keyword, missing `end' ?
+
+&gt; 1  def foo
+&gt; 2    if x
+&gt; 4  end
+
+c.rb:4: syntax errors found (SyntaxError)
+&gt; 1 | def foo
+    | ^~~ expected an `end` to close the `def` statement
+...
+</code></pre>
+<p>The library is vendored unmodified (<code>vendor/ruby-stdlib/syntax_suggest/</code>,
+2.0.3) and needs nothing of its own here: it lexes with
+<code>Prism.lex_compat</code> and tests candidate blocks with <code>Prism.parse</code>, both of
+which the prism stand-in answers, and its <code>Ripper::EXPR_*</code> constants come
+from <code>stdlib/ripper.rb</code> (prism’s Ripper translation).</p>
+<p><code>core_ext.rb</code> is small, and already defers the library proper
+(<code>syntax_suggest/api</code>, which requires prism, ripper, optparse, …) to
+the first message. Reading it at boot would still cost 1.7M
+instructions, 0.7% of monoruby’s startup (the autoload and the code
+below cost 1.0M of their own), so
+<code>builtins/gem_prelude.rb</code> registers <code>SyntaxSuggest</code> as an autoload of
+<code>syntax_suggest/core_ext</code>, and <code>Exception#detailed_message</code> runs it for
+the first SyntaxError it is asked about (<code>Exception.__load_syntax_suggest</code>).
+The module the load prepends comes too late for the call under way, so
+that once its method is called directly, as with the two libraries
+above. <code>Module#prepend</code> on SyntaxError runs a pending load first, which
+keeps the library’s module underneath a program’s own.
+<code>--disable-syntax_suggest</code> and <code>--disable-gems</code> leave the constant
+undefined (<code>Globals::no_syntax_suggest</code>).</p>
+<p>What differs from CRuby before the first SyntaxError message:
+<code>SyntaxError.ancestors</code> lacks the anonymous module, and a
+<code>detailed_message</code> a program defines on SyntaxError itself (rather than
+in a subclass or a prepended module) is not wrapped by the library.</p>
+<p><code>monoruby/tests/syntax_suggest.rs</code> compares the reports and the messages
+with the host CRuby.</p>
+<h2 id="which-node-a-frame-was-executing"><a class="header" href="#which-node-a-frame-was-executing">Which node a frame was executing</a></h2>
+<p>The gem calls, in this order:</p>
 <ol>
-<li><strong><code>CharByteIter::next</code></strong> becomes the single consumer of <code>char_len</code>
-(carrying <code>DecodeState</code>). Every other character operation already
-funnels through <code>iter_char_bytes()</code> or should be migrated to.</li>
-<li><strong><code>char_length()</code></strong>: <code>iter_char_bytes().count()</code> for the
-non-fixed-width encodings (drop the EUC-JP/SJIS byte-count
-fallback). Keep O(1) fast paths for <code>SevenBit</code> and fixed-width.</li>
-<li><strong><code>conv_char_index</code> / <code>byte_to_char_index</code> / <code>from_substring</code> /
-<code>reverse</code> / <code>scrub</code></strong>: reimplement on top of <code>iter_char_bytes()</code>
-(offsets are the iterator’s running <code>pos</code>), so they are correct for
-every encoding by construction.</li>
-<li><strong><code>to_str()</code> policy</strong>: this is the riskiest seam (§5). Introduce
-<code>chars_lossy()</code> / explicit byte APIs and migrate builtins that do
-character work off <code>to_str()</code> for non-UTF-8 strings, rather than
-silently <code>\xHH</code>-escaping.</li>
+<li><code>RubyVM::AbstractSyntaxTree.of(location, keep_script_lines: true)</code>,
+which on a prism-compiled CRuby raises a RuntimeError whose message
+names prism;</li>
+<li><code>RubyVM::AbstractSyntaxTree.node_id_for_backtrace_location(location)</code>;</li>
+<li><code>Prism.parse_file(location.absolute_path)</code>, in whose tree it looks
+for the node with that id.</li>
 </ol>
-<h3 id="33-invariants"><a class="header" href="#33-invariants">3.3 Invariants</a></h3>
+<p>monoruby has no <code>RubyVM</code>, and does not grow one for this: libraries take
+<code>defined?(RubyVM)</code> to mean CRuby’s VM is there to be asked for
+instruction sequences and statistics. <code>monoruby_hooks/error_highlight.rb</code>
+(loaded right after <code>error_highlight/base.rb</code>, whichever copy of the gem
+that was) defines <code>ErrorHighlight::RubyVM::AbstractSyntaxTree</code> instead,
+as a <strong>private constant</strong>. Every reference in the gem is inside
+<code>module ErrorHighlight</code>, so lexical lookup finds it there, and nothing
+outside can.</p>
+<p>CRuby’s instructions carry the id of the node they were compiled from.
+monoruby’s carry that node’s <em>extent</em> in the source (<code>Loc</code>, a first and
+a last byte, in <code>ISeqInfo::sourcemap</code>), which is what backtrace line
+numbers come from. So:</p>
 <ul>
-<li><code>iter_char_bytes()</code> yields slices whose concatenation == <code>content</code>
-(no byte is dropped or duplicated) for <strong>every</strong> encoding/byte input,
-including broken input. This is the property regression tests assert.</li>
-<li><code>char_length() == iter_char_bytes().count()</code> for all inputs.</li>
-<li>ASCII-only content under any ASCII-compatible encoding stays the
-existing O(1) <code>SevenBit</code> path (no perf regression for the common
-case — the optcarrot/benchmark strings are ASCII UTF-8).</li>
+<li>A <code>Thread::Backtrace::Location</code> keeps the extent of the node its frame
+was executing, packed in one Integer (<code>kernel::node_extent_value</code>),
+and the absolute path of its source. <code>Kernel.__caller_frames</code> hands
+them over with each frame; an exception’s locations get them from
+<code>Exception#__raise_backtrace_sites</code>. (That also makes an exception
+location’s <code>absolute_path</code> the path the file was loaded from — stable
+across <code>chdir</code>, nil for eval’d code — as <code>caller_locations</code> already
+had it.)</li>
+<li><code>Location#__node_id</code> → <code>Kernel.__location_node_id(path, extent)</code> reads
+the file, parses it with libprism the way <code>Prism.parse_file</code> does (no
+options, so the ids are the ones the gem’s own parse will produce) and
+walks the tree for the node covering exactly that extent
+(<code>builtins::prism::node_id_at</code>). -1 when there is none.</li>
 </ul>
-<h2 id="4-migration-plan-incremental-zero-regression-per-step"><a class="header" href="#4-migration-plan-incremental-zero-regression-per-step">4. Migration plan (incremental, zero-regression per step)</a></h2>
-<p>Each step is an independently shippable, spec-diffed PR (same
-methodology used for the #525–#535 series):</p>
+<p>Two details of the walk:</p>
 <ul>
-<li><strong>P0 — codec tables + tests.</strong> Add <code>char_len</code>/<code>DecodeState</code>, rewrite
-<code>CharByteIter</code> to use them. No public behavior change for
-UTF-8/ASCII/fixed-width (proven by <code>cargo test</code> + <code>core/string</code>
-diff). Adds correctness only for EUC-JP/SJIS/ISO-2022-JP iteration.</li>
-<li><strong>P1 — length/index.</strong> Route <code>char_length</code>, <code>conv_char_index</code>,
-<code>byte_to_char_index</code> through the iterator; delete the byte-count
-fallbacks. Target specs: <code>String#length</code>, <code>#[]</code>, <code>#slice</code> for
-non-UTF-8.</li>
-<li><strong>P2 — chars/each_char/reverse/scrub.</strong> Migrate these builtins off
-<code>to_str()</code>+<code>chars()</code> onto <code>iter_char_bytes()</code>.</li>
-<li><strong>P3 — <code>to_str()</code> callers.</strong> Audit the ~40 <code>coerce_to_str</code>/<code>to_str()</code>
-call sites in <code>builtins/string.rs</code>; split into “needs bytes”
-(unchanged) vs “needs characters” (move to the iterator). This is the
-largest step and is itself sub-divided per method family.</li>
+<li>Several nodes can cover one extent (<code>foo</code> on a line of its own is a
+<code>CallNode</code> inside a <code>StatementsNode</code> inside the <code>ProgramNode</code>). A node
+kind the gem can spot wins; failing that, any node that is not a mere
+grouping.</li>
+<li><code>Foo::Bar += 1</code>: monoruby attributes a failed read of <code>Foo::Bar</code> to
+the constant path, CRuby to the whole assignment (it compiles the read
+as part of it). The path and each of its scopes start where the
+assignment starts, and nothing else under it does, so those answer the
+assignment’s id.</li>
 </ul>
-<p>Ordering rationale: P0 is pure addition (lowest risk, unlocks
-everything); P1/P2 are mechanical given P0; P3 is the long tail and can
-proceed method-family by method-family without blocking.</p>
-<h2 id="5-risks--mitigations"><a class="header" href="#5-risks--mitigations">5. Risks &amp; mitigations</a></h2>
+<p>The frame of a method whose arguments did not bind (an arity or keyword
+error) is at its <code>def</code> / block / lambda, whose extent is the definition
+node’s: that is what the <code>callee:</code> half of the report underlines.</p>
+<h2 id="what-differs-from-cruby"><a class="header" href="#what-differs-from-cruby">What differs from CRuby</a></h2>
 <ul>
-<li><strong><code>to_str()</code> blast radius (highest).</strong> It is the de-facto “give me
-the string” accessor across builtins; changing its non-UTF-8
-semantics wholesale would regress widely. <em>Mitigation</em>: do <strong>not</strong>
-change <code>to_str()</code> semantics in P0–P2; only add new explicit
-character/byte APIs and migrate callers individually in P3 with a
-per-family spec diff.</li>
-<li><strong>Performance.</strong> The hot path is ASCII UTF-8. <em>Mitigation</em>: keep the
-<code>SevenBit</code> O(1) short-circuits in <code>char_length</code>; <code>char_len</code>’s first
-match arm is the UTF-8 <code>b &lt; 0x80 → Char(1)</code> case (same as today).</li>
-<li><strong>Onigmo coupling.</strong> Regex scanning still only knows ASCII/UTF-8
-(analysis item ⑦). This layer makes <em>String</em> correct but does <strong>not</strong>
-make <code>=~</code> correct for EUC-JP patterns; that is explicitly out of
-scope and must be documented in each P-step PR to avoid scope creep.</li>
-<li><strong>CodeRange cache coherence.</strong> <code>cr</code> must be invalidated/recomputed
-consistently with the new width logic. <em>Mitigation</em>: <code>classify()</code>
-and <code>char_len</code> share the same per-encoding validity definition;
-add a debug-assert (<code>cfg(debug_assertions)</code>) that
-<code>iter_char_bytes()</code> concatenation == <code>content</code>.</li>
-<li><strong>Spec oracle.</strong> All tables are validated by <code>run_tests</code> against
-CRuby 4.0.2 (<code>s.force_encoding(enc).each_char.map(&amp;:bytes)</code> golden
-vectors) and a <code>core/string</code> + <code>core/encoding</code> regression diff per
-PR, consistent with the established zero-regression workflow.</li>
+<li>A builtin that is C in CRuby and Ruby here keeps its own frame in the
+backtrace (<code>&lt;internal:class&gt;:19:in 'Class#new'</code>), where CRuby shows
+the caller’s line under the builtin’s name. Such a frame has no file
+to quote. So <code>Foo.new</code> with the wrong number of arguments reports
+<code>caller: &lt;internal:class&gt;:19</code> with no snippet (the <code>callee:</code> half is
+intact), and a TypeError raised inside a Ruby-implemented builtin has
+no snippet.</li>
+<li>The first decorated message of a process also loads prism’s Ruby half
+(<code>require "prism"</code>, about 310M instructions), since the gem works on
+<code>Prism::Node</code> objects.</li>
 </ul>
-<h2 id="6-validation-strategy"><a class="header" href="#6-validation-strategy">6. Validation strategy</a></h2>
-<ul>
-<li>Unit: golden <code>char_len</code> vectors per encoding vs CRuby
-(<code>force_encoding</code> + <code>each_char</code>/<code>length</code>/<code>reverse</code>).</li>
-<li>Property: for random byte buffers, assert
-<code>concat(iter_char_bytes()) == content</code> and
-<code>char_length() == iter_char_bytes().count()</code> for every <code>Encoding</code>.</li>
-<li>Spec: <code>core/string</code>, <code>core/encoding</code>, <code>core/symbol</code>, <code>core/regexp</code>
-(MatchData captures) regression diff vs <code>origin/master</code> — <strong>zero
-regressions</strong> gate per PR; both Prism and ruruby parsers.</li>
-</ul>
-<h2 id="7-decisions-confirmed"><a class="header" href="#7-decisions-confirmed">7. Decisions (confirmed)</a></h2>
-<ol>
-<li><strong>ISO-2022-JP statefulness — deferred.</strong> P0 implements the
-<em>stateless</em> encodings natively (EUC-JP, Shift_JIS; ISO-8859-*,
-ASCII-8BIT, US-ASCII, UTF-16/32 are already fixed-width). The
-<code>DecodeState</code> machine for ISO-2022-JP is <strong>out of P0</strong>; ISO-2022-JP
-continues to route through <code>encoding_rs</code> for length/iteration (it
-is rare in specs) and lands in a later step. <code>char_len</code>’s
-signature still carries <code>&amp;mut DecodeState</code> so the later step is
-additive.</li>
-<li><strong><code>to_str()</code> long-term — <code>display_lossy()</code> split + convention.</strong>
-The <code>\xHH</code> fallback rendering moves to a clearly-named
-<code>display_lossy()</code> accessor; <code>to_str()</code> is reserved for “real
-characters / bytes” and character-work-on-non-UTF-8 via <code>to_str()</code>
-is forbidden by review convention. This split happens in <strong>P3</strong>
-(not P0–P2, which keep <code>to_str()</code> semantics unchanged).</li>
-</ol>
+<h2 id="tests"><a class="header" href="#tests">Tests</a></h2>
+<p><code>monoruby/tests/error_highlight.rs</code> spawns the binary:
+<code>tests/error_highlight/cases.rb</code> holds 121 cases and <code>cases.expected</code>
+their output on CRuby 4.0.9 (<code>ruby cases.rb</code>, with the directory
+replaced by <code>@DIR@</code>). The gem’s own
+<code>test/error_highlight/test_error_highlight.rb</code> passes too, apart from
+three cases that differ in an unrelated TypeError message; it references
+a top-level <code>RubyVM</code> itself, so running it needs
+<code>RubyVM = ErrorHighlight.module_eval("RubyVM")</code> first.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/runtime_optimization/regexp.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/hidden_ivars.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../design/c_api.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../design/runtime_optimization/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -373,11 +394,11 @@ is forbidden by review convention. This split happens in <strong>P3</strong>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/runtime_optimization/regexp.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/hidden_ivars.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../design/c_api.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../design/runtime_optimization/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

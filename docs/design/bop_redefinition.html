@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,954 +183,279 @@
 はその仮定をいつでも壊せる（<code>class Integer; def +(o); …; end; end</code>）ので、
 処理系は「仮定を置く」「壊れたことを検知する」「壊れたあと辻褄を合わせる」の
 3 点を用意しなければならない。</p>
-<p>本書は monoruby の現行実装をコードに即して記述し、CRuby の戦略と実測で比較し、
-<strong>なぜ今の設計を変えるべきか</strong>と、どの順で変えるべきかを記録する。</p>
-<blockquote>
-<p>本書は design record である（<code>doc/README.md</code> の分類）。測定値は
-2026-08-10 時点、<code>076cd951</code>、Linux/x86-64、release ビルドのもの。</p>
-</blockquote>
-<p>関連: <code>doc/refinements.md</code> §6.7（refinements と基本演算）、<code>doc/jit.md</code>、
+<p>本書は monoruby の現行の仕組みをコードに即して記述し、CRuby の戦略と比べる。
+粒度はどちらも <strong>(演算子, クラス) の組</strong>で、再定義の影響はその組を仮定した
+コードだけに及ぶ。</p>
+<p>関連: <code>doc/refinements.md</code> §6.7（refinements と基本演算）、
+<code>doc/chain_deopt.md</code>（実行中フレームの変換）、<code>doc/jit_invariants.md</code>、
 <code>doc/inline.md</code></p>
 <hr>
-<h2 id="1-出発点の実装5-step-1-で置き換え済み"><a class="header" href="#1-出発点の実装5-step-1-で置き換え済み">1. 出発点の実装（§5 Step 1 で置き換え済み）</a></h2>
-<blockquote>
-<p><strong>注</strong>: 本節は Step 1 <em>以前</em>の実装を記述する。検知まわり（§1.1・§1.2・§1.4）は
-<code>globals/store/basic_op.rs</code> の静的表に置き換わった（§5 Step 1）。反応
-（§1.3）とコスト（§1.5）は現在も同じで、Step 2 の対象である。問題の形を
-残すために原文のまま置く。</p>
-</blockquote>
-<h3 id="11-basic-opとして登録されていたもの"><a class="header" href="#11-basic-opとして登録されていたもの">1.1 「basic op」として登録されていたもの</a></h3>
-<p>登録の入口は 1 つだけで、<code>Globals::define_basic_op</code>
-（<code>globals/method.rs</code>）→ <code>new_basic_op</code> → <code>add_basic_op_method</code> →
-<code>add_method_inner(.., is_basic_op = true, ..)</code> と流れ、
-<code>MethodTableEntry::is_basic_op</code> を立てる。</p>
-<p>呼び出し箇所は<strong>全部で 10 個</strong>:</p>
+<h2 id="1-基本演算の表"><a class="header" href="#1-基本演算の表">1. 基本演算の表</a></h2>
+<p><code>globals/store/basic_op.rs</code> の静的表 <code>BASIC_OP_DEFS</code> が、fast path が
+仮定してよい <code>(クラス, メソッド名)</code> の組を列挙する。CRuby の
+<code>vm_opt_method_defs</code> と同型である。<code>BasicOpTable</code> はこれを intern したもので、
+次を持つ。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>クラス</th><th>演算子</th></tr>
+<tr><th>フィールド</th><th>意味</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Integer</code></td><td><code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>!=</code></td></tr>
-<tr><td><code>Float</code></td><td><code>+</code> <code>-</code> <code>*</code> <code>!=</code></td></tr>
-<tr><td><code>String</code></td><td><code>!=</code></td></tr>
+<tr><td><code>set</code> / <code>names</code></td><td>表の組と、その名前だけの集合（「この定義は演算子に触れるか」の安い一次判定）</td></tr>
+<tr><td><code>armed</code></td><td>ブートストラップ用ラッチ。ビルトイン自身の定義がこの表そのものなので、<code>builtins/*.rb</code> と gem のロードが終わるまで報告しない（<code>Store::arm_basic_ops</code>）</td></tr>
+<tr><td><code>redefined</code></td><td>どれか 1 組でも置き換わったか。Rust 側の fast path はまずこれを読むので、何も再定義しないプログラムのコストはヘルパ呼び出しごとに bool 1 個</td></tr>
+<tr><td><code>redefined_set</code></td><td>置き換わった組（下の 2 つの和集合）。実行時ガードが知りたいのはこれ</td></tr>
+<tr><td><code>globally_redefined_set</code> / <code>refined_set</code></td><td>内訳。グローバルな再定義か、refinement だけによる無効化か（§5）</td></tr>
+<tr><td><code>armed_funcs</code></td><td>arm 時点での各組の解決先 <code>FuncId</code>（mixin 検知と JIT の解決に使う）</td></tr>
+<tr><td><code>pending_warnings</code></td><td><code>:performance</code> 警告待ちの組</td></tr>
+<tr><td><code>case_dispatch_off</code></td><td><code>case</code> が値比較で分岐してよいクラスの <code>===</code> が置き換わったか（CRuby の <code>opt_case_dispatch</code> と同じく、立ったら戻らない）</td></tr>
 </tbody>
 </table>
 </div>
-<p>これが「再定義を検知できる集合」の全てである。VM / JIT がインライン展開して
-いる演算子はこれよりはるかに多い(§1.4)。</p>
-<h3 id="12-検知"><a class="header" href="#12-検知">1.2 検知</a></h3>
-<p><code>ClassInfoTable::insert_method</code>（<code>globals/store/class.rs</code>）は、メソッド表を
-上書きしたとき <strong>元のエントリが <code>is_basic_op</code> だったか</strong>だけを見る:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>fn insert_method(&amp;mut self, class_id: ClassId, name: IdentId, entry: MethodTableEntry) {
-    Globals::class_version_inc();
-    if let Some(old) = self.classes[class_id].methods.insert(name, entry)
-        &amp;&amp; old.is_basic_op
-    {
-        self.set_bop_redefine();
-    }
-}
-<span class="boring">}</span></code></pre>
-<p><strong>どの演算子が・どのクラスで再定義されたかは記録されない。</strong> 呼ばれた事実だけが
-伝わる。</p>
-<h3 id="13-反応--グローバルかつ恒久"><a class="header" href="#13-反応--グローバルかつ恒久">1.3 反応 — グローバルかつ恒久</a></h3>
-<p><code>Store::set_bop_redefine</code>（同ファイル）が一度に次を行う:</p>
-<ol>
-<li><code>Codegen::set_bop_redefine</code> — <code>bop_redefined_flags: u32</code> に <code>!0</code> を書く。
-<strong>以後クリアされない。</strong></li>
-<li><code>Store::invalidate_jit_code()</code> — <strong>全 iseq</strong> の <code>jit_invalidated = true</code>。
-これも一方向ラッチで、以後その iseq は method-JIT の対象から外れる
-（<code>compiler.rs</code> / <code>patch.rs</code> が <code>jit_invalidated()</code> で早期 return）。</li>
-<li>x86-64: 全コンパイル済みメソッドの entry を <code>apply_jmp_patch_address</code> で
-<code>vm_entry</code> に書き戻す。aarch64: <code>jit_slot</code> / <code>jit_guard_free_slot</code> の
-dispatch word をゼロ化（<code>invalidate_jit_code</code> 内）。</li>
-<li><code>remove_vm_bop_optimization()</code> — <strong>VM のディスパッチ表を <code>_no_opt</code> 版に
-恒久的に差し替える</strong>。算術・比較・単項の fixnum fast path が全て
-フルディスパッチになる。<code>dispatch[14]</code>（<code>loop_start</code>）も no-opt になるので、
-<strong>OSR ループ JIT が二度と起動しない</strong>。</li>
-</ol>
-<p>以上でオフスタックのコードは片付くが、<strong>今スタックに乗っている</strong> JIT フレームは
-まだ古い本体を実行し続ける。その始末は <code>set_bop_redefine</code> の中ではなく、
-呼び出し元の <code>Executor::{add_method, add_method_with_original, alias_method_for_class}</code> が担う。メソッド表を書き換えた<strong>後</strong>・<code>method_added</code>
-フックを呼ぶ<strong>前</strong>に <code>Codegen::check_bop_redefine(cfp)</code> を通し、フラグが非 0 なら
-<code>Codegen::chain_deopt_into</code> が CFP 鎖を遡って各サスペンド中フレームを
-インタプリタフレームへ<strong>変換</strong>する（write-back の replay ＋ return address を
-共有 VM continuation stub に書き換え。<code>doc/chain_deopt.md</code> §10 を参照）。
-戻ってきた時点で VM に落ちる。かつてはコードそのものに <code>jmp deopt</code> を
-書き込む <code>immediate_eviction</code> がこれを担っていたが、chain deopt が完全に
-置き換えたので自己書き換えコードは無くなった。
-<code>method_added</code> は任意の Ruby を走らせるので、その前に片付けておく必要がある。
-歩くのは自スレッドの鎖だけではない: 他の Ruby スレッド(green も 1:1 も、
-この瞬間は全員サスペンド中)の鎖と、poll で止まった最内フレームの始末は
-<code>doc/chain_deopt.md</code> §10.1。</p>
-<p>この配置には 2 つ性質がある。</p>
+<p>判定キーが「上書きされたエントリ」ではなく「(クラス, メソッド) の組」で
+あることが要点である。<code>Integer#!</code> / <code>#+@</code> / <code>#~</code>、<code>NilClass#==</code> などは
+そのクラスにエントリを持たない（<code>Object</code> / <code>BasicObject</code> からの継承）。
+<code>class Integer; def !; …</code> は上書きではなく<strong>挿入</strong>なので、エントリに印を
+付ける方式では原理的に検知できない。</p>
+<h2 id="2-検知"><a class="header" href="#2-検知">2. 検知</a></h2>
+<p>メソッド表を変更する経路すべてに検知点がある。</p>
 <ul>
-<li><strong>レベルトリガであってエッジトリガではない。</strong> <code>check_bop_redefine</code> は
-「今回の定義が basic op を潰したか」ではなく「フラグが立っているか」を見る。
-フラグは一度立つとクリアされないので、<strong>以後プロセス内のあらゆるメソッド定義が
-毎回 CFP 鎖の全走査とフレーム変換を行う</strong>。実測では他の要因
-(JIT が止まることで再コンパイル churn も消える)に埋もれて有意差は出なかったが、
-構造としては無駄が残り続ける。</li>
-<li><strong>経路が 3 つの funnel に限られる。</strong> <code>remove_method</code> はここを通らない
-(§1.4 の但し書き)。</li>
+<li><strong><code>insert_method</code> / <code>remove_method</code></strong> — <code>def</code> / <code>define_method</code> /
+<code>alias</code> / <code>import_methods</code> / <code>undef_method</code>（<code>add_empty_method</code> 経由）を
+1 箇所で覆う。refinement のメソッドは refinement モジュール側の
+<code>ClassId</code> に入るので、<code>refined_class()</code> を引いて <code>(refined_class, name)</code>
+で照会する（§5）。</li>
+<li><strong>mixin</strong> — モジュールに後からメソッドが入った場合は <code>insert_method</code> →
+<code>check_mixed_in_basic_op(module_id, name)</code>、すでにメソッドを持つモジュール
+が後から差し込まれた場合は <code>append_features</code> / <code>prepend_features</code> →
+<code>check_mixin_basic_ops(module)</code>。</li>
 </ul>
-<p>JIT コード内でのランタイム検査は <code>AsmInst::CheckBOP</code>（フラグのロード + 分岐）
-だが、発行箇所は <code>MethodDef</code> / <code>SingletonMethodDef</code> の直後のみ
-（<code>jitgen/compile.rs</code>）。<strong>演算そのものにはガードが無い</strong> — これは意図的で、
-定数畳み込み（<code>100 * 100</code> → <code>10000</code>）とレジスタ常駐を成立させるための選択
-（<code>jitgen/compile/binary_op.rs</code> のコメント参照）。</p>
-<h3 id="14-網羅の穴"><a class="header" href="#14-網羅の穴">1.4 網羅の穴</a></h3>
-<p>インライン展開しているのに basic op として登録されていない演算子が多数ある。
-48 ケースを CRuby 4.0.2 と差分テストした結果、<strong>22 件が食い違った</strong>。</p>
-<p><strong>VM ティアで再定義が完全に無視されるもの:</strong></p>
-<pre><code>Integer   %  **  &lt;&lt;  &gt;&gt;  &amp;  |  ^  ==  &lt;  &lt;=  &gt;  &gt;=  -@
-Float     /  ==  &lt;  &gt;
-String    ==
-Array     []        Hash  []        Symbol  ==
+<p>mixin で問うのは「モジュールがその名前を定義しているか」ではなく
+「<strong>そのクラスは今もビルトインに解決するか</strong>」である。<code>Comparable</code> は
+<code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>==</code> を定義し、<code>Integer</code> はブートストラップ以来それを
+include しているので、前者は <code>include Comparable</code> のたびに真になる。
+mixin 検知は <code>armed_funcs</code> と現在の解決先を比べるので、<code>Integer.prepend M</code>
+（M が <code>+</code> を持つ）なら立ち、<code>class Foo; include Comparable; end</code> なら
+立たない。回帰テストは <code>basic_op.rs</code> の
+<code>a_mixin_that_displaces_nothing_keeps_the_basic_ops</code> /
+<code>a_prepend_that_displaces_the_builtin_retires_its_pair</code> で、値ではなく表の
+状態を直接確かめる（fast path が消えても答えは正しいので、値の比較では
+検出できない）。</p>
+<p>置き換わった組は <code>Store::set_bop_redefine</code> が記録し、<code>pending_warnings</code> に
+積む。警告（<code>Redefining 'Integer#+' disables interpreter and JIT optimizations</code>）は <code>Store</code> の中では出せないので、<code>Executor::invoke_method_added</code>
+で出す。</p>
+<h2 id="3-vm-側の反応"><a class="header" href="#3-vm-側の反応">3. VM 側の反応</a></h2>
+<p>VM の asm fast path はすべて fixnum 限定である。<code>vm_binops_opt</code> /
+<code>vm_cmp_opt!</code> / <code>vm_neg</code> … はどれも fixnum ガードで始まり、fixnum でない
+オペランドは Rust ヘルパ（<code>add_values</code>、<code>cmp_lt_values</code>、<code>eq_values_vis</code>、
+<code>not_value</code>、<code>get_index</code> …）に落ちる。そこで反応は 2 段になっている。</p>
+<ul>
+<li><strong>asm 側（Integer のみ）</strong> — <code>Codegen::bop_flags</code> は JIT データ領域の 1 語で、
+<code>VmBop</code> ごとに 1 ビットを持つ。asm の inline 計算を持つ 11 個
+（<code>+ - == != &lt; &lt;= &gt; &gt;= === +@ -@</code>）の VM ハンドラは、自分の fixnum ガードの
+直後で自分のビットを読み（x86-64 <code>testq [rip+f], (1&lt;&lt;bit)</code>、aarch64
+<code>ldr x9</code> / <code>tbnz #bit</code>）、立っていれば Rust ヘルパへ抜ける。CRuby
+インタプリタの <code>BASIC_OP_UNREDEFINED_P</code> と同じ配置である。<code>~</code> と <code>!</code> は
+inline 計算を持たず、残りの二項演算（<code>* / % ** &lt;&lt; &gt;&gt; &amp; | ^</code>）は最初から
+Rust ヘルパへ直行する。通常の実行ではこの検査のコストは測定にかからない。</li>
+<li><strong>Rust ヘルパ側（全クラス）</strong> — ネイティブに答えるアームに入る前に
+<code>basic_op_redefined_for(受け手のクラス, 演算子名)</code> を確かめ、置き換わって
+いれば本物のディスパッチに戻る（<code>Executor::dispatch_redefined_op</code>）。
+ディスパッチ表を持たない Rust 側の fast path（<code>runtime::{get_index, set_index}</code> の <code>Array#[]</code> / <code>Hash#[]</code> / <code>Array#[]=</code>）も同じ表を読む。</li>
+</ul>
+<p>ガードは「探索を飛ばした呼び出し元のための入口」<code>*_values</code> にだけ置き、
+実装本体は無防備な <code>*_values_raw</code> に分けてある。ビルトインの <code>Integer#+</code> の
+本体（<code>numeric.rs</code> の <code>binop!</code> / <code>unop!</code>、<code>integer.rs</code> の <code>cmpop!</code> と
+<code>% ** &lt;&lt; &gt;&gt;</code>、<code>float.rs</code> の比較と <code>==</code>）は <code>_raw</code> を呼ぶ。ガードを実装側に
+置くと、次のコードで <code>__orig</code>（= 元のビルトイン）に入った時点でガードが再び
+発火し、名前 <code>+</code> で再ディスパッチして無限再帰になる。CRuby が
+<code>BASIC_OP_UNREDEFINED_P</code> を命令側（<code>opt_plus</code>）に置き <code>rb_int_plus</code> には
+置かないのと同じ理由である。</p>
+<pre><code class="language-ruby">class Integer; alias __orig :+; def +(o); __orig(o); end; end
+1 + 2
 </code></pre>
-<p><strong>JIT ティア</strong>は挙動が分かれる:</p>
-<ul>
-<li><strong>正しい</strong> — <code>Integer#%</code>、<code>Array#[]</code>、<code>Hash#[]</code>、<code>Symbol#==</code>。
-<code>BinOpK::{Shl, Shr, Exp, Rem}</code> は「常にメソッド呼び出しにコンパイル」する
-分岐に入り、インラインキャッシュ + class-version ガードを経由するため。</li>
-<li><strong>誤り</strong> — <code>&amp; | ^</code>、比較全般、<code>-@</code>。<code>binop_integer</code> / 比較の無条件インライン
-展開で、ガードが無い。</li>
-</ul>
-<p><code>send(:+)</code> 経由は常に正しい（メソッド表を引くため）。<strong>構文としての演算子だけが
-壊れる。</strong></p>
-<blockquote>
-<p>上記 22 件のうち 1 件（<code>Array#size</code>）は種類が違う。monoruby は <code>Array#size</code>
-を Ruby で実装しているため、再定義が <code>Kernel#p</code> の内部を壊して
-<code>ArgumentError</code> になる。BOP フックの欠落ではなく「ビルトインが Ruby 実装で
-あることの露出」で、CRuby（C 実装）には無い問題。切り分けて扱うべき。</p>
-</blockquote>
-<p><strong><code>remove_method</code> は検知経路そのものが無い。</strong> 検知は
-<code>ClassInfoTable::insert_method</code>（「上書きされた古いエントリが basic op か」）に
-だけ置かれているが、<code>ClassInfoTable::remove_method</code> は <code>methods.remove()</code> を
-直接呼び、<code>is_basic_op</code> を一切見ない。結果:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>操作</th><th>monoruby</th><th>CRuby</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Integer.remove_method(:+)</code> → <code>1 + 2</code></td><td><strong><code>3</code></strong></td><td><code>NoMethodError</code></td></tr>
-<tr><td><code>Integer.undef_method(:+)</code> → <code>1 + 2</code></td><td><code>NoMethodError</code></td><td><code>NoMethodError</code></td></tr>
-<tr><td><code>Integer.alias_method(:+, :-)</code> → <code>1 + 2</code></td><td><code>-1</code></td><td><code>-1</code></td></tr>
-</tbody>
-</table>
-</div>
-<p><code>undef_method</code> が通るのは <code>add_empty_method</code> 経由で <code>insert_method</code> を踏むため。
-CRuby は追加・削除・<code>prepend</code> のいずれでも
-<code>rb_vm_check_redefinition_opt_method</code> を引くので取りこぼさない。検知点は
-「メソッド表を変更する全経路」に置く必要がある。</p>
-<h3 id="15-コスト実測"><a class="header" href="#15-コスト実測">1.5 コスト（実測）</a></h3>
-<p><code>fib(30)</code>、<code>Float#+</code> を再定義。<strong>ワークロードは Float を一切使わない。</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>条件</th><th style="text-align: right">時間</th></tr>
-</thead>
-<tbody>
-<tr><td>JIT・再定義なし</td><td style="text-align: right"><strong>0.022 s</strong></td></tr>
-<tr><td><code>--no-jit</code>（純 VM）・再定義なし</td><td style="text-align: right">0.069 s</td></tr>
-<tr><td>JIT・<code>Float#+</code> 再定義後</td><td style="text-align: right"><strong>0.51 s</strong></td></tr>
-<tr><td>JIT・再定義<strong>後に定義した</strong>メソッド</td><td style="text-align: right">0.52 s</td></tr>
-</tbody>
-</table>
-</div>
-<p>無関係なクラスの再定義 1 回で <strong>JIT ありの 24 倍、純 VM の 7.5 倍</strong>遅くなる。
-<code>_no_opt</code> ハンドラは fixnum インラインパスを捨てて毎回フルディスパッチするため、
-「JIT を止める」より悪い。再定義後に定義したコードも救われない
-（<code>remove_vm_bop_optimization</code> の効果はプロセス全体・恒久のため）。</p>
-<hr>
-<h2 id="2-cruby-の戦略"><a class="header" href="#2-cruby-の戦略">2. CRuby の戦略</a></h2>
-<ul>
-<li><strong><code>ruby_vm_redefined_flag[BOP_xxx]</code></strong> — BOP ごとに 1 ワード、その中の<strong>ビットが
-クラス</strong>（<code>INTEGER_REDEFINED_OP_FLAG</code>、<code>FLOAT_…</code>、<code>STRING_…</code>、<code>ARRAY_…</code>、
-<code>HASH_…</code>、<code>SYMBOL_…</code> …）。粒度は <strong>(演算子, クラス) の組</strong>。</li>
-<li><strong><code>vm_opt_method_defs</code></strong> — <code>(クラス, メソッド名) → BOP</code> の対応表。
-<code>rb_vm_check_redefinition_opt_method</code> がメソッドの追加・削除のたびに引き、
-一致したときだけ該当ビットを立てる。</li>
-<li><strong>インタプリタ</strong> — <code>opt_plus</code> 等の中で、オペランドの型チェックの<strong>後</strong>に
-<code>BASIC_OP_UNREDEFINED_P(BOP_PLUS, INTEGER_REDEFINED_OP_FLAG)</code>
-（ロード + AND + 分岐）を実行する。<strong>実行のたびに検査する</strong>が、対象は 1 ワード
-なので分岐予測がほぼ完全に効く。</li>
-<li><strong>YJIT / ZJIT</strong> — <code>assume_bop_not_redefined()</code> で「その (class, bop) は未再定義」
-という <em>invariant</em> にコードブロックを登録する。再定義時は<strong>その invariant に
-依存するブロックだけ</strong>を無効化する。</li>
-<li><strong>通知</strong> — Ruby 3.4+ は <code>-W:performance</code> で
-<code>Redefining 'Integer#+' disables interpreter and JIT optimizations</code> を出す。</li>
-</ul>
-<p>つまり CRuby は<strong>インタプリタでは実行時チェック、JIT では invariant + 局所無効化</strong>
-という二本立てで、どちらも粒度は (演算子, クラス) である。</p>
-<hr>
-<h2 id="3-比較fib29--3-回実測"><a class="header" href="#3-比較fib29--3-回実測">3. 比較（<code>fib(29)</code> × 3 回、実測）</a></h2>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>baseline</th><th><code>Float#+</code> 再定義後</th><th><code>String#+</code> 再定義後</th></tr>
-</thead>
-<tbody>
-<tr><td>CRuby</td><td>0.062 0.061 0.059</td><td>0.059 0.059 0.061</td><td>0.058 0.059 0.059</td></tr>
-<tr><td>monoruby</td><td>0.014 0.013 0.013</td><td><strong>0.310 0.321 0.328</strong></td><td>0.012 0.012 0.012</td></tr>
-</tbody>
-</table>
-</div>
-<p>CRuby には<strong>測定できるほどの影響が無い</strong>。monoruby の <code>String#+</code> が無影響なのは、
-そもそもフックが無い（未登録）からであって、良い意味ではない。</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>軸</th><th>CRuby</th><th>monoruby</th></tr>
-</thead>
-<tbody>
-<tr><td>粒度</td><td>(演算子, クラス)</td><td>グローバル 1 ビット</td></tr>
-<tr><td>検査方式</td><td>fast path 内の実行時テスト（VM）/ invariant（JIT）</td><td>事前の一括無効化</td></tr>
-<tr><td>影響範囲</td><td>その組を使うコードのみ</td><td><strong>プロセス全体</strong></td></tr>
-<tr><td>可逆性</td><td>不要（他が影響を受けない）</td><td><strong>不可逆</strong></td></tr>
-<tr><td>網羅</td><td>約 30 op × 十数クラス</td><td><strong>10 エントリ</strong></td></tr>
-<tr><td>未登録 op</td><td>そもそも fast path を持たない</td><td><strong>fast path はあるがフックが無い → 誤答</strong></td></tr>
-<tr><td>通知</td><td><code>-W:performance</code></td><td>無言</td></tr>
-</tbody>
-</table>
-</div>
-<hr>
-<h2 id="4-評価--何が正しく何が間違っているか"><a class="header" href="#4-評価--何が正しく何が間違っているか">4. 評価 — 何が正しく、何が間違っているか</a></h2>
-<p><strong>戦略は正しい。</strong> monoruby の JIT が採る「ガード無しでインライン展開し、
-再定義時に無効化する」は YJIT と同じ方向であり、CRuby <em>インタプリタ</em>式の
-「毎回フラグを読む」を JIT に持ち込むと、いま効いている定数畳み込みと
-レジスタ常駐が成立しなくなる。ここは維持すべきである。</p>
-<p><strong>間違っているのは粒度と網羅である。</strong></p>
+<p>回帰テストは <code>aliasing_an_operator_before_redefining_it_does_not_recurse</code>。
+<code>Array#sum</code> や <code>Numeric#angle</code> のように探索せずに演算子を使う内部呼び出しは
+ガード付きの入口を使う（CRuby も同じ位置で BOP を見る）。</p>
+<h2 id="4-jit-側の反応"><a class="header" href="#4-jit-側の反応">4. JIT 側の反応</a></h2>
+<p>JIT がガード無しで基本演算を仮定するのは、整数・浮動小数の算術／比較／
+定数畳み込みと単項演算だけである（<code>state/binop.rs</code> の <code>binop_integer</code> /
+<code>binop_float</code> / <code>gen_cmp_*</code> / <code>unop_integer_*</code> / <code>unop_float</code>）。メソッド
+呼び出しに落ちるものはすべて class-version ガードで守られている
+（再定義は必ず class version を進める）。</p>
 <ol>
-<li><strong>粒度</strong> — 「どれか 1 つでも再定義されたか」しか持たないので、反応は
-プロセス全体を落とすしかない。<code>bop_redefined_flags</code> が既に <code>u32</code> である
-にもかかわらず、0 か全ビットかの真偽値としてしか使われていない。</li>
-<li><strong>網羅</strong> — インライン展開している (クラス, 演算子) の大半が未登録で、
-再定義が<strong>無言で無視される</strong>。速い誤答は遅い正答より悪い。</li>
-<li><strong>恒久性</strong> — <code>jit_invalidated</code> も VM ディスパッチ表の差し替えも一方向で、
-回復手段が無い。粒度 1 の設計から必然的にこうなっている。</li>
+<li><strong>仮定と記録</strong> — inline 生成器の入口（<code>fire_binary_inline</code> /
+<code>fire_unary_inline</code>、融合 compare-and-branch も同じ）で
+<code>JitContext::basic_op_assumable(class, op)</code> を問い、生成器が成功した
+ときだけ <code>record_bop_dep</code> で <code>(class, op)</code> を記録する。解決には生の
+メソッド表ではなく arm 時のスナップショット（<code>Store::basic_op_armed_func</code>、
+<code>JitContext::resolve_basic_op</code>）を使う（§6）。置き換わった組は仮定せず、
+その演算だけ通常のメソッド呼び出しになるので、再定義後の再コンパイルは
+健全で、他の演算子の inline は保たれる。</li>
+<li><strong>依存の保存</strong> — 記録は <code>jit_compile</code> から <code>ISeqInfo::bop_deps</code> に
+入る（self class をまたいで union）。</li>
+<li><strong>無効化</strong> — <code>set_bop_redefine</code> は <code>Store::evict_jit_code_for_bop(class, name)</code> で、その組に依存した iseq（<code>depends_on_bop</code>）<strong>だけ</strong>のコードを
+捨てる（<code>evict_jit_code</code>）。捨てたメソッドは <code>Codegen::rearm_jit_stub</code> が
+wrapper のウォームアップ stub を戻してカウンタを <code>COUNT_START_COMPILE</code> に
+再装填するので、次のウォームアップで再コンパイルされる。ループ本体は
+<code>clear_loop_jit_entries</code> がバイトコード内 <code>LoopStart</code> の <code>[pc+8]</code> を
+クリアする。このオペランドは三値（<code>0</code> = 未コンパイル、<code>1</code> = コンパイルが
+bail した恒久センチネル、それ以外が実エントリ）で、クリアするのは実エントリ
+だけである。恒久的に bail した本体は <code>invalidate_jit_code</code> で表し、
+回復可能な <code>evict_jit_code</code> とは区別する。</li>
+<li><strong>実行中のフレーム</strong> — 捨てるだけでは、いまスタックで動いている JIT
+フレームが古いコードを実行し続ける。<code>set_bop_redefine</code> が
+<code>bop_eviction_pending</code> を立て、直後の <code>Codegen::check_bop_redefine</code> が
+それを消費して（エッジトリガ）、<code>chain_deopt_into</code> で全スレッドの
+スタック上の JIT フレームをインタプリタフレームへ変換する（各フレームの
+write-back を再生し、返りアドレススロットを共有 VM continuation stub に
+書き換える。<code>doc/chain_deopt.md</code> §10）。他スレッドのフレームと、
+セーフポイント poll で止まっているフレームの扱いは
+<code>doc/chain_deopt.md</code> §10.1。</li>
+<li><strong><code>def</code> 地点</strong> — <code>AsmInst::CheckBOP</code> は JIT データ語のカウンタを
+コンパイル時の値と比べる（class-version ガードと同じ世代比較）。</li>
 </ol>
-<hr>
-<h2 id="5-方針"><a class="header" href="#5-方針">5. 方針</a></h2>
-<h3 id="step-1--網羅を閉じる正しさ最優先-実装済み"><a class="header" href="#step-1--網羅を閉じる正しさ最優先-実装済み">Step 1 — 網羅を閉じる（正しさ、最優先）— <strong>実装済み</strong></a></h3>
-<p><code>globals/store/basic_op.rs</code> に <strong>62 組の <code>(クラス, メソッド)</code> の静的表</strong>
-（<code>BASIC_OP_DEFS</code>）を置き、検知をそこに移した。CRuby の <code>vm_opt_method_defs</code>
-と同型である。</p>
-<p>設計上の要点は <strong>判定キーを「上書きされたエントリのフラグ」から「(クラス,
-メソッド) の組」に変えた</strong>こと。§1.4 の内訳を見ると、<code>Integer#!</code> / <code>#+@</code> /
-<code>#~</code>、<code>NilClass#==</code> などは<strong>そのクラスにエントリを持たない</strong>（<code>Object</code> /
-<code>BasicObject</code> からの継承）。<code>class Integer; def !; …</code> は上書きではなく
-<strong>挿入</strong>なので、いくらエントリにフラグを立てても旧方式では原理的に検知できない。
-CRuby が静的表を引くのも同じ理由による。</p>
-<p>あわせて:</p>
-<ul>
-<li><code>remove_method</code> にも検知を入れた（§1.4 の但し書き。<code>undef_method</code> は
-<code>add_empty_method</code> 経由で <code>insert_method</code> を踏むので既に通っていた）。</li>
-<li>ブートストラップ用ラッチ <code>armed</code> を追加。ビルトイン自身の定義がこの表そのもの
-なので、<code>startup.rb</code> とgem のロードが終わるまで報告しない
-（<code>Store::arm_basic_ops</code>、<code>Executor</code> の <code>startup_flag</code> と同じ地点）。</li>
-<li>ディスパッチ表を持たない Rust 側の fast path（<code>runtime::{get_index, set_index}</code> の <code>Array#[]</code> / <code>Hash#[]</code> / <code>Array#[]=</code>）は <code>_no_opt</code> 版に
-差し替えられないので、<code>BasicOpTable::redefined</code> を直接読ませた。</li>
-</ul>
-<p><strong>結果（実測）:</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">変更前</th><th style="text-align: right">変更後</th></tr>
-</thead>
-<tbody>
-<tr><td>演算子再定義スイープ（257 ケース）</td><td style="text-align: right">51 件が CRuby と食い違い</td><td style="text-align: right"><strong>0 件</strong></td></tr>
-<tr><td><code>remove_method(:+)</code> → <code>1 + 2</code></td><td style="text-align: right"><code>3</code></td><td style="text-align: right"><code>NoMethodError</code></td></tr>
-<tr><td>core 全体スペック（単一プロセス）</td><td style="text-align: right">347 F / 219 E</td><td style="text-align: right"><strong>345 F / 218 E</strong></td></tr>
-<tr><td><code>cargo test</code></td><td style="text-align: right">59/59</td><td style="text-align: right">59/59</td></tr>
-<tr><td><code>--features emit-asm</code>（BOP 再定義なし）</td><td style="text-align: right">—</td><td style="text-align: right"><strong>バイト単位で同一</strong></td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="step-1-が露出させたもの--ruby-実装ビルトインの脆さ--解決済み1135"><a class="header" href="#step-1-が露出させたもの--ruby-実装ビルトインの脆さ--解決済み1135">Step 1 が露出させたもの — Ruby 実装ビルトインの脆さ — <strong>解決済み（#1135）</strong></a></h3>
-<blockquote>
-<p><strong>注</strong>: 本節は問題の記述である。最後に解決の記録を足してある。</p>
-</blockquote>
-<p>再定義が<strong>実際に効くようになった</strong>結果、monoruby が Ruby で書いている
-ビルトイン（<code>builtins/*.rb</code>、約 9,000 行）がその再定義を踏むようになった。</p>
+<p><code>fib(29)</code>（release、x86-64）で測ると、<code>fib</code> が使わない演算子
+（<code>Float#+</code>、<code>Integer#~</code> / <code>#|</code> / <code>#*</code>、<code>Array#[]</code>）を再定義しても実行時間は
+再定義なしと同じ（0.009 s）で、CRuby（0.051 s）でも同様に影響が無い。
+<code>fib</code> 自身が使う演算子を再定義した場合は、その演算だけがメソッド呼び出しになる。</p>
+<h2 id="5-refinements"><a class="header" href="#5-refinements">5. refinements</a></h2>
+<p>refinement による無効化は <code>refined_set</code> に入り、<code>globally_redefined_set</code> とは
+分けて記録する。JIT は 2 段で問う（<code>JitContext::assume_basic_op</code>）。</p>
+<ol>
+<li>グローバルな再定義なら、どのスコープも逃れられないので inline しない。</li>
+<li>refinement 由来なら、<strong>コンパイル中のスコープの refinement set が実際に
+その組を解決し直すか</strong>だけを問う（<code>basic_op_refined_in_scope</code>）。refine
+していないスコープ（refine しないプログラムの全スコープを含む）は inline
+を維持する。</li>
+</ol>
+<p>判定は「set のエントリのうち当該クラスを refine するものを辿り、その
+refinement モジュール（と ancestors）が当該名を持つか」で行い、クラス表しか
+触らない（コンパイル中は <code>CODEGEN</code> を <code>borrow_mut</code> しているので、メソッド
+キャッシュを経由する解決は使えない）。判定は意図的に広めに倒してある。迷ったら
+実呼び出しにするのは常に健全である。VM の asm ガードは呼び出し地点の文脈を
+持たないグローバル語なので粗いままで、正しさはディスパッチが担保する。</p>
+<p>呼び出しサイトの解決は「いま実行中のフレームが書いたスコープ」
+（<code>Executor::site_refinements</code>）で行い、ネイティブフレームと Ruby 製コアの
+フレームは常に refinement なしになる（<code>doc/refinements.md</code> §6.10）。</p>
+<h2 id="6-ruby-で書いたビルトインと再定義"><a class="header" href="#6-ruby-で書いたビルトインと再定義">6. Ruby で書いたビルトインと再定義</a></h2>
+<p>monoruby はコアの一部を Ruby で書いている（<code>builtins/*.rb</code>）。CRuby では
+C なので再定義の届かないコードが、ここでは届きうる。</p>
 <pre><code class="language-ruby">class Integer; def &lt;(o); :OV; end; end
 [1, 2, 3].map { |x| x * 2 }
-#   CRuby    =&gt; [2, 4, 6]        (Array#map は C)
-#   monoruby =&gt; NoMethodError    (array.rb の `while i &lt; size` が壊れる)
+#   CRuby =&gt; [2, 4, 6]  (Array#map は C)
 </code></pre>
-<p><code>Integer.remove_method(:&lt;)</code> はさらに露骨で、<code>Comparable#&lt;</code>（<code>comparable.rb</code>）が
-<code>res &lt; 0</code> で自分自身に再帰し StackOverflow になる。CRuby の <code>Comparable#&lt;</code> は
-C なのでディスパッチしない。</p>
-<p>これは <strong>Step 1 が作った欠陥ではなく、Step 1 が可視化した既存の構造的弱点</strong>で
-ある。変更前は再定義そのものが無視されていたので、ユーザのコードでも
-ビルトインでも一様に「元の演算子」が使われ、辻褄だけは合っていた。</p>
-<p>トレードオフを正直に言えば、Step 1 は「<code>1 &lt; 2</code> が誤答」を「<code>1 &lt; 2</code> は正答だが
-<code>Array#map</code> が壊れる」に置き換えた。前者はサイレント、後者はラウド。
-<code>cargo test</code> と ruby/spec には影響が無い（どちらも組み込みクラスの演算子を
-再定義しない）ため実害は測定されていないが、<strong>基本演算を monkey patch する
-実プログラムは動かない</strong>。</p>
-<p>塞ぐには、<code>builtins/*.rb</code> の演算子をビルトインに束縛する（＝ CRuby が C で
-書くことで無料で得ている性質を明示的に作る）必要がある。粒度とは独立の課題
-なので Step 2 の前提ではないが、Step 1 の帰結として記録しておく。</p>
-<h4 id="解決1135"><a class="header" href="#解決1135">解決（#1135）</a></h4>
-<p>その束縛を入れた。<code>builtins/*.rb</code> 由来のフレームにはもともと 1 ビットが
-立っている（<code>Meta::set_internal_builtin</code>。<code>$~</code>/<code>$_</code> を持たせないためと、
-refinements を届かせないため —— 後者は #1066 で、<strong>まったく同じ理由</strong>で
-同じ判断をしている: 「<code>Array#map</code> 自身の <code>i += 1</code> はライブラリのコードで、
-CRuby では C だから refinement には見えない」）。再定義もそこに届かせない。</p>
-<p>読む場所は 3 つ:</p>
+<p><code>builtins/*.rb</code> 由来のフレームには <code>Meta::set_internal_builtin</code> の 1 ビットが
+立っており（<code>$~</code> / <code>$_</code> を持たせないためと、refinements を届かせないため）、
+再定義もそこに届かせない。読む場所は 3 つである。</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>場所</th><th>役割</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Executor::dispatch_redefined_op</code></td><td>VM ヘルパ（<code>*_values</code> 系）のガード。内部ビルトインのフレームからなら <code>_raw</code> へ落とす</td></tr>
-<tr><td><code>JitContext::resolve_basic_op</code></td><td>JIT の fast path 解決。生のメソッド表ではなく <strong>arm 時のスナップショット</strong>（<code>Store::basic_op_armed_func</code>）を引く</td></tr>
+<tr><td><code>Executor::dispatch_redefined_op</code></td><td>VM ヘルパのガード。内部ビルトインのフレームからなら <code>_raw</code> へ落とす</td></tr>
+<tr><td><code>JitContext::resolve_basic_op</code></td><td>JIT の fast path 解決。生のメソッド表ではなく arm 時のスナップショット（<code>Store::basic_op_armed_func</code>）を引く</td></tr>
 <tr><td><code>JitContext::basic_op_assumable</code></td><td>上で解決したものをガード無しで inline してよい、という licence</td></tr>
 </tbody>
 </table>
 </div>
-<p>VM 側だけでは直らない。JIT は <code>jit_check_method</code> で <code>Integer#+</code> を<em>生の</em>
-メソッド表から引き、再定義後はユーザのメソッドに解決して inline generator を
-失う —— つまり <code>basic_op_assumable</code> に到達すらしない。スナップショット解決が
-その半分である。</p>
-<p><strong>差分スイープ（8 種の再定義 × 28 プローブ = 224 セル、CRuby 4.0.2 と比較）</strong>:
-CRuby と異なるセルが <strong>30 → 1</strong>。</p>
-<p>残る 1 セルは <code>Integer#&lt;</code> を再定義したときの <code>5.times</code>: CRuby は <code>[]</code> を返す。
-<strong>CRuby の <code>Integer#times</code> も Ruby で書かれている</strong>ためである。推定ではなく
-CRuby 自身に吐かせた:</p>
-<pre><code>$ ruby -e 'p Integer.instance_method(:times).source_location'
-["&lt;internal:numeric&gt;", 255]        # upto / Array#each は nil（= C）
-</code></pre>
-<p>その iseq の逆アセンブル（ループ本体）:</p>
-<pre><code>0020 getlocal_WC_0   i
-0022 invokeblock     &lt;argc:1&gt;                        # yield i
-0025 getlocal_WC_0   i
-0027 opt_succ        &lt;calldata!mid:succ, argc:0&gt;     # i = i.succ
-0029 setlocal_WC_0   i
-0031 getlocal_WC_0   i
-0034 opt_lt          &lt;calldata!mid:&lt;, argc:1&gt;        # while i &lt; self
-0036 branchif        20
-</code></pre>
-<p><code>+</code> を呼ぶ箇所が無いので <code>Integer#+</code> の再定義は届かない。<code>succ</code> と <code>&lt;</code> は実際に
-呼んでいるので届く —— <code>opt_succ</code> / <code>opt_lt</code> は BOP 高速命令だが、再定義されれば
-<code>BASIC_OP_UNREDEFINED_P</code> が落ちて本物のディスパッチに戻る。monoruby が Step 1 以降
-踏んでいたのとまったく同じ構造である。裏取りとして <code>succ</code> を <code>self + 2</code> に再定義
-すると CRuby の <code>times</code> は <code>[0, 2, 4]</code> を返す。</p>
-<p>monoruby は <code>+</code> / <code>&lt;</code> / <code>succ</code> のいずれに対しても免疫になった。CRuby の同種の
-瑕疵をわざわざ再現しない、という判断である。</p>
-<h4 id="将来の選択肢--intrinsic-による粒度の精密化見送り"><a class="header" href="#将来の選択肢--intrinsic-による粒度の精密化見送り">将来の選択肢 — intrinsic による粒度の精密化（見送り）</a></h4>
-<p>フレーム単位の束縛は「このファイルの演算子は全部ビルトイン束縛」としか言えず、
-<strong>ライブラリ自身の帳簿</strong>（<code>i += 1</code>）と<strong>呼び出し側のための演算</strong>（<code>sort</code> の
-<code>&lt;=&gt;</code>）を区別できない。区別は今のところ手作業で保っている
-（<code>EqSearch::new</code> と <code>op/sort.rs</code> は意図的に束縛の外）。</p>
-<p>原理的に正しいのは issue #1135 が第一候補として挙げた方向 ——
-<code>__add</code> / <code>__lt</code> のような<strong>再定義されない内部呼び出し</strong>を導入し、
-1 箇所ずつ明示する。実装するなら「本物のメソッド」ではなく
-<strong>bytecodegen が名前を認識して通常の <code>BinOp</code> 命令に落とす</strong>形にすること。
-本物のメソッドにすると VM 階層の演算子高速路を失う（<code>i += 1</code> → <code>i.succ</code> で
-増分が実測 1.8 倍）。名前を「再定義チェックを外す印」として使い命令自体は
-同じにすれば、性能は不変になる。</p>
-<p><strong>規模（実測）</strong>:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right"></th></tr>
-</thead>
-<tbody>
-<tr><td>CRuby のコアメソッドのうち Ruby 実装</td><td style="text-align: right">74 / 1061（7%）</td></tr>
-<tr><td>— うちループを回すもの</td><td style="text-align: right"><code>Integer#times</code> のみ</td></tr>
-<tr><td><code>builtins/*.rb</code> の演算子使用</td><td style="text-align: right">約 1,058 箇所 / 11,217 行</td></tr>
-<tr><td>— うちループ帳簿（<code>+= 1</code> / <code>-= 1</code> / <code>while … &lt;</code>）</td><td style="text-align: right">約 150（機械的）</td></tr>
-<tr><td>— 残り（<code>==</code> 199, <code>&lt;</code> 168, <code>&lt;=&gt;</code> 43 …）</td><td style="text-align: right">約 900（1 件ずつ判断が要る）</td></tr>
-</tbody>
-</table>
-</div>
-<p>CRuby 側が C なのは 93% なので「CRuby が C のものだけ intrinsic 化」は事実上
-ほぼ全部が対象になる。そして残り約 900 箇所の多くは呼び出し側の値を比較して
-おり、<strong>intrinsic 化してはいけない</strong> —— 判断を誤ると今回のバグと逆向きに、
-同じくサイレントに壊れる。</p>
-<p>したがって一度に移行はしない。<strong>フレーム単位の束縛を既定の安全側とし、粒度が
-粗すぎて実害が出た箇所から漸進的に intrinsic 化する</strong>方針とする（2026-09、
-#1362 のレビューで決定）。なお CRuby との完全一致だけが目的なら、intrinsic
-より安い道がある —— Ruby 実装側の 74 件を束縛から除外する方向で、<code>Integer#times</code>
-なら「印から除外」＋「増分を <code>i.succ</code> に変更」の 2 箇所で <code>+</code> / <code>&lt;</code> / <code>succ</code> の
-3 セルとも一致する。こちらも採らない（CRuby の瑕疵の再現になるため）。</p>
-<h3 id="step-2a--vm-を-クラス-粒度にする--実装済み"><a class="header" href="#step-2a--vm-を-クラス-粒度にする--実装済み">Step 2a — VM を (クラス) 粒度にする — <strong>実装済み</strong></a></h3>
-<p><strong>鍵になった観測</strong>: VM の asm fast path は<strong>すべて fixnum 限定</strong>である。
-<code>vm_binops_opt</code> / <code>vm_cmp_opt!</code> / <code>vm_neg</code> … はどれも
-<code>guard_rdi_rsi_fixnum</code> / <code>guard_rdi_fixnum</code> で始まり、fixnum でないオペランドは
-必ず Rust ヘルパ（<code>add_values</code>、<code>cmp_lt_values</code>、<code>eq_values_vis</code>、<code>not_value</code>、
-<code>get_index</code> …）に落ちる。</p>
-<p>したがって:</p>
+<p>CRuby 自身にも Ruby で書かれたコアメソッドがあり、<code>Integer#times</code> は
+<code>&lt;internal:numeric&gt;</code> のループで <code>succ</code> と <code>&lt;</code> を呼ぶ。そのため CRuby では
+<code>Integer#&lt;</code> を再定義すると <code>5.times</code> が <code>[]</code> を返すが、monoruby の
+<code>Integer#times</code> はこの再定義の影響を受けない。CRuby のこの瑕疵は再現しない。</p>
+<p>フレーム単位の束縛は「このファイルの演算子は全部ビルトイン束縛」としか
+言えず、ライブラリ自身の帳簿（<code>i += 1</code>）と呼び出し側のための演算（<code>sort</code> の
+<code>&lt;=&gt;</code>）を区別できない。区別は手作業で保っている（<code>EqSearch::new</code> と
+<code>op/sort.rs</code> は意図的に束縛の外）。より細かい手段として、<code>__add</code> / <code>__lt</code> の
+ような再定義されない内部呼び出しを bytecodegen が通常の <code>BinOp</code> 命令に落とす
+方式（intrinsic）がありうるが、<code>builtins/*.rb</code> の演算子約 1,000 箇所の多くは
+呼び出し側の値を比較しており、intrinsic にしてはいけない。フレーム単位の
+束縛を既定の安全側とし、実害が出た箇所から漸進的に intrinsic にする方針を
+とる（#1362 のレビューで決定）。</p>
+<h2 id="7-"><a class="header" href="#7-">7. <code>!=</code></a></h2>
+<p>CRuby にはどのクラスにも固有の <code>!=</code> がなく、あるのは <code>!(a == b)</code> を計算する
+<code>BasicObject#!=</code>（<code>rb_obj_not_equal</code>）だけである。monoruby も同じで、
+高速パスは次の形で持つ。</p>
 <ul>
-<li><strong>Integer の再定義</strong> → asm が無効になる → ディスパッチ表の差し替えが要る。</li>
-<li><strong>それ以外のクラス</strong>（Float / String / Symbol / nil / true / false / Complex /
-Array / Hash）→ <strong>asm は書かれたとおり正しいまま</strong>。無効になるのは Rust
-ヘルパのそのクラス用アームだけなので、<strong>ディスパッチ表に触る必要がない</strong>。</li>
-</ul>
-<p>実装は 2 点だけ。</p>
-<ol>
-<li><code>BasicOpTable</code> が「何が再定義されたか」を持つ（<code>redefined_set</code> と
-<code>integer_redefined</code>）。<code>Store::set_bop_redefine</code> は <strong>Integer が初めて
-再定義されたときだけ</strong> <code>remove_vm_bop_optimization()</code> を呼ぶ。</li>
-<li>ネイティブに答える Rust ヘルパが、そのアームに入る前に
-<code>basic_op_redefined_for(受け手のクラス, 演算子名)</code> を確認する。
-グローバル bool で門番しているので、<strong>再定義しないプログラムの追加コストは
-bool 1 個</strong>（しかも呼び出し自体が既に C-ABI）。</li>
-</ol>
-<p>対象ヘルパ: <code>binop_values!</code>（add/sub/mul）、手書きの <code>div_values</code> /
-<code>rem_values</code> / <code>pow_values</code> / <code>shl_values</code> / <code>shr_values</code>、<code>cmp_values!</code>
-（lt/le/gt/ge）、<code>eq_values_vis</code>、<code>cmp_teq_values_impl</code>、<code>not_value</code> /
-<code>neg_value</code> / <code>pos_value</code> / <code>bitnot_value</code>、<code>get_index</code> / <code>set_index</code>。
-（<code>!=</code> は <code>custom_neq</code> が既にメソッド表を引くので変更不要。）</p>
-<p><strong>結果（<code>fib(29)</code> × 3、実測）:</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>条件</th><th style="text-align: right">Step 1 まで</th><th style="text-align: right"><strong>Step 2a</strong></th></tr>
-</thead>
-<tbody>
-<tr><td>baseline（JIT）</td><td style="text-align: right">0.009</td><td style="text-align: right">0.009</td></tr>
-<tr><td><code>Float#+</code> 再定義後</td><td style="text-align: right">0.31</td><td style="text-align: right"><strong>0.030</strong></td></tr>
-<tr><td><code>String#==</code> 再定義後</td><td style="text-align: right">0.31</td><td style="text-align: right"><strong>0.031</strong></td></tr>
-<tr><td><code>Array#[]</code> 再定義後</td><td style="text-align: right">0.30</td><td style="text-align: right"><strong>0.030</strong></td></tr>
-<tr><td><code>Symbol#==</code> 再定義後</td><td style="text-align: right">0.30</td><td style="text-align: right"><strong>0.030</strong></td></tr>
-<tr><td><code>Complex#*</code> 再定義後</td><td style="text-align: right">0.31</td><td style="text-align: right"><strong>0.030</strong></td></tr>
-<tr><td>（参考）<code>--no-jit</code></td><td style="text-align: right">0.030</td><td style="text-align: right">0.030</td></tr>
-<tr><td>（参考）CRuby</td><td style="text-align: right">0.051</td><td style="text-align: right">0.051</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>再定義後の 0.030 は <code>--no-jit</code> の 0.030 と完全に一致する。</strong> つまり VM 側の
-劣化は完全に消え、残る 3.3 倍（0.009 → 0.030）は<strong>まるごと JIT の
-グローバル無効化</strong>である。これが Step 2b の対象。</p>
-<p>正しさは 257 ケースのスイープが 0 差分を維持、<code>cargo test</code> 59/59、core 全体
-スペックは 345F/218E → <strong>344F/218E</strong>、<code>--features emit-asm</code> は Step 1 前の
-master とバイト単位で同一のまま。</p>
-<h3 id="step-2c--vm-を-演算子-粒度にする--実装済み"><a class="header" href="#step-2c--vm-を-演算子-粒度にする--実装済み">Step 2c — VM を (演算子) 粒度にする — <strong>実装済み</strong></a></h3>
-<p>Step 2a の後も、<strong>Integer</strong> の再定義だけは依然としてディスパッチ表の一括差し替えを
-起こしていた。<code>Integer#~</code>（fib が一切使わない）を再定義するだけで
-<strong>0.013 → 0.33 s（25 倍、<code>--no-jit</code> の 7.6 倍悪い）</strong>。粒度がクラス単位までしか
-無かったためである。</p>
-<p><strong>解法はフラグをアセンブリから読ませること</strong> — CRuby インタプリタの
-<code>BASIC_OP_UNREDEFINED_P</code> と同じ配置。<code>VmBop</code> ごとに 1 ワードを JIT データ領域に
-置き（<code>Codegen::bop_flags</code>）、各 VM ハンドラが<strong>自分の fixnum ガードの直後</strong>で
-自分のワードを読む。非 0 なら inline 計算を諦めて generic パス（Rust ヘルパ）へ
-抜ける。</p>
-<p>ガードを持つのは asm の inline 計算を持つ 11 個だけ:
-<code>add sub eq ne lt le gt ge === +@ -@</code>。<code>~</code> と <code>!</code> は元々 inline 計算が無く、
-残りの binop（<code>* / % ** &lt;&lt; &gt;&gt; &amp; | ^</code>）は asm 高速路自体を持たず最初から Rust
-ヘルパ直行なので、Step 2a のペアチェックで足りる。</p>
-<p><strong>副産物として <code>_no_opt</code> 系が丸ごと不要になった。</strong> 差し替え先が要らなくなった
-ので、両アーキの VM <code>_no_opt</code> ハンドラ群と、<code>*_values_no_opt</code> /
-<code>*_value_no_opt</code> の Rust ヘルパ群（マクロごと）を削除した。
-<code>remove_vm_bop_optimization</code> は <code>dispatch[14]</code>（<code>loop_start</code>）だけを扱う
-<code>disable_vm_loop_jit</code> に縮小した — これは basic op ではなく JIT 無効化の話で、
-Step 2b の対象。</p>
-<p><strong>結果（<code>fib(29)</code> × 3、実測）:</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>条件</th><th style="text-align: right">Step 1</th><th style="text-align: right">Step 2a</th><th style="text-align: right"><strong>Step 2c</strong></th></tr>
-</thead>
-<tbody>
-<tr><td>baseline（JIT）</td><td style="text-align: right">0.009</td><td style="text-align: right">0.009</td><td style="text-align: right">0.009</td></tr>
-<tr><td><code>Float#+</code> 再定義後</td><td style="text-align: right">0.31</td><td style="text-align: right">0.030</td><td style="text-align: right">0.030</td></tr>
-<tr><td><code>Integer#~</code> 再定義後</td><td style="text-align: right">0.33</td><td style="text-align: right">0.33</td><td style="text-align: right"><strong>0.032</strong></td></tr>
-<tr><td>`Integer#</td><td style="text-align: right">` 再定義後</td><td style="text-align: right">0.33</td><td style="text-align: right">0.33</td></tr>
-<tr><td><code>Integer#*</code> 再定義後</td><td style="text-align: right">0.33</td><td style="text-align: right">0.33</td><td style="text-align: right"><strong>0.031</strong></td></tr>
-<tr><td>（参考）<code>--no-jit</code></td><td style="text-align: right">0.030</td><td style="text-align: right">0.030</td><td style="text-align: right">0.030</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>すべての再定義が <code>--no-jit</code> 相当に収まった。</strong> 残る 3.3 倍（0.009 → 0.030）は
-まるごと JIT のグローバル無効化＝ Step 2b。</p>
-<p><strong>ガードの実費（正直な数字）:</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>モード</th><th style="text-align: right">ガード無し</th><th style="text-align: right">ガード有り</th></tr>
-</thead>
-<tbody>
-<tr><td>通常（JIT）</td><td style="text-align: right">fib 0.0020 / loop 0.0131</td><td style="text-align: right">fib 0.0021 / loop 0.0137</td></tr>
-<tr><td><code>--no-jit</code>、算術飽和ループ（15 回交互、中央値）</td><td style="text-align: right">0.230</td><td style="text-align: right">0.246（<strong>+7%</strong>）</td></tr>
-</tbody>
-</table>
-</div>
-<p>通常モードでは min / median が一致し測定できない。VM 専用の合成ベンチでのみ
-約 7% で、その大半は asm ガードではなく Rust ヘルパ側の
-<code>basic_op_redefined()</code> 参照（<code>&amp; ^ |</code> を多用するため）と見られる。VM は通常
-ウォームアップ経路なので、10 倍の崖を消す対価として受け入れた。</p>
-<p><strong>フラグは 1 ワード・1 演算子 1 ビット。</strong> 当初は <code>VmBop</code> ごとに <code>data_i32</code> を
-1 語ずつ（11 語 44 バイト）確保していたが、これは CRuby の
-<code>ruby_vm_redefined_flag</code> がビットマップである理由をなぞり損ねていた。1 語
-（<code>data_i64</code>）にまとめ、<code>VmBop</code> は語の添字ではなくビット番号を意味するようにした。
-x86 は <code>cmpl [rip+f], 0</code> → <code>testq [rip+f], (1&lt;&lt;bit)</code>、aarch64 は
-<code>ldr w9/cbnz</code> → <code>ldr x9/tbnz #bit</code> で、<strong>どちらも命令数は不変</strong>。ガードが全部
-同じキャッシュラインに乗り、<code>bop_flags: Vec&lt;DestLabel&gt;</code> と <code>VmBop::COUNT</code> が
-消え、残る 53 ビットが Step 2b の <code>(op, class)</code> 用に空く。</p>
-<p><strong>Step 2a の取りこぼし — ガードを「実装」に置いてしまっていた。</strong>
-<code>add_values</code> などの共有ヘルパは <em>VM/JIT の generic パス</em>（メソッド探索を
-飛ばした呼び出し元）だけでなく、<strong>ビルトイン <code>Integer#+</code> の本体そのもの</strong>でも
-ある。ガードをその共有ヘルパの先頭に置いたため、</p>
-<pre><code class="language-ruby">class Integer; alias __orig :+; def +(o); __orig(o); end; end
-1 + 2   # =&gt; StackOverflow
-</code></pre>
-<p><code>__orig</code>（= 元のビルトイン）に入った時点でガードが再び発火し、名前 <code>+</code> で
-再ディスパッチして利用者の <code>+</code> に戻る、という無限再帰になっていた。CRuby が
-<code>BASIC_OP_UNREDEFINED_P</code> を命令側（<code>opt_plus</code>）に置き <code>rb_int_plus</code> には
-置かないのは、まさにこの理由である。</p>
-<p>修正は同じ形に揃えること — 実装を <code>*_values_raw</code> として無防備なまま残し、
-ガードは「探索を飛ばした呼び出し元のための入口」<code>*_values</code> に分離した。
-ビルトインの本体（<code>numeric.rs</code> の <code>binop!</code>/<code>unop!</code>、<code>integer.rs</code> の
-<code>cmpop!</code> と <code>% ** &lt;&lt; &gt;&gt;</code>、<code>float.rs</code> の比較と <code>==</code>）は <code>_raw</code> を呼ぶ。
-<code>Array#sum</code> や <code>Numeric#angle</code> のように<strong>探索せずに演算子を使う</strong>内部呼び出しは
-ガード付きのままでよい（CRuby も同じ位置で BOP を見る）。
-検出には alias スイープ（253 ケース）を使い、39 → 10 = master と同数・同一集合まで
-戻した。回帰テストは <code>aliasing_an_operator_before_redefining_it_does_not_recurse</code>。</p>
-<p><strong>この手法の再利用先 — TracePoint。</strong> 「JIT データ領域に 1 ワード置き、生成
-コードの決まった地点でそれを読んで分岐する」という形は basic op 固有ではなく、
-<em>実行中に切り替わりうるグローバルなスイッチ</em>全般に効く。次にこれを必要とする
-のは TracePoint（および <code>set_trace_func</code>）で、<code>line</code> / <code>call</code> / <code>return</code> /
-<code>b_call</code> などのイベントが有効かどうかを VM ハンドラが自前で判定できるように
-なる。</p>
-<p>CRuby はここでは別の道を採っていて、TracePoint 有効化時に iseq の命令列を
-<code>trace_*</code> 変種へ書き換える（<code>vm_trace_setup</code>）。無効時のコストが厳密に 0 に
-なる代わりに、命令ごとに並行するハンドラ集合を維持する必要がある — つまり
-Step 2c でちょうど削除した <code>_no_opt</code> 系と同じ構造の重複を、命令表全体に対して
-背負うことになる。フラグ読みは load + 分岐 1 個を払うが、上表の通り通常
-モードでは測定にかからず、ハンドラは 1 系統のままで済む。monoruby には
-こちらが合う。</p>
-<p>検証: 257 ケースのスイープ 0 差分（途中 <code>Integer#&amp; | ^</code> が 3 件後退した —
-これらは <code>int_binop_values!</code> という別マクロ由来でガードから漏れており、
-スイープが検出した）、<code>cargo test</code> 59/59、JIT の出力コードは
-バイト単位で同一（ページ内オフセットのみ 160 バイト移動）、core 全体スペックは
-344–345F / 218–219E で<strong>同一バイナリでも実行ごとにこの幅で振れる</strong>ため回帰なし。</p>
-<h3 id="step-2b--jit-を-invariant-単位にする--実装済み"><a class="header" href="#step-2b--jit-を-invariant-単位にする--実装済み">Step 2b — JIT を invariant 単位にする — <strong>実装済み</strong></a></h3>
-<p>Step 2c まで終えても、baseline 0.009 に対して<strong>あらゆる</strong>再定義が 0.030 に
-落ちていた。原因は 1 か所 — <code>set_bop_redefine</code> がプロセス内の <strong>全 iseq</strong> の
-JIT コードを一方向ラッチ (<code>jit_invalidated</code>) で恒久的に捨てていたこと。
-<code>Array#[]</code> を再定義しただけで <code>fib</code> の JIT が消える。</p>
-<p><strong>依存を記録して、該当分だけ捨てる。</strong> JIT がガード無しに basic op を仮定して
-いるのは、整数・浮動小数の算術／比較／定数畳み込みと単項演算だけである
-（<code>state/binop.rs</code> の <code>binop_integer</code> / <code>binop_float</code> / <code>gen_cmp_*</code> /
-<code>unop_integer_*</code> / <code>unop_float</code> — いずれも per-method の inline 生成器から
-呼ばれ、<code>fire_binary_inline</code> / <code>fire_unary_inline</code> が license を確認・記録
-する）。それ以外
-— メソッド呼び出しに落ちるものすべて — は<strong>既に class-version ガードで
-守られている</strong>（再定義は必ず class version を進める）。そこで:</p>
-<ol>
-<li><code>JitContext::assume_basic_op(class, op)</code> を inline 経路の入口に置き、
-<ul>
-<li>再定義済みなら <code>false</code> を返して<strong>その演算だけ</strong>通常のメソッド呼び出しへ
-降格する。だから再定義後に再コンパイルしても
-健全で、しかも<strong>他の演算子の inline は保たれる</strong>。</li>
-<li>まだビルトインなら <code>true</code> を返しつつ <code>(class, op)</code> を記録する。</li>
-<li>（現在は binop/cmp のディスパッチが inline 生成器経由
-（<code>fire_binary_inline</code>）になり、純検査 <code>basic_op_assumable</code> +
-生成器成功時のみの <code>record_bop_dep</code> に分離されている。融合
-compare-and-branch もこの経路で license を確認・記録する。）</li>
-</ul>
-</li>
-<li>記録は <code>jit_compile</code> → <code>ISeqInfo::bop_deps</code>（self class をまたいで union）。</li>
-<li><code>set_bop_redefine</code> は <code>evict_jit_code_for_bop(class, name)</code> で
-<strong>依存している iseq だけ</strong>を捨てる。x86 の entry 巻き戻しも同じ集合に限定。</li>
-<li><code>jit_invalidated</code> の意味を分離した。従来はフロントエンドの bail（恒久的に
-コンパイル不能）と「コードを捨てた」を同じフラグで表していた。前者は
-<code>invalidate_jit_code</code>、後者は<strong>回復可能な</strong> <code>evict_jit_code</code> とし、捨てた
-本体は次のウォームアップで再コンパイルされる。
-（実際には長らくそうなっていなかった: x86 は退避したメソッドの entry を
-<code>vm_entry</code> に戻していたが、<code>vm_entry</code> はウォームアップ stub を通らないので
-メソッド JIT が二度と再開せず、aarch64 も stub のカウンタが 0 のまま
-(以後 -1 から数え下ろす) だった。今は <code>Codegen::rearm_jit_stub</code> が
-wrapper のウォームアップ stub を entry の後ろに戻し、カウンタを
-<code>COUNT_START_COMPILE</code> に再装填する。回帰テストは
-<code>evicted_method_recompiles_with_the_redefined_operator</code>。）</li>
-<li><code>check_bop_redefine</code> の<strong>レベルトリガを解消</strong>（§1.3）。<code>bop_eviction_pending</code>
-を <code>set_bop_redefine</code> が立て、直後の <code>check_bop_redefine</code> が消費する。
-従来は sticky フラグを読んでいたため、一度どれかを再定義したプログラムでは
-<strong>以後すべての <code>def</code></strong> が制御フレーム鎖を全走査して、既にパッチ済みの
-return address を patch し直していた。</li>
-<li><code>AsmInst::CheckBOP</code> を<strong>世代比較</strong>にした。JIT データ語を「何か再定義された」
-フラグからカウンタに変え、コンパイル時の値を焼き込んで比較する
-（class-version ガードと同じ形）。従来は 0 比較の sticky だったので、
-一度でも再定義が起きるとコンパイル済みコード中の <code>def</code> 地点が永久に
-deopt し続けた。</li>
-</ol>
-<p><strong>結果（<code>fib(29)</code> × 3、実測）:</strong></p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>条件</th><th style="text-align: right">Step 2c</th><th style="text-align: right"><strong>Step 2b</strong></th></tr>
-</thead>
-<tbody>
-<tr><td>baseline（JIT）</td><td style="text-align: right">0.009</td><td style="text-align: right">0.009</td></tr>
-<tr><td><code>Float#+</code> 再定義後</td><td style="text-align: right">0.030</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td><code>Integer#~</code> 再定義後</td><td style="text-align: right">0.032</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td><code>Integer#|</code> 再定義後</td><td style="text-align: right">0.031</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td><code>Integer#*</code> 再定義後</td><td style="text-align: right">0.030</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td><code>Array#[]</code> 再定義後</td><td style="text-align: right">0.031</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td>（参考）<code>--no-jit</code></td><td style="text-align: right">0.030</td><td style="text-align: right">0.031</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>崖が消えた。</strong> <code>fib</code> が使わない演算子の再定義は<strong>完全に無料</strong>になった。</p>
-<p>検証: 再定義スイープ 257 件 0 差分、alias スイープ 253 件 10（master と同数・
-同一集合）、<code>cargo test</code> 全 59 スイート 0 失敗、aarch64 クロスチェック通過。
-回帰テストは <code>redefining_an_operator_a_compiled_method_inlined</code>（ウォーム済み
-JIT コードが使っている演算子を再定義しても正しい）と
-<code>redefining_an_unrelated_operator_leaves_compiled_code_alone</code>。</p>
-<h3 id="step-2b-2--osr-ループ本体も-iseq-単位にする--実装済み"><a class="header" href="#step-2b-2--osr-ループ本体も-iseq-単位にする--実装済み">Step 2b-2 — OSR ループ本体も iseq 単位にする — <strong>実装済み</strong></a></h3>
-<p>Step 2b の時点では、stale な本体が 1 つでも出ると <code>dispatch[14]</code>
-（<code>loop_start</code>）を no-opt に落としてプロセス全体のループ JIT を止めていた。
-コンパイル済みループ本体の codeptr はバイトコード内 <code>LoopStart</code> の
-<code>[pc+8]</code> に埋まっていて、他から辿る口が無かったためである。</p>
-<p><strong>そのオペランドを直接ゼロにすればよい。</strong> <code>evict_jit_code</code> が、捨てる iseq の
-バイトコードを走査して <code>LoopStart</code>（opcode 14）の <code>[pc+8]</code> をクリアする
-（<code>clear_loop_jit_entries</code>）。サイトは「まだコンパイルしていない」状態に戻り、
-次の周回で再コンパイルされる — 今度は再定義された演算子を inline せずに。</p>
-<p>オペランドは三値である点に注意: <code>0</code> = 未コンパイル、<code>1</code> = コンパイルが bail
-した恒久センチネル、それ以外が実エントリ。<strong>クリアするのは 3 番目だけ</strong>で、
-センチネルを戻すと bail するループが閾値を跨ぐたびに（失敗する高価な）
-コンパイルを再試行してしまう。<code>[pc+0]</code> のヒットカウンタは閾値のまま残すので、
-再ウォームアップを待たず次の周回で再コンパイルされる。</p>
-<p>これで <code>disable_vm_loop_jit</code> / <code>vm_loop_start_no_opt</code> は不要になり削除した。</p>
-<p><strong>結果（無関係なループ、3M 周 × 3）:</strong></p>
-<p><code>loop_mul</code> と <code>loop_add</code> を両方温めてから、<code>loop_mul</code> だけが使う
-<code>Integer#*</code> を（意味を変えずに）再定義し、<code>loop_add</code> を測る:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right"><code>loop_add</code>（無関係）</th></tr>
-</thead>
-<tbody>
-<tr><td>変更前</td><td style="text-align: right">0.027</td></tr>
-<tr><td><strong>変更後</strong></td><td style="text-align: right"><strong>0.006</strong></td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>4.5 倍。</strong> 無関係なループが巻き添えで OSR JIT を失うことは無くなった。</p>
-<h3 id="step-2b当初の計画記録として保存"><a class="header" href="#step-2b当初の計画記録として保存">Step 2b（当初の計画・記録として保存）</a></h3>
-<p><code>jit_invalidated</code> のグローバル一方向ラッチをやめ、「この iseq がどの
-(op, class) invariant に依存したか」を記録して該当分だけ無効化する。
-<code>InlineCacheEntry</code> と class-version ラベルという前例がある。あわせて
-<code>dispatch[14]</code>（<code>loop_start</code>）の no-opt 化とオンスタック始末
-（現 <code>chain_deopt</code>）のレベルトリガ（§1.3）もここで直す。</p>
-<h3 id="step-2--粒度を-演算子-クラス-へ性能"><a class="header" href="#step-2--粒度を-演算子-クラス-へ性能">Step 2 — 粒度を (演算子, クラス) へ（性能）</a></h3>
-<p><code>bop_redefined_flags: u32</code> を <strong>BOP ごとのワード × クラスビット</strong>に変える
-（CRuby と同型）。</p>
-<ul>
-<li><strong>VM</strong>: <code>_no_opt</code> への全面差し替えをやめ、各 fast path で該当ビットだけを
-テストする。fixnum パスに分岐 1 個を足すコストは、現状の 7.5 倍劣化に比べれば
-無視できる。</li>
-<li><strong>JIT</strong>: <code>jit_invalidated</code> のグローバル一方向ラッチをやめ、「この iseq が
-どの (op, class) invariant に依存したか」を記録して該当分だけ無効化する。
-<code>InlineCacheEntry</code> と class-version ラベルという前例がある。</li>
-<li><strong>オンスタック始末（現 <code>chain_deopt</code>）は残す</strong> — オンスタックのフレームを
-片付ける手段は粒度に関係なく必要である。ただし §1.3 の 2 性質を直す: 「フラグが非 0 か」の
-レベルトリガをやめて<strong>マスクのビットが 0→1 に遷移したときだけ</strong>走らせ
-（エッジトリガ）、走査対象もその (op, class) に依存したフレームに絞る。</li>
-<li>効果: 「無関係な <code>Float#+</code> の再定義で fib が 24 倍遅くなる」が消える。</li>
-</ul>
-<h3 id="step-3--refinements-の基本演算1066-実装済み"><a class="header" href="#step-3--refinements-の基本演算1066-実装済み">Step 3 — refinements の基本演算（#1066）— <strong>実装済み</strong></a></h3>
-<p>Step 1・2 を終えた時点で、残作業は<strong>ペアを記録することだけ</strong>だった。実験で
-確認できる: 意味を変えない再定義（<code>alias __p +; def +(o) = __p(o)</code>）で
-フラグ<em>だけ</em>を立てると、<code>refine Integer { def +(o) = 42 }</code> が VM・JIT とも
-CRuby と同じ 42 を返した。下流はすべて既に動いていた —
-<code>Executor::find_method</code> は refinement 対応、JIT は <code>assume_basic_op</code> が
-false を返して通常呼び出しへ降格し <code>jit_check_method</code> が
-<code>JitContext::refinements</code> の下で解決する。</p>
-<p>検知点は <code>refine</code> 側ではなく <code>insert_method</code> / <code>remove_method</code> に置いた。
-refinement のメソッドは refinement モジュール側の ClassId に入るので、
-<code>refined_class()</code> を引いて <code>(refined_class, name)</code> で照会する。この位置なら
-<code>def</code> / <code>define_method</code> / <code>alias</code> / <code>import_methods</code> を 1 箇所でカバーできる
-（Step 1 の「メソッド表を変更する全経路に検知点を置く」と同じ理由）。</p>
-<p><strong>必要だった前提修正 — ライブラリ境界。</strong>
-<code>Executor::frame_refinements</code> は monoruby が Ruby で書いたコアライブラリの
-フレームを<strong>透過</strong>して呼び出し側スコープまで歩く。これは <code>&amp;obj</code> の
-<code>to_proc</code> や補間の <code>to_s</code> のためで、CRuby がそれらを呼び出し側の iseq で
-行うのに対し monoruby は callee 側で行うため、透過しないと一致しない。</p>
-<p>ところが<strong>演算子はその種の変換ではない</strong>。<code>Array#map</code> 自身の <code>i += 1</code> は
-ライブラリのコードで、CRuby では C — どの refinement からも見えない。
-呼び出し側スコープで解決した結果、refine された <code>Integer#+</code> が 42 を返して
-<code>map</code> が 1 周で終了していた（<code>[1,2,3].map { |x| x*2 }</code> → <code>[2, nil, nil]</code>、
-<code>(1..3).sum</code> → 42）。</p>
-<p>そこで <code>find_method</code> が解決対象の<strong>名前</strong>で分岐するようにした:
-<code>BASIC_OP_DEFS</code> の演算子名ならライブラリ境界で歩みを止め、それ以外は
-従来どおり透過する。</p>
-<blockquote>
-<p><strong>その後（#1998, #2029）:</strong> この「名前で分岐」は廃止した。呼び出しサイトの
-解決は名前によらず「いま実行中のフレームが書いたスコープ」
-（<code>Executor::site_refinements</code>）で行い、ネイティブフレームと Ruby 製コアの
-フレームは常に refinement なしになる。<code>&amp;obj</code> の <code>to_proc</code> のように呼び出し
-側のために行う変換だけが、明示的に呼び出し側まで歩く
-（<code>Executor::ruby_level_refinements</code>）。<code>doc/refinements.md</code> §6.10 参照。</p>
-</blockquote>
-<h3 id="step-3b--jit-をスコープ単位にする--実装済み"><a class="header" href="#step-3b--jit-をスコープ単位にする--実装済み">Step 3b — JIT をスコープ単位にする — <strong>実装済み</strong></a></h3>
-<p>Step 3 直後はペアの記録がプロセス全体だったので、<code>refine</code> しただけで
-（<code>using</code> していないスコープでも）その演算子の inline を失っていた
-（<code>fib(29)</code> 0.009 → 0.034）。</p>
-<p><strong>「何が無効化したか」を分けて記録する。</strong> <code>BasicOpTable</code> の
-<code>redefined_set</code>（＝ fast path はもう無条件には健全でない、という和集合）を
-残したまま、内訳として <code>globally_redefined_set</code> と <code>refined_set</code> を持つ。
-<code>assume_basic_op</code> は 2 段で問う:</p>
-<ol>
-<li>グローバル再定義なら、どのスコープも逃れられないので inline しない。</li>
-<li>refinement 由来なら、<strong>コンパイル中のスコープの <code>RefinementSetId</code> が
-実際にそのペアを解決し直すか</strong>だけを問う（<code>basic_op_refined_in_scope</code>）。
-refine していないスコープ — refine しないプログラムの全スコープを含む —
-は inline を維持する。</li>
-</ol>
-<p>判定は「set のエントリのうち当該クラスを refine するものを辿り、その
-refinement モジュール（と ancestors）が当該名を持つか」で行う。当初は
-「set 有り／無しで解決して比較する」正確版を書いたが、無し側が
-<code>check_method_for_class</code> → メソッドキャッシュ → <code>Globals::class_version()</code> と
-辿って <strong>JIT コンパイル中に <code>CODEGEN</code> を borrow し panic した</strong>（コンパイル時は
-既に <code>borrow_mut</code> 中）。エントリ走査ならクラス表しか触らない。判定は
-意図的に広めに倒してある — 迷ったら実呼び出しにするのは常に健全で、逆は
-refinement が置き換えたはずの算術をそのまま出してしまう。</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>条件</th><th style="text-align: right">Step 3</th><th style="text-align: right"><strong>Step 3b</strong></th></tr>
-</thead>
-<tbody>
-<tr><td>baseline</td><td style="text-align: right">0.009</td><td style="text-align: right">0.009</td></tr>
-<tr><td><code>refine(Integer) { def + }</code> 後（using 外）</td><td style="text-align: right">0.034</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td><code>refine(Integer) { def ~ }</code> 後</td><td style="text-align: right">0.034</td><td style="text-align: right"><strong>0.009</strong></td></tr>
-<tr><td>（参考）グローバル再定義後</td><td style="text-align: right">0.032</td><td style="text-align: right">0.032</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>refine しただけのコストが消えた。</strong> VM 側の asm ガードは呼び出し地点の
-文脈を持たないグローバル語なので粗いまま（正しさは dispatch が担保する）。</p>
-<h3 id="step-4--mixin-経由の再定義1214-1219-実装済み"><a class="header" href="#step-4--mixin-経由の再定義1214-1219-実装済み">Step 4 — mixin 経由の再定義（#1214, #1219）— <strong>実装済み</strong></a></h3>
-<p>Step 1 で「メソッド表を変更する全経路に検知点を置く」と決めたが、経路が
-1 本抜けていた。<strong>モジュール経由</strong>である。</p>
-<pre><code class="language-ruby">module M
-  def +(o) = super(o) * 2
-end
-class Integer
-  prepend M
-end
-</code></pre>
-<p><code>insert_method</code> が受け取る <code>class_id</code> は <code>M</code> であって <code>Integer</code> ではない。
-表が記録しているペアは <code>(Integer, "+")</code> なので <code>contains(M, "+")</code> は false、
-何も立たず両ティアがビルトインを撃ち続けた。順序を入れ替えて
-<code>prepend</code> を先にしても同じ（定義そのものが走らない）。</p>
-<p>検知点は 2 つ:</p>
-<ul>
-<li><code>insert_method</code> → <code>check_mixed_in_basic_op(module_id, name)</code> —
-モジュールに後からメソッドが入った場合</li>
-<li><code>append_features</code> / <code>prepend_features</code> → <code>check_mixin_basic_ops(module)</code> —
-すでにメソッドを持つモジュールが後から差し込まれた場合</li>
-</ul>
-<p><strong>罠 — 「モジュールがその名前を定義しているか」は問いとして間違っている。</strong>
-最初の実装はこう書いた:「<code>name</code> が BOP 名で、かつ <code>module_id</code> が基本演算
-クラス <code>C</code> の祖先にあるなら <code>(C, name)</code> を再定義済みにする」。これは
-<strong>ユーザコードの <code>include Comparable</code> ひとつでプロセス中の整数 fast path が
-全滅する</strong>。<code>Comparable</code> は <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code> <code>==</code> を定義しており、
-<code>Integer</code> はブートストラップ以来それを include している。つまり
-「祖先のモジュールがその名前を定義している」は<em>どんなプログラムでも常に真</em>
-で、一方 <code>Integer</code> 自身の <code>&lt;</code> はルックアップで勝ち続けるので<strong>実際には何も
-変わっていない</strong>。</p>
-<p>正しい問いは「<strong>そのクラスは今もビルトインに解決するか</strong>」である。
-<code>arm_basic_ops</code> が起動時に全ペアの解決先 <code>FuncId</code> をスナップショットし
-（<code>BasicOpTable::armed_funcs</code>）、mixin 検知はそれと現在の解決先を比較する。
-<code>Integer.prepend M</code>（M が <code>+</code> を持つ）なら解決先が動くので立ち、
-<code>class Foo; include Comparable; end</code> なら動かないので立たない。</p>
-<p><strong>実測（yjit-bench <code>lee</code>, x86-64）。</strong> この誤検知は 1 回の <code>include</code> で
-<code>Integer#&lt; &lt;= &gt; &gt;= == != === &lt;=&gt; !</code>、<code>Float</code>・<code>String</code>・<code>Symbol</code> の同種、
-計 27 ペアを恒久的に落とした。<code>lee</code> は <code>require "json"</code> の過程で
-<code>Comparable</code> を include するため直撃した:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">median</th></tr>
-</thead>
-<tbody>
-<tr><td>誤検知の前（<code>037a720</code>）</td><td style="text-align: right">512 ms</td></tr>
-<tr><td>誤検知の入った master（<code>21ed6aa</code>）</td><td style="text-align: right">1728 ms</td></tr>
-<tr><td>解決先比較を入れた後</td><td style="text-align: right">520 ms</td></tr>
-</tbody>
-</table>
-</div>
-<p>CI の履歴では amd64 が 478 ms → 1550 ms（YJIT 比 1.48x → 0.44x）、
-arm64 は 400 秒のタイムアウトに達した。</p>
-<p>回帰テストは <code>basic_op.rs</code> の
-<code>a_mixin_that_displaces_nothing_keeps_the_basic_ops</code> /
-<code>a_prepend_that_displaces_the_builtin_retires_its_pair</code>。前者は「何も
-落ちない」ことを、後者は「落ちるべきものは落ちる」ことを表の状態に対して
-直接主張する — 値の比較では、fast path が消えても答えは正しいままなので
-検出できない。</p>
-<h3 id="step-5---を継承ペアにする1938-1964-1967-実装済み"><a class="header" href="#step-5---を継承ペアにする1938-1964-1967-実装済み">Step 5 — <code>!=</code> を継承ペアにする（#1938, #1964, #1967）— <strong>実装済み</strong></a></h3>
-<p>CRuby にはどのクラスにも固有の <code>!=</code> がない。あるのは <code>BasicObject#!=</code>
-（<code>rb_obj_not_equal</code>）だけで、<code>!(a == b)</code> を計算する。monoruby は
-<code>Integer</code> / <code>Float</code> / <code>String</code>（basic op）と <code>Symbol</code> / <code>Rational</code> /
-<code>Complex</code> / <code>Struct</code> / <code>Data</code> に固有の <code>!=</code> を持っていたため、
-<code>x.method(:!=).owner</code> が違い、<code>==</code> を再定義しても <code>!=</code> が追随しなかった
-（<code>Integer</code> では VM の fixnum 高速パスと JIT のインライン展開が、他では
-ビルトイン自身が <code>==</code> を呼ばずに答えていた）。</p>
-<p>固有の <code>!=</code> は全て削除した。高速パスは次の形で残る。</p>
-<ul>
-<li>表には <code>(Integer|Float|String, "!=")</code> を<strong>継承ペア</strong>として残す
+<li>表には <code>(Integer|Float|String, "!=")</code> を<strong>継承ペア</strong>として置く
 （<code>Integer#!</code> と同じく、クラス自身にエントリは無い）。このペアが許可する
-のは「そのクラスに対する <code>BasicObject#!=</code> のインライン形」— VM の fixnum
-比較と、JIT の <code>object::object_ne</code> — である。</li>
-<li>インライン形はビルトインの <code>==</code> を前提にするので、<strong>そのクラスの <code>==</code> の
-グローバルな再定義は <code>!=</code> のペアも一緒に落とす</strong>
-（<code>Store::set_bop_redefine</code>）。refinement による <code>==</code> の差し替えは連動
-させない。<code>rb_obj_not_equal</code> は C で、<code>==</code> を <code>rb_funcall</code> で呼ぶので、
-refinement された <code>==</code> は見えないからである（#1967。実行時は
-<code>Executor::eq_values_funcall</code>、JIT は <code>JitContext::funcall_eq</code>）。</li>
-<li><code>BasicObject#!=</code> の生成器 <code>object_ne</code> は受け手のクラスで分岐する:
-<code>==</code> が <code>BasicObject#==</code> / <code>Symbol#==</code> ならワード比較、<code>Integer#==</code> /
-<code>Float#==</code> なら数値比較（<code>integer_cmp_inline</code> / <code>float_cmp_inline</code>）、
+のは「そのクラスに対する <code>BasicObject#!=</code> のインライン形」、つまり VM の
+fixnum 比較と JIT の <code>object::object_ne</code> である。</li>
+<li>インライン形はビルトインの <code>==</code> を前提にするので、そのクラスの <code>==</code> の
+グローバルな再定義は <code>!=</code> のペアも一緒に落とす（<code>Store::set_bop_redefine</code>）。
+refinement による <code>==</code> の差し替えは連動させない。<code>rb_obj_not_equal</code> は
+<code>==</code> を <code>rb_funcall</code> で呼ぶので、refinement された <code>==</code> は見えないからである
+（実行時は <code>Executor::eq_values_funcall</code>、JIT は <code>JitContext::funcall_eq</code>）。</li>
+<li><code>object_ne</code> は受け手のクラスで分岐する。<code>==</code> が <code>BasicObject#==</code> /
+<code>Symbol#==</code> ならワード比較、<code>Integer#==</code> / <code>Float#==</code> なら数値比較、
 <code>String#==</code> なら定数との比較（<code>string_ne_gen</code>）。クラスバージョンガード
-付きの呼び出し経路から入った場合は「<code>==</code> の解決先」を salvage 用に
-記録する（<code>JitContext::assume_funcall_eq</code>）。</li>
-<li><code>:performance</code> 警告は <code>!=</code> のペアには出さない。CRuby に <code>!=</code> の basic
-op は無く（<code>opt_neq</code> は <code>BOP_EQ</code> に乗る）、<code>Integer#!=</code> を定義しても何も
-言わない。<code>Integer#==</code> の再定義で出る警告は <code>==</code> の 1 行だけになる。</li>
+付きの経路から入った場合は <code>==</code> の解決先を salvage 用に記録する
+（<code>JitContext::assume_funcall_eq</code>）。megamorphic なサイトの即値ビット比較
+（<code>opt_eq_assumable</code>）は、<code>!=</code> のペアを持たない <code>Symbol</code> / <code>NilClass</code> /
+<code>TrueClass</code> / <code>FalseClass</code> について <code>!=</code> が <code>BasicObject#!=</code> に解決する
+ことを確かめて記録する。</li>
+<li><code>:performance</code> 警告は <code>!=</code> のペアには出さない（CRuby に <code>!=</code> の basic op は
+無く、<code>opt_neq</code> は <code>BOP_EQ</code> に乗る）。</li>
 </ul>
-<p>megamorphic なサイトの即値ビット比較（<code>opt_eq_assumable</code>）は、<code>!=</code> のペアを
-持たない 4 クラス（<code>Symbol</code> / <code>NilClass</code> / <code>TrueClass</code> / <code>FalseClass</code>）に
-ついて「<code>!=</code> が <code>BasicObject#!=</code> に解決する」ことを確かめて記録する（#1965）。</p>
 <p>インライン形を持たない <code>==</code>（<code>Struct</code> / <code>Array</code> / <code>Hash</code> / <code>Rational</code> …）は
 <code>BasicObject#!=</code> の本体が呼ぶ。クラスごとのメモ（<code>ClassInfo::eq_method_at</code>、
-<code>Store::funcall_eq_entry</code>）が <code>==</code> の解決先を持ち、それが引数 1 個のネイティブ
-メソッドなら入口アドレスと <code>Meta</code> も持つ。<code>!=</code> のフレームは受け手と引数が
-そのまま <code>==</code> の欲しい形なので、<strong><code>==</code> を <code>!=</code> 自身のフレームで実行する</strong>
-（<code>Executor::default_ne_in_frame</code>、<code>Lfp::become_frame_of</code>）。invoker を通す
-2 枚目のフレームが要らず、固有の <code>!=</code> を持っていたクラスのコスト増は半分以下に
-なり、もともと <code>BasicObject#!=</code> 経由だった <code>Array</code> / <code>Range</code> などは master より
-速い（<code>Array</code> で −33%）。実行中フレームの <code>Meta</code> は <code>==</code> のもので、戻ったら <code>!=</code>
-のものに戻すので、<code>==</code> の中から出た例外のバックトレースは CRuby と同じ
-<code>Struct#==</code> → <code>BasicObject#!=</code> の 2 行になる。</p>
-<h3 id="step-3-の当初計画記録として保存"><a class="header" href="#step-3-の当初計画記録として保存">Step 3 の当初計画（記録として保存）</a></h3>
-<p>Step 2 の (op, class) ビットマスクができれば、#1066 が要求する
-「refinement セットごとの BOP ビットマスク」はその自然な拡張になる。</p>
-<p>逆に、<strong>今の 1 ビット設計のままでは #1066 は実装できない。</strong> refinement は
-「このレキシカルスコープでだけ再定義」であって、グローバルビットとは意味が
-異なるためである。したがって <strong>#1066 の前提として Step 1・2 を先に行うべき</strong>で、
-順序を逆にすると設計をやり直すことになる。</p>
-<h3 id="検討した候補--hash--eql-を-bop-にする見送り"><a class="header" href="#検討した候補--hash--eql-を-bop-にする見送り">検討した候補 — <code>hash</code> / <code>eql?</code> を BOP にする（見送り）</a></h3>
-<p><code>Hash</code> / <code>Set</code> のルックアップは <code>hash</code> → <code>eql?</code> と連鎖するので、これらを BOP に
-すれば速くなるのではないか、という案。<strong>測定した結果、利得はゼロだった。</strong></p>
-<p>理由は BOP 表の性質そのものにある。表は「この仮定を置いてよい」という<em>許可</em>と
-<em>検知</em>であって、速度は「仮定を使う fast path」を書いて初めて出る。そして
-<code>hash</code> / <code>eql?</code> については <strong>その fast path が既にあり、無条件に効いている</strong> —
-<code>Value::hash_value</code>（当時は <code>Value::ruby_hash</code>）/ <code>Value::eql</code>（<code>value.rs</code>）が
-<code>ObjTy</code> で分岐して Rust 側で直接計算する:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>ネイティブ計算（ディスパッチ無し）</th></tr>
-</thead>
-<tbody>
-<tr><td><code>hash_value</code></td><td>Fixnum, Flonum, nil/true/false/Symbol, BigInt, Float, String, Array, Hash（Range は #2204 の修正から <code>Range#hash</code> を dispatch）</td></tr>
-<tr><td><code>eql</code></td><td>同一 id, 両方 immediate, BigInt, Float, Complex, String, Array, Range, Hash</td></tr>
-</tbody>
-</table>
-</div>
-<p>基本クラスのキーには消せるディスパッチが最初から無い。登録しても得るものは無く、
-グローバル崖のトリップワイヤが増えるだけである。正しさの穴も無い（<code>String#hash</code>
-を再定義しても Hash のバケッティング・<code>Array#hash</code> とも CRuby と一致する。CRuby
-も基本クラスのキーは <code>rb_str_hash</code> 等で直接計算する）。</p>
-<p>実測（各 300k 回ルックアップ）:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">monoruby</th><th style="text-align: right">CRuby</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Hash[String]</code></td><td style="text-align: right"><strong>0.014 s</strong></td><td style="text-align: right">0.028 s</td></tr>
-<tr><td><code>Hash[Symbol]</code></td><td style="text-align: right"><strong>0.011 s</strong></td><td style="text-align: right">0.016 s</td></tr>
-<tr><td><code>Hash[Integer]</code></td><td style="text-align: right">0.016 s</td><td style="text-align: right">0.014 s</td></tr>
-<tr><td><code>Hash[ユーザ定義 hash/eql?]</code></td><td style="text-align: right"><strong>0.030 s</strong></td><td style="text-align: right">0.100 s</td></tr>
-<tr><td><code>Set#include?</code></td><td style="text-align: right">0.016 s</td><td style="text-align: right">0.017 s</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>ただし派生案は有効。</strong> <code>hash</code> / <code>eql?</code> を定義していない素のオブジェクト
-（identity ハッシュ）は <code>ruby_hash</code> の <code>_</code> アームに落ち、<strong>ルックアップのたびに
-<code>Object#hash</code> へディスパッチしている</strong>。5 項目中ここだけ monoruby が負ける:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">monoruby</th><th style="text-align: right">CRuby</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Hash[素のオブジェクト]</code></td><td style="text-align: right">0.031 s</td><td style="text-align: right"><strong>0.023 s</strong></td></tr>
-<tr><td><code>Set#include?[素のオブジェクト]</code></td><td style="text-align: right">0.031 s</td><td style="text-align: right"><strong>0.024 s</strong></td></tr>
-<tr><td><code>obj.hash</code> 単体</td><td style="text-align: right"><strong>0.008 s</strong></td><td style="text-align: right">0.016 s</td></tr>
-</tbody>
-</table>
-</div>
-<p><code>obj.hash</code> 単体では monoruby が 2 倍速いので、差はハッシュ計算ではなく
-<strong>ルックアップ 1 回ごとのディスパッチ往復</strong>にある。<code>(Object, hash)</code> を表に入れ、
-<code>_</code> アームで「このクラスの <code>hash</code> はまだ <code>Object#hash</code> か」を確かめてから
-identity ハッシュを直接計算すれば省ける（<code>eql</code> 側は既に <code>id()</code> 比較で短絡済み）。</p>
-<p><strong>派生案 — 実装済み。</strong> <code>Value::ruby_hash</code> の <code>_</code> アーム（ディスパッチ経路）の
-手前に「このレシーバの <code>hash</code> はまだビルトインの <code>Kernel#hash</code> か」を問う
-アームを足し、そうなら <code>Kernel#hash</code> と同じ digest を直接計算する。</p>
-<p>判定は BOP 表ではなく <strong><code>FuncId</code> の比較</strong>にした。表は静的な <code>(クラス, 名前)</code>
-なので <code>(Object, hash)</code> を入れても <code>Object#hash</code> 自体の再定義しか捕まえられず、
-ユーザ定義クラスが自前の <code>hash</code> を持つ場合を取りこぼす。実際に必要なのは
-「このレシーバのクラスにおける <code>hash</code> の解決結果がビルトインか」で、これは
-<code>Store::check_method</code>（class-version キーのキャッシュ付き）1 回で答えられる。
-表に入れると <code>set_bop_redefine</code> が発火して JIT まで巻き添えにするので、
-むしろ有害だった。CRuby も <code>rb_any_hash</code> で同じ特別扱いをしている。</p>
-<p>実測（同一ベンチの A/B、300k 回ルックアップ）:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th style="text-align: right">変更前</th><th style="text-align: right"><strong>変更後</strong></th><th style="text-align: right">CRuby</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Hash[素のオブジェクト]</code></td><td style="text-align: right">0.050</td><td style="text-align: right"><strong>0.039</strong></td><td style="text-align: right">0.024</td></tr>
-<tr><td><code>Set#include?[素のオブジェクト]</code></td><td style="text-align: right">0.049</td><td style="text-align: right"><strong>0.038</strong></td><td style="text-align: right">0.026</td></tr>
-</tbody>
-</table>
-</div>
-<p><strong>22% 改善したが CRuby にはまだ届かない。</strong> 消えたのはディスパッチ往復だけで、
-残る差はハッシュ表の実装そのものにあると見られる（<code>obj.hash</code> 単体では
-monoruby が 2 倍速いままなので、digest の計算コストではない）。ここから先は
-BOP とは別の課題。</p>
-<p>正しさは CRuby と一致を確認 — 同一性による引き当て、<code>hash</code>/<code>eql?</code> を持つ
-クラスの値による引き当て、<strong>あとから <code>hash</code> を定義した場合の追随</strong>（fast path
-が外れる）、<code>Set</code> と <code>Array#hash</code> の digest 一貫性。</p>
-<h3 id="併せて検討するもの"><a class="header" href="#併せて検討するもの">併せて検討するもの</a></h3>
+<code>Store::funcall_eq_entry</code>）が <code>==</code> の解決先を持ち、それが引数 1 個の
+ネイティブメソッドなら、<code>==</code> を <code>!=</code> 自身のフレームで実行する
+（<code>Executor::default_ne_in_frame</code>、<code>Lfp::become_frame_of</code>）。実行中フレームの
+<code>Meta</code> は <code>==</code> のものに替え、戻ったら <code>!=</code> のものに戻すので、<code>==</code> の中から
+出た例外のバックトレースは CRuby と同じ <code>Struct#==</code> → <code>BasicObject#!=</code> の
+2 行になる。</p>
+<h2 id="8-hash--eql-は基本演算にしない"><a class="header" href="#8-hash--eql-は基本演算にしない">8. <code>hash</code> / <code>eql?</code> は基本演算にしない</a></h2>
+<p><code>Hash</code> / <code>Set</code> のルックアップは <code>hash</code> → <code>eql?</code> と連鎖するが、これらを表に
+入れても速くならない。表は「この仮定を置いてよい」という許可と検知であって、
+速度は仮定を使う fast path が出す。そして基本クラスのキーについては、
+<code>Value::hash_value</code> / <code>Value::eql</code>（<code>value.rs</code>）が <code>ObjTy</code> で分岐して Rust
+側で直接計算する fast path が既にあり、無条件に効いている。表に入れると
+<code>set_bop_redefine</code> が JIT まで巻き込むトリップワイヤが増えるだけである。</p>
+<p><code>hash</code> を定義していない素のオブジェクトについては、レシーバのクラスにおける
+<code>hash</code> の解決先がまだビルトインの <code>Kernel#hash</code> かを <code>FuncId</code> で比べ
+（<code>Store::check_method</code>、class-version キーのキャッシュ付き）、そうなら同じ
+digest を直接計算する。表は静的な <code>(クラス, 名前)</code> なので、ユーザ定義クラスが
+自前の <code>hash</code> を持つ場合を表では捕まえられない。CRuby も <code>rb_any_hash</code> で
+同じ特別扱いをしている。</p>
+<h2 id="9-cruby-の戦略との比較"><a class="header" href="#9-cruby-の戦略との比較">9. CRuby の戦略との比較</a></h2>
 <ul>
-<li><strong><code>-W:performance</code> 相当の警告</strong> — 実装は小さく、デバッグ価値は高い。現状の
-monoruby は完全に無言で 24 倍遅くなる。</li>
-<li><strong>Ruby 実装ビルトインの露出</strong>（§1.4 但し書き）— BOP とは別問題だが、Step 1 で
-誤答が減ると顕在化しやすくなるので、同時に把握しておく。</li>
+<li><strong><code>ruby_vm_redefined_flag[BOP_xxx]</code></strong> — BOP ごとに 1 ワード、その中のビットが
+クラス（<code>INTEGER_REDEFINED_OP_FLAG</code>、<code>FLOAT_…</code> …）。<code>vm_opt_method_defs</code>
+（<code>(クラス, メソッド名) → BOP</code>）を <code>rb_vm_check_redefinition_opt_method</code> が
+メソッドの追加・削除のたびに引く。</li>
+<li><strong>インタプリタ</strong> — <code>opt_plus</code> 等の中で、オペランドの型チェックの後に
+<code>BASIC_OP_UNREDEFINED_P(BOP_PLUS, INTEGER_REDEFINED_OP_FLAG)</code> を毎回検査する。</li>
+<li><strong>YJIT / ZJIT</strong> — <code>assume_bop_not_redefined()</code> で「その (class, bop) は
+未再定義」という invariant にコードブロックを登録し、再定義時はその
+invariant に依存するブロックだけを無効化する。</li>
+<li><strong>通知</strong> — <code>-W:performance</code> で警告を出す。</li>
 </ul>
-<h3 id="検討して採らなかった案"><a class="header" href="#検討して採らなかった案">検討して採らなかった案</a></h3>
-<ul>
-<li><strong>JIT にも実行時チェックを入れる（CRuby インタプリタ方式）</strong> — 定数畳み込みが
-できなくなる。invariant + 無効化を維持する。</li>
-<li><strong><code>jit_invalidated</code> を解除可能にする（再コンパイル許可）</strong> — 複雑な割に、
-Step 2 を行えば「そもそも無効化されない」ので不要になる。</li>
-<li><strong>basic op 登録をやめて全演算子をメソッド呼び出しにする</strong> — 正しさは得られるが、
-monoruby の性能特性そのものを捨てることになる。</li>
-</ul>
-<hr>
-<h2 id="6-受け入れ条件step-12-共通"><a class="header" href="#6-受け入れ条件step-12-共通">6. 受け入れ条件（Step 1・2 共通）</a></h2>
-<p><code>doc/refinements.md</code> で用いた手法をそのまま使う。</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>軸</th><th>CRuby</th><th>monoruby</th></tr>
+</thead>
+<tbody>
+<tr><td>表</td><td><code>vm_opt_method_defs</code></td><td><code>BASIC_OP_DEFS</code></td></tr>
+<tr><td>VM の検査</td><td>fast path 内のフラグ読み（BOP ごとの語 × クラスビット）</td><td>asm は Integer の演算子ごとのビット、Rust ヘルパは組の集合</td></tr>
+<tr><td>JIT</td><td>invariant + 依存ブロックの無効化</td><td><code>bop_deps</code> + 依存 iseq の evict、実行中フレームは chain deopt</td></tr>
+<tr><td>refinements</td><td>—</td><td>スコープ単位（§5）</td></tr>
+<tr><td>通知</td><td><code>-W:performance</code></td><td>同じ警告</td></tr>
+</tbody>
+</table>
+</div>
+<p>JIT に CRuby インタプリタ式の実行時チェックを入れる方式は採らない。いま
+効いている定数畳み込みとレジスタ常駐が成立しなくなるためである。</p>
+<h2 id="10-変更するときの確認"><a class="header" href="#10-変更するときの確認">10. 変更するときの確認</a></h2>
 <ol>
 <li><strong>コード生成の同一性</strong> — BOP 再定義を含まないワークロードで
 <code>--features emit-asm</code> の出力が変更前とバイト単位で一致すること。</li>
-<li><strong>差分テスト</strong> — §1.4 の 48 ケースが CRuby と一致すること（<code>Array#size</code> を除く）。</li>
-<li><strong>性能回帰なし</strong> — <code>fib</code> / optcarrot が baseline を維持すること。</li>
-<li><strong>Step 2 の効果</strong> — <code>Float#+</code> 再定義後の <code>fib</code> が baseline に戻ること
-（現状 0.51 s → 目標 0.022 s 近傍）。</li>
+<li><strong>差分テスト</strong> — 演算子の再定義スイープ（再定義 × プローブ）と alias
+スイープの結果が CRuby と一致すること。</li>
+<li><strong>性能</strong> — <code>fib</code> / optcarrot が baseline を維持し、無関係な演算子の
+再定義で <code>fib</code> が遅くならないこと。</li>
 </ol>
 
                     </main>

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,457 +177,209 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="polymorphic-call-サイトの最適化--設計メモ"><a class="header" href="#polymorphic-call-サイトの最適化--設計メモ">Polymorphic call サイトの最適化 — 設計メモ</a></h1>
-<p><strong>Kind</strong>: plan(第一歩の <code>nil?</code> 耐性ガードは実装済み・このブランチに同梱。
-一般化はここでの設計判断待ち)</p>
-<p>このメモは、ruby-bench の binarytrees / protoboeuf-encode 調査
-(String#<code>&lt;&lt;</code> インライン化・trailing-splat fast path は #1109 で master 入り)
-の過程で見つかった <strong>レシーバ多相なコールサイトの deopt 問題</strong> について、
-実測・実装済みの第一歩・残された設計空間をまとめたものである。</p>
+                        <h1 id="レシーバ多相なコールサイト"><a class="header" href="#レシーバ多相なコールサイト">レシーバ多相なコールサイト</a></h1>
+<p><strong>Kind</strong>: reference。レシーバのクラスが実行ごとに変わるコールサイトを JIT が
+どう扱うかをまとめる。観測（VM の多相検出と PMC）、消費（集合ガード、PIC、
+二項演算・<code>[]</code> の dispatch、generic send の残余）、残っている設計上の論点の
+順に述べる。</p>
+<p>自フレームの self クラスによる本体の切り替え（メソッド入口のクラス dispatch
+stub と megamorphic gate）は別の仕組みで、<code>docs/src/jit-compiler.md</code> と
+<code>codegen/class_dispatch.rs</code> を参照。</p>
 <hr>
-<h2 id="1-現状のコールサイト設計とその盲点"><a class="header" href="#1-現状のコールサイト設計とその盲点">1. 現状のコールサイト設計と、その盲点</a></h2>
-<p>JIT のメソッド呼び出しは <strong>monomorphic 前提</strong> で組み立てられている:</p>
-<ol>
-<li>VM がインラインキャッシュを温める(receiver class → FuncId)。</li>
-<li>JIT はキャッシュされた 1 クラスで <strong>レシーバクラスガード</strong> を発行し、
-ガードの内側で FuncId を確定させ、インライン生成器
-(<code>inline_info.get_inline</code>)か直接呼び出しへ落とす。</li>
-<li>ガード失敗は deopt。<code>BinCmp</code> サイトのみ、ミス回数が温まると
-<code>RecompileReason::BecamePolymorphic</code> で「多相対応版」へ再コンパイル
-する経路(Part B)がある。ふつうのメソッド呼び出しにはこれが無く、
-<strong>ガード失敗は永久に毎回 deopt</strong> する。</li>
-</ol>
-<p>盲点は「nil との二相」である。Ruby の慣用句はレシーバが nil かもしれない
-場所でこそメソッドを呼ぶ:</p>
-<pre><code class="language-ruby">return 1 if left.nil?        # left は Array か nil(binarytrees の item_check)
-limit = to unless to.nil?    # to は Numeric か nil(numeric.rb の step)
-step ||= 1
-if by == nil ...             # 同型の == バリアント
+<h2 id="1-背景-単相前提のガード"><a class="header" href="#1-背景-単相前提のガード">1. 背景: 単相前提のガード</a></h2>
+<p>JIT のメソッド呼び出しは、VM のインラインキャッシュ（receiver class →
+FuncId、1 エントリ）を元に組み立てる。キャッシュされたクラスでレシーバ
+クラスガードを発行し、ガードの内側で FuncId を確定させ、インライン生成器
+（<code>inline_info.get_inline</code>）か直接呼び出しへ落とす。単相のサイトではこれで
+十分だが、多相のサイトではガード失敗のたびに side exit する。</p>
+<p>典型は nil との二相である。Ruby の慣用句はレシーバが nil かもしれない
+場所でこそメソッドを呼ぶ。</p>
+<pre><code class="language-ruby">return 1 if left.nil?        # left は Array か nil（binarytrees の item_check）
+limit = to unless to.nil?    # to は Numeric か nil（numeric.rb の step）
+if by == nil ...
 </code></pre>
-<p>このため <code>nil?</code> / <code>== nil</code> サイトは <strong>設計上 50/50 で二相</strong> になり、
-毎回 deopt が観測された。</p>
-<h2 id="2-実測2026-08x86-64-linuxrelease"><a class="header" href="#2-実測2026-08x86-64-linuxrelease">2. 実測(2026-08、x86-64 Linux、release)</a></h2>
-<ul>
-<li>
-<p>binarytrees(#1109 適用後): <code>item_check</code> の <code>left.nil?</code> サイトで
-<strong>1 実行あたり 458 万回の deopt</strong>(<code>profile</code> フィーチャで観測。
-deopt ログは <code>POLYMORPHIC [NilClass]</code>)。</p>
-</li>
-<li>
-<p>マイクロベンチ(2^16 ノードの木 ×40 周、YJIT 比):</p>
+<p>二項演算子でも同じことが起きる。rubykon の <code>group_id_of(id) == captured.identifier</code> は左辺が <code>Array</code> の要素で、ヒットなら <code>Integer</code>、
+ミスなら <code>NilClass</code> になる。</p>
+<h2 id="2-vm-による多相の検出"><a class="header" href="#2-vm-による多相の検出">2. VM による多相の検出</a></h2>
+<p>VM は実行時に多相を検出し、バイトコードの <code>opcode_sub</code> バイトに書き込む。
+TraceIR はそれを <code>polymorphic</code> として読む。</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>変種</th><th>monoruby(修正前)</th><th>修正後(§3)</th><th>CRuby+YJIT</th></tr>
+<tr><th>経路</th><th>クラスの保存</th><th><code>opcode_sub</code> の検出</th></tr>
 </thead>
 <tbody>
-<tr><td><code>left.nil?</code></td><td>353ms</td><td><strong>64ms</strong></td><td>87ms</td></tr>
-<tr><td><code>left</code>(truthiness)</td><td>317ms</td><td>62ms</td><td>90ms</td></tr>
-<tr><td><code>left == nil</code></td><td>885ms</td><td><strong>489ms(未対策)</strong></td><td>193ms</td></tr>
+<tr><td>メソッド呼び出し slow path（<code>vmgen/method_call.rs</code>）</td><td>✓</td><td>✓</td></tr>
+<tr><td>binop / cmp generic（<code>vm_generic_binop</code> → <code>vm_save_binary_class</code>）</td><td>✓</td><td>✓</td></tr>
+<tr><td>binop / cmp fixnum fast path（<code>vm_save_binary_integer</code>）</td><td>上書きのみ</td><td>✗（多相サイトは必ず generic を通るので無害）</td></tr>
+<tr><td>unop generic（<code>vm_save_lhs_class</code> / <code>a64_save_lhs_class</code>）</td><td>✓</td><td>✓</td></tr>
+<tr><td>Index / StoreIndex（VM 命令内で <code>vm_save_binary_class</code> を流用）</td><td>✓</td><td>✓</td></tr>
 </tbody>
 </table>
 </div>
-</li>
-<li>
-<p>ベンチ全体: binarytrees 118ms → <strong>100ms</strong>(−15%)。</p>
-</li>
-<li>
-<p><code>== nil</code> が truthiness より 2.8 倍遅いのは、<code>==</code> サイトも同じ
-nil/非 nil 二相 deopt を踏んでいるからで、<strong>未回収の最大候補</strong>。</p>
-</li>
-</ul>
-<h2 id="3-第一歩として試作した-nil-専用の-nil-耐性ガード撤去済み"><a class="header" href="#3-第一歩として試作した-nil-専用の-nil-耐性ガード撤去済み">3. 第一歩として試作した <code>nil?</code> 専用の nil 耐性ガード(撤去済み)</a></h2>
-<blockquote>
-<p><strong>注</strong>: この節の <code>GuardClassOrNil</code> 実装は一度ブランチに入れたが、
-§7 の一般機構(観測クラス集合が単一 native FuncId に収束するサイトの
-<code>GuardClassIn</code>)が <code>nil?</code> サイトも吸収するため、<strong>PR からは撤去した</strong>。
-nil? は現在、集合ガード + 組み込み呼び出しとして扱われる。ガード後に
-値比較 1 命令へ畳む特化(このメモの元の §3 形)は、生成器の
-nil 安全 flag(§5.1)とセットで将来の最適化として残る。§3.3 の
-page 耐性修正だけは、集合ガードも同じ「state 未確定 → cold ブロックに
-Float unbox」経路を踏むため<strong>残している</strong>。以下は設計記録。</p>
-</blockquote>
-<p>このブランチに含まれる(master 未マージ)。構成は 3 点:</p>
-<h3 id="31-guardclassornilasmir--lir--両アーキ-lowering"><a class="header" href="#31-guardclassornilasmir--lir--両アーキ-lowering">3.1 <code>GuardClassOrNil</code>(AsmIR / LIR / 両アーキ lowering)</a></h3>
-<p>「レシーバが nil なら通過、そうでなければ従来のクラスガード」。
-nil ケースは比較 1 回+分岐 1 回で、deopt と違い定常コストがほぼ無い。</p>
-<pre><code>cmp  recv, NIL_VALUE
-jeq  nil_ok
-&lt;従来の guard_class(recv_class), 失敗は deopt&gt;
-nil_ok:
+<p>callsite はメソッド呼び出しのほか UnOp / BinOp / Cmp / Index / StoreIndex
+にもあり（<code>bytecodegen/encode.rs</code> の <code>new_callsite</code> +
+<code>new_callsite_map_entry</code>）、<code>IseqInfo::callsite_map</code> で <code>CallSiteInfo</code> に
+届く。例外は <code>RescueTEq</code> だけである（rescue 節のマッチ専用で IC を持たない）。</p>
+<h2 id="3-集合ガード--観測クラスが同じメソッドに解決するサイト"><a class="header" href="#3-集合ガード--観測クラスが同じメソッドに解決するサイト">3. 集合ガード — 観測クラスが同じメソッドに解決するサイト</a></h2>
+<p>観測したクラスがすべて同じ <strong>native</strong> メソッドに解決するサイト（<code>nil?</code>、
+<code>is_a?</code>、<code>frozen?</code> …）は、クラス集合のメンバーシップガード <code>GuardClassIn</code>
+（<code>pmc_same_target_classes</code>）の後で通常呼び出しを出す。FuncId は
+<code>jit_check_call</code> で再計算し、PMC が保存した値は使わない。ガードを通った
+クラスはすべて同じメソッドに解決し直してあるので、クラスごとに呼び分ける
+必要がない。iseq ターゲットはレシーバクラスで特殊化されるため対象外である。</p>
+<p>集合ガードの後でもインライン生成器は発火しうる（§9）。</p>
+<h2 id="4-pic--クラスごとに解決先が違うサイト"><a class="header" href="#4-pic--クラスごとに解決先が違うサイト">4. PIC — クラスごとに解決先が違うサイト</a></h2>
+<p>観測クラスが別々のメソッドに解決するサイトは、<code>compile/pic.rs</code> が N-way の
+クラス dispatch を出す（<code>compile_pic_call</code>、最大 <code>PIC_WAYS</code> = <code>PMC_WAYS</code>
+アーム）。</p>
+<pre><code class="language-text">        load recv -&gt; rdi
+        guard_class_version                 (全アームを支配する 1 回)
+        br_class_ne rdi, C0 -&gt; L1
+        &lt;call C0#name&gt;
+        br merge
+  L1:   br_class_ne rdi, C1 -&gt; L2
+        &lt;call C1#name&gt;
+        br merge
+  L2:   guard_class rdi, C2 -&gt; 残余         (最終アーム)
+        &lt;call C2#name&gt;
+  merge:
 </code></pre>
-<h3 id="32-フロントエンドのゲートcompile_method_call"><a class="header" href="#32-フロントエンドのゲートcompile_method_call">3.2 フロントエンドのゲート(<code>compile_method_call</code>)</a></h3>
-<p>適用条件(健全性の根拠ごと):</p>
-<ul>
-<li>サイト名が <code>nil?</code>、simple、引数 0。</li>
-<li><code>recv_class != NIL_CLASS</code>(nil 単相なら従来ガードで十分)。</li>
-<li><strong><code>jit_check_call(NIL_CLASS, name)</code> の解決 FuncId が、キャッシュ
-クラスでの解決 FuncId と一致</strong>すること。これが健全性の核で、
-「nil が来ても非 nil が来ても呼ぶべきメソッドは同一」をコンパイル時に
-証明する。直前に発行済みの class version guard が再定義を無効化する。
-<code>NilClass#nil?</code> だけが再定義されていれば一致せず、自動的に従来経路へ
-戻る。第三のクラス(独自 <code>nil?</code> を持つ等)は従来どおり deopt して
-正しくディスパッチされる。</li>
-<li>ガード通過後、<strong>abstract state は refine しない</strong>(レシーバは
-「nil か recv_class」なので、クラスを確定させたら嘘になる)。
-未確定状態の <code>kernel_nil</code> 生成器は <code>recv == nil</code> の値比較
-(<code>is_nil_to_bool</code>)を出すので、これがそのまま両ケースの正解になる。</li>
-</ul>
-<h3 id="33-副作用-page-規律との衝突修正済みただし全面解消ではない"><a class="header" href="#33-副作用-page-規律との衝突修正済みただし全面解消ではない">3.3 副作用: page 規律との衝突(修正済み、ただし全面解消ではない)</a></h3>
-<p>state を refine しないことの下流コスト: <code>to.nil?</code> の後で <code>to</code> を Float
-として使うコード(numeric.rb <code>step</code>)では、Float unbox(ガード付き
-Value→f64)が <strong>cold ブロック(page 1 に out-of-line 発行される基本
-ブロック)内</strong> に現れるようになった。x86-64 バックエンドの多くの
-lowering は「hot(page 0)から呼ばれ、自分の cold スニペットを page 1 に
-置く」前提で <code>assert_eq!(0, get_page())</code> を持っており、ここで abort した
-(<code>numeric_step</code> テストで決定的に再現)。</p>
-<p>クラッシュ経路の <code>float_to_f64</code> / <code>float_val_to_f64</code> は、<code>guard_class</code> の
-fail ラッパが既にやっている二形態(<strong>page 0 なら cold スニペットを
-page 1 へ、page 1 で発行中ならその場に inline 化して飛び越す</strong>)に直して
-解消した。ただし同種の assert は <code>binary_op.rs</code> 等にも十数箇所残って
-おり、「refine しない state を広げる」設計はこの規律と面で衝突する
-(§5.4)。</p>
-<h2 id="4-なぜ-nil-に限定したか"><a class="header" href="#4-なぜ-nil-に限定したか">4. なぜ <code>nil?</code> に限定したか</a></h2>
-<p>仕組み(FuncId 一致検証 + <code>GuardClassOrNil</code>)自体は名前非依存だが、
-ガード通過後に走る <strong>インライン生成器の前提</strong> が問題になる。生成器の
-多くは「ガード済み recv_class のレシーバ」を前提に書かれている
-(例: <code>Hash#[]</code> は <code>as_hash</code> へ直行)。nil が素通りすれば即クラッシュ
-なので、無条件の一般化は生成器全数の nil 安全性監査を要求する。
-<code>kernel_nil</code> は未確定状態で値比較を出すだけなので唯一安全と言い切れた。</p>
-<h2 id="5-設計空間これから決めること"><a class="header" href="#5-設計空間これから決めること">5. 設計空間(これから決めること)</a></h2>
-<h3 id="51-nil-耐性ガードの一般化--最小コストで--nil-を回収する"><a class="header" href="#51-nil-耐性ガードの一般化--最小コストで--nil-を回収する">5.1 nil 耐性ガードの一般化 — 最小コストで <code>== nil</code> を回収する</a></h3>
-<p>適用条件を「名前 = <code>nil?</code>」から次へ広げる:</p>
-<blockquote>
-<p><code>jit_check_call(NIL_CLASS, name) == func_id</code> <strong>かつ</strong>
-(a) <code>func_id</code> にインライン生成器が無い、または
-(b) 生成器が nil 安全(<code>InlineFuncInfo</code> に flag を追加)</p>
-</blockquote>
-<p>(a) が成り立つ場合、通常呼び出しは FuncId 直接ディスパッチなので
-レシーバが nil でも健全(フレーム構築・visibility はクラス非依存)。
-候補: <code>==</code>(NilClass は独自 <code>==</code> を持つため一致しないケースが多い点に
-注意 — 要確認)、<code>is_a?</code> / <code>kind_of?</code>、<code>respond_to?</code>、<code>frozen?</code> など
-Object/Kernel から継承される述語群。<code>left == nil</code> の 885→489ms(§2)が
-最初の回収目標。</p>
-<p>コスト: 小。リスク: 生成器 flag の付け間違い。§3 の機構をそのまま使う。</p>
-<h3 id="52-polymorphic-inline-cachen-way-ディスパッチ-採用方針7-の調査記録を参照"><a class="header" href="#52-polymorphic-inline-cachen-way-ディスパッチ-採用方針7-の調査記録を参照">5.2 Polymorphic Inline Cache(N-way ディスパッチ)→ <strong>採用方針。§7 の調査記録を参照</strong></a></h3>
-<p>一般解。サイトごとに観測クラス列 (class, FuncId) を 2〜4 way まで持ち、
-線形比較チェーンで分岐、全ミスで deopt/再コンパイル。<code>BinCmp</code> の
-Part B(<code>BecamePolymorphic</code> 再コンパイル)を method call 全般へ拡張する
-形が自然で、「初回は monomorphic でコンパイル → ミスが温まったら
-polymorphic 版へ再コンパイル」という既存のポリシーに乗る。</p>
-<p><strong>方針決定(2026-08)</strong>: VM が実行時に polymorphic を検出して
-バイトコードへ書き込む既存機構(<code>opcode_sub</code>)を土台に、
-<code>CallSiteInfo</code> に 4-way 程度の PMC を蓄積し JIT コンパイル時に利用する。
-<code>nil?</code> はこの一般機構で自然に扱える(§7.2)。<code>==</code> など二項演算子命令へ
-の適用可否は §7.3 の調査結果のとおり「検出機構は既にあり有効、
-ただしキャッシュがペア形で置き場所の追加が要る」。</p>
-<p>論点(§7 の調査で一部解決):</p>
-<ul>
-<li><strong>インライン生成器との併用</strong>: way ガード通過後はレシーバクラスが
-確定するので、way ごとに生成器を適用しても ③ の unrefined-state
-問題は起きない。ただし最小実装は「全 way が同一 FuncId のときだけ
-生成器適用(<code>nil?</code> がこれ)、それ以外は way → 直接 FuncId 呼び出し」。</li>
-<li><strong>abstract state</strong>: way ごとに事後状態が異なる。合流で全 way の
-join を取る(≒ Value に落ちる)なら §5.3 の問題に帰着する。
-最小実装はチェーン全体を 1 命令として扱い、結果は Value で合流。</li>
-</ul>
+<p>合流は <code>compile/dispatch.rs</code> のブロック内マージで、<strong>宣言型</strong>である。分岐の
+前にオペランドをスタックへ flush し、<code>dst</code> を未知の <code>Value</code> とし、アームが
+任意の Ruby を実行しうるのでキャッシュ済みの invariant をすべて落とした
+状態を合流状態として先に決める。各アームはそこへ bridge する
+（<code>AbstractState::gen_bridge_all</code>）。アームの事後状態が揃っている必要は
+ないので、ゲートは健全でない形とコンパイルを abort させる形だけを除外すれば
+よい。</p>
+<p>PMC が 1 クラスしか持たないサイトは、abstract state がレシーバを特定でき
+なくても単相とみなして単一ガードのままにする。実測ではこれがゲートの拒否
+理由の大半を占める。</p>
+<h2 id="5-設計上の論点"><a class="header" href="#5-設計上の論点">5. 設計上の論点</a></h2>
+<h3 id="51-合流状態の精度"><a class="header" href="#51-合流状態の精度">5.1 合流状態の精度</a></h3>
+<p>宣言型の合流は精度を失う。2 つのアームがどちらもレジスタに <code>Fixnum</code> を
+残しても合流でボックス化される。結果が不透明な <code>Value</code> で終わる呼び出しの
+dispatch では損失はないが、数値の dispatch（fixnum アーム / float アーム /
+generic 残余）では効く。格子には <code>LinkMode::Sf(fpr, SfGuarded::FixnumOrFloat)</code>
+（ボックス化したスロット + 生きた float の影）という要素があるので、
+<code>declare_merge</code> に呼び出し側が合流形を渡せるようにするのが次の段階である。</p>
 <h3 id="53-abstract-state-に-union-を持たせるか"><a class="header" href="#53-abstract-state-に-union-を持たせるか">5.3 abstract state に union を持たせるか</a></h3>
-<p>現在の <code>Guarded</code> ラティスは単一クラス(+ Fixnum/Float 系の特例)。
-<code>nil?</code> 対応で「refine しない」を選んだが、<code>recv_class ∪ NilClass</code> の
-ような 2 要素 union を表現できれば、非 nil 側の下流(<code>unless to.nil?</code>
-の then 側など)は分岐条件から <code>recv_class</code> 単相へ <strong>絞り直せる</strong>。
-truthiness 分岐(<code>if x</code> / <code>unless x.nil?</code>)で nil を落とす flow-sensitive
-な絞り込みは、§5.1/5.2 のどちらを選んでも効く直交した改善。ただし
-ラティス拡張は merge/bridge 全体に波及するので、最も工数が大きい。</p>
-<h3 id="54-page-規律の全面解消前提整備"><a class="header" href="#54-page-規律の全面解消前提整備">5.4 page 規律の全面解消(前提整備)</a></h3>
-<p>「cold ブロック内で page-1 スニペットを使う lowering が走り得る」は、
-refine しない state を広げるほど踏みやすくなる。選択肢:</p>
-<ol>
-<li>§3.3 の二形態化を、assert を持つ全 lowering(<code>binary_op.rs</code> ほか
-十数箇所)へ横展開する。機械的だが確実。</li>
-<li>LIR 化(<code>doc/lir.md</code>)の進行に合わせ、cold スニペット配置を encoder
-の責務にして assert 自体を消す。方向としては正しいが待ちが長い。</li>
-</ol>
-<p>§5.1 だけなら影響面は小さい(<code>==</code> 述語群の下流は Float unbox を含み
-にくい)が、§5.2/5.3 をやるなら 1. を先に済ませるべき。</p>
-<h3 id="55-やらないと決めたこと"><a class="header" href="#55-やらないと決めたこと">5.5 やらないと決めたこと</a></h3>
+<p><code>Guarded</code> 格子は単一クラス（+ Fixnum/Float 系の特例）しか表現しない。
+<code>recv_class ∪ NilClass</code> のような 2 要素 union を表現できれば、非 nil 側の
+下流（<code>unless to.nil?</code> の then 側など）を分岐条件から <code>recv_class</code> 単相へ
+絞り直せる。truthiness 分岐で nil を落とす flow-sensitive な絞り込みは、
+集合ガードとも PIC とも直交する改善である。ただし格子の拡張は merge / bridge
+全体に波及するので、工数は最も大きい。未実装。</p>
+<h3 id="55-採らない案"><a class="header" href="#55-採らない案">5.5 採らない案</a></h3>
 <ul>
-<li><strong>ガード全廃(値比較のみで nil? を実装)</strong>: 「どのクラスも <code>nil?</code> を
-再定義していない」というグローバル性質が必要で、Kernel を include
-しない BasicObject 系レシーバ(<code>nil?</code> 呼び出しは NoMethodError に
-なるべき)で誤答する。クラスガードは第三クラスの安全網として残す。</li>
+<li><strong><code>nil?</code> のガード全廃（値比較のみ）</strong> — 「どのクラスも <code>nil?</code> を再定義して
+いない」というグローバル性質が必要で、<code>Kernel</code> を include しない
+<code>BasicObject</code> 系レシーバ（<code>nil?</code> は NoMethodError になるべき）で誤答する。
+クラスガードは第三のクラスに対する安全網として残す。</li>
 </ul>
-<h2 id="6-提案する順序7-の方針決定で改訂"><a class="header" href="#6-提案する順序7-の方針決定で改訂">6. 提案する順序(§7 の方針決定で改訂)</a></h2>
-<ol>
-<li><strong>VM 駆動 4-way PMC(メソッド呼び出し)</strong> — §7.2 の実装点に沿って
-<code>CallSiteInfo</code> に PMC を蓄積し、JIT が <code>_polymorphic</code> サイトで
-ガードチェーンを発行する。<code>nil?</code> はこの一般機構に吸収され、§3 の
-<code>GuardClassOrNil</code> 特例は「全 way 同一 FuncId の縮退形」として整理
-し直す(または撤去する)。</li>
-<li><strong>§5.4-1 の page 二形態化の横展開</strong> — way 分岐後のコード配置が
-cold 側へ広がるため、PMC より先に済ませるのが安全。</li>
-<li><strong>二項演算子命令へのペア PMC 拡張</strong> — §7.3。<code>== nil</code>
-(現況 489ms vs YJIT 193ms)を計測基準にする。</li>
-</ol>
-<h2 id="7-調査記録-vm-駆動-4-way-pmc-の実装点2026-08"><a class="header" href="#7-調査記録-vm-駆動-4-way-pmc-の実装点2026-08">7. 調査記録: VM 駆動 4-way PMC の実装点(2026-08)</a></h2>
-<h3 id="71-既存の検出機構前提の確認"><a class="header" href="#71-既存の検出機構前提の確認">7.1 既存の検出機構(前提の確認)</a></h3>
-<p>VM は <strong>メソッド呼び出し・二項演算の両方で</strong> polymorphic を実行時検出
-し、バイトコードの <code>opcode_sub</code> バイトに書き込む機構を既に持つ:</p>
+<h2 id="6-二項演算子と--の-dispatch"><a class="header" href="#6-二項演算子と--の-dispatch">6. 二項演算子と <code>[]</code> の dispatch</a></h2>
+<p>二項演算子の多相サイトは、ホットなクラスをインラインのアームに、それ以外を
+generic な C 呼び出しの残余に振り分ける（<code>binary_dispatch</code>、
+<code>dispatch_inline_class</code>）。片方だけでは足りない。単一クラスガードで
+インライン化すると他のクラスで毎回 side exit し（rubykon の <code>==</code> 1 箇所で
+180 万回）、generic な比較だけにするとホットなクラスまで C 呼び出しになる。</p>
 <ul>
-<li><strong>メソッド呼び出し</strong>(<code>vmgen/method_call.rs</code> slow_path):
-インラインキャッシュ(バイトコード内の CACHED_CLASS / VERSION /
-FUNCID、1 エントリ)が populated かつ receiver class 不一致のとき
-<code>opcode_sub = 1</code>。直後に必ず <code>runtime::find_method(vm, globals, callid, recv)</code> が呼ばれ、(class_for_ic, FuncId) を解決してキャッシュを
-再タグ付けする。</li>
-<li><strong>二項演算</strong>(<code>vmgen.rs</code> <code>vm_save_binary_class</code>):
-バイトコード内 IC に (lhs_class, rhs_class) の 1 ペアを保存し、
-どちらかの変化を検出したら <code>opcode_sub = 1</code>。</li>
+<li>アームのクラスはインラインキャッシュではなく PMC から選ぶ。キャッシュは
+最後に来たクラスを持つだけで、交互に来るサイトでは偶然に左右される。</li>
+<li>nil が観測されたサイトは、nil に生ビット比較のアームを与える。nil の
+シェアが小さくても、単相ガードのままなら現れるたびに side exit するため、
+2 番手のシェアによらず dispatch する。nil 以外の少数派は 1/8 のシェア規則に
+従う（そのアームは generic な呼び出しなので、相応の頻度が要る）。</li>
+<li><code>Integer</code> のアームガードは fixnum タグを見るので、<code>Bignum</code> は deopt せず
+残余アームに落ちる。<code>IntegerOverflow</code> の exit が印を付けたサイト
+（<code>compile_binary</code> 2a）は、PMC によらず Integer のアームを持つ。</li>
 </ul>
-<p>TraceIR はどちらも読み取り済みで、<code>BinCmp</code>/<code>BinOp</code> は
-<code>polymorphic</code> を <strong>消費している</strong>(単相 → ペアガード +
-recompile-on-miss(Part B)、多相 → ガードなし generic C-call +
-Eq/Ne は即値 fast path(Part C))。一方 <code>TraceIr::MethodCall</code> の
-<code>_polymorphic</code> は <strong>未使用</strong>(<code>compile.rs</code> で <code>_polymorphic: _</code>)。
-つまりメソッド呼び出し側は「検出はあるが JIT が利用していない」状態で、
-PMC 案はまさにこの穴を埋める。</p>
-<h3 id="72-メソッド呼び出し側の実装点"><a class="header" href="#72-メソッド呼び出し側の実装点">7.2 メソッド呼び出し側の実装点</a></h3>
-<ol>
-<li><strong>記録</strong>: <code>runtime::find_method</code> は <code>&amp;mut Globals</code> と <code>CallSiteId</code> を
-受けて解決結果 (cache_class, fid) を計算済みなので、ここで
-<code>CallSiteInfo</code> に固定長 4-way の <code>(ClassId, FuncId)</code> 列を追記するのが
-最小変更。既存の <code>class_for_ic</code>(Bool 統合)と <code>cacheable = false</code>
-(frame-dependent super — class タグ 0 で毎回再解決)の扱いを
-そのまま流用でき、cacheable でないサイトは PMC 対象外にマークする。
-5 クラス目が観測されたら megamorphic フラグ(PMC 打ち切り、JIT は
-ガードなし generic dispatch を選ぶ)。</li>
-<li><strong>消費</strong>: <code>compile_method_call</code> で <code>_polymorphic</code> が真なら、単一
-キャッシュではなく PMC を読み、way ごとの class 比較チェーンを発行:
+<p>単相の BinCmp サイトは、ガード失敗が温まると
+<code>RecompileReason::BecamePolymorphic</code> で再コンパイルし、上の dispatch に移る
+（<code>RecvMissMode::PartB</code>）。</p>
+<p>多相な <code>[]</code> サイトは、インライン化するクラスのアームと
+<code>invoke_method(:[])</code> の残余からなる 2 アームの dispatch になる
+（<code>compile/index.rs</code>）。</p>
+<h2 id="7-pmc-の記録と-profile-ダンプ"><a class="header" href="#7-pmc-の記録と-profile-ダンプ">7. PMC の記録と profile ダンプ</a></h2>
 <ul>
-<li>way ガード通過後はレシーバクラスが確定するので、既存の
-monomorphic 経路(インライン生成器を含む)を way 内で再利用できる
-余地がある。ただし最小実装は「way → FuncId 直接呼び出し、結果は
-Value で合流」。</li>
-<li><strong>同一 FuncId の way は 1 経路に畳む</strong>。<code>nil?</code> は全 way が
-Kernel#nil? に解決されるため、畳んだ結果が §3 のガードレス値比較と
-一致する — nil? 特例が一般機構の縮退形になる、というのがこの案の
-利点。</li>
-<li>全 way ミス: deopt(+ 観測が増えたら再コンパイル)か、その場で
-generic dispatch へ落とすかは選択。Part B の単調再コンパイル
-不変量(多相化は一方向)に合わせるなら後者。</li>
-</ul>
-</li>
-<li><strong>無効化</strong>: PMC エントリは class version guard の傘の下にある
-(再定義で全サイト再コンパイル)ので、エントリ個別の無効化は不要。</li>
-</ol>
-<h3 id="73-二項演算子命令-ほかへの適用可否"><a class="header" href="#73-二項演算子命令-ほかへの適用可否">7.3 二項演算子命令(<code>==</code> ほか)への適用可否</a></h3>
-<p><strong>有効。ただしキャッシュの形と置き場所が method call と異なる。</strong></p>
+<li><strong>格納</strong>: <code>CallSiteInfo::pmc: PolyCache</code>（<code>globals/store.rs</code>）。最大
+<code>PMC_WAYS</code> = 4 エントリの <code>PolyCacheEntry { recv, arg, fid, count }</code> と、
+5 個目以降の観測を数える overflow カウンタ（megamorphic）。キーは
+<strong>MethodCall / UnOp = レシーバのみ、BinOp / Cmp / Index / StoreIndex =
+レシーバ + 第一引数</strong>。</li>
+<li><strong>記録点（すべて slow path、定常状態のコストはゼロ）</strong>:
 <ul>
-<li>検出(<code>opcode_sub</code>)は §7.1 のとおり既にあり、多相サイトは現在
-「ガードなし generic C-call」へ落ちている。<code>left == nil</code>
-(left: Array/nil 二相)の実測 489ms(YJIT 193ms)の残りコストは
-この generic C-call: Part C の即値 fast path は <strong>両オペランドが
-非 heap</strong> のときだけ効くので、Array 側の呼び出しが毎回
-<code>cmp_eq_values</code>(メソッド解決+実行)を払う。</li>
-<li>binop の IC は (lhs_class, rhs_class) <strong>ペア</strong>で、バイトコード内の
-8 バイト(2×u32)に 1 ペアしか置けない。4-way 化はバイトコード内では
-無理なので、method call と同じくサイド構造に置く。置き場所の候補:
-<ul>
-<li>binop サイトの一部は <code>IseqInfo::callsite_map</code>(bc_pos → CallSiteId)
-で <code>CallSiteInfo</code> に到達できる(polymorphic 分岐が is_func_call
-判定に既に使っている)。ペア PMC を <code>CallSiteInfo</code> に置くなら
-これに乗るが、<strong>全 binop 命令に callsite があるかは未確認</strong>
-(<code>get_callsite_id</code> は Option)。無いサイトには <code>IseqInfo</code> 側に
-bc_pos キーのテーブルを足す。</li>
-<li>記録タイミング: <code>vm_save_binary_class</code> はアセンブラ内でクラス保存
-まで。ペア追記は set_poly 分岐(既に slow path)から Rust ヘルパを
-呼ぶ形になる。generic C ヘルパ(<code>cmp_eq_values</code> 等)は pc を
-受けない規約なので、記録はヘルパ側でなく VM 命令側で行う。</li>
-</ul>
-</li>
-<li>way 特化の価値: 第一段階は「ペアガード → FuncId 直接呼び出し」で
-解決コストを消すだけでよい。第二段階として、組み込みが確定する
-ペアには特化コードの余地がある(例: (Array, NilClass) の <code>==</code> は
-Array#== が組み込みなら定数 false)。どちらが効くかは
-<code>cmp_eq_values</code> の内部コスト内訳(解決 vs 本体実行)を測ってから
-決める。</li>
-</ul>
-<h3 id="74-検証結果-callsite-記録と-poly-検出の全数確認2026-08"><a class="header" href="#74-検証結果-callsite-記録と-poly-検出の全数確認2026-08">7.4 検証結果: callsite 記録と poly 検出の全数確認(2026-08)</a></h3>
-<p><strong>callsite 記録(<code>bytecodegen/encode.rs</code>)</strong>: UnOp(121-124)/
-BinOp(160+)/ Cmp 両形(140-146, 150-156)/ Index(132)/
-StoreIndex(133)は全て <code>new_callsite</code> + <code>new_callsite_map_entry</code> で
-<code>CallSiteId</code> に到達できる。例外は <strong>RescueTEq(157)のみ</strong>(rescue 節
-マッチ専用、常にランタイムヘルパ経由で IC なし — PMC 対象外で問題ない)。
-<code>get_callsite_id</code> が <code>Option</code> なのはこの 1 命令のためで、ペア PMC を
-<code>CallSiteInfo</code> に置く設計は追加テーブルなしで成立する。</p>
-<p><strong>VM の poly 検出(x86_64 / aarch64 でミラーを確認)</strong>:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>経路</th><th>保存</th><th><code>opcode_sub</code> 検出</th></tr>
-</thead>
-<tbody>
-<tr><td>binop/cmp generic(<code>vm_generic_binop</code> → <code>vm_save_binary_class</code>)</td><td>✓</td><td>✓</td></tr>
-<tr><td>binop/cmp fixnum fast path(<code>vm_save_binary_integer</code>)</td><td>上書きのみ</td><td>✗(無害 — 下記)</td></tr>
-<tr><td>unop generic(<code>vm_generic_unop</code> → <code>vm_save_lhs_class</code>)</td><td>✓</td><td><strong>✗ 欠落</strong></td></tr>
-<tr><td>unop fixnum fast path(<code>vm_lhs_integer</code>)</td><td>上書きのみ</td><td>✗</td></tr>
-<tr><td>Index / StoreIndex(<code>runtime::get_index</code>/<code>set_index</code> が ClassIdSlot へ無条件代入)</td><td>✓</td><td><strong>✗ 欠落</strong></td></tr>
-<tr><td>メソッド呼び出し slow path</td><td>✓</td><td>✓</td></tr>
-</tbody>
-</table>
-</div>
-<ul>
-<li>binop/cmp fast path の欠落は実質無害: fast path しか通らないサイトは
-単相で、多相サイトは必ず generic を通ってそこで検出される(最大
-1 実行遅れるだけ)。<strong>binop/cmp は現状のまま PMC の前提を満たす</strong>。</li>
-<li><strong>unop の検出欠落 → 実装済み</strong>(このブランチ): <code>vm_save_lhs_class</code> /
-<code>a64_save_lhs_class</code> に <code>vm_save_binary_class</code> と同じ
-「キャッシュ populated かつクラス変化 → <code>opcode_sub = 1</code>」を追加した
-(generic 側のみ、両アーキ)。<code>TraceIr::UnOp</code> にも <code>_polymorphic</code> を
-配線済み(JIT 消費は PMC 本実装で)。</li>
-<li><strong>Index/StoreIndex の検出欠落 → 実装済み</strong>(このブランチ): クラス
-記録をランタイムヘルパから <strong>VM 命令内の機械語へ移した</strong>。binop と
-同じ <code>[pc+8]</code>/<code>[pc+12]</code> レイアウトなので <code>vm_save_binary_class</code> /
-<code>a64_save_binary_class</code> をそのまま流用でき、検出も同時に付く。
-<code>get_index</code> / <code>set_index</code> は <code>ClassIdSlot</code> ポインタ引数(bit 0 に
-is_func_call を折り込むハック)を廃止して素の <code>is_func_call</code> を
-受ける形に単純化した。<code>TraceIr::Index</code> / <code>IndexAssign</code> にも
-<code>_polymorphic</code> を配線済み。Index は binop と違い fixnum fast path を
-持たないため、検出は全実行に効く(遅延なし)。</li>
-</ul>
-<h3 id="75-実装済み-pmc-の記録と-profile-ダンプ2026-08"><a class="header" href="#75-実装済み-pmc-の記録と-profile-ダンプ2026-08">7.5 実装済み: PMC の記録と profile ダンプ(2026-08)</a></h3>
-<p>記録側を実装した(JIT 消費は未着手)。設計:</p>
-<ul>
-<li><strong>格納</strong>: <code>CallSiteInfo::pmc: PolyCache</code>(<code>store.rs</code>)。最大
-<code>PMC_WAYS = 4</code> エントリ <code>(recv, Option&lt;arg&gt;, Option&lt;fid&gt;, count)</code> +
-megamorphic overflow カウンタ。キー形状は
-<strong>MethodCall / UnOp = レシーバのみ、BinOp / Cmp / Index /
-StoreIndex = レシーバ + 第一引数</strong>。</li>
-<li><strong>記録点(すべて slow path のみ、定常状態のコストゼロ)</strong>:
-<ul>
-<li>MethodCall: <code>runtime::find_method</code>(単一エントリキャッシュのミス時に
-呼ばれる)で <code>class_for_ic</code> と解決済み FuncId を記録。
-<code>cacheable = false</code>(frame-dependent super)は記録しない。</li>
+<li>MethodCall: <code>runtime::find_method</code>（単一エントリキャッシュのミス時）で
+<code>class_for_ic</code> と解決済み FuncId を記録する。<code>cacheable = false</code>
+（frame-dependent な super）は記録しない。</li>
 <li>BinOp / Cmp / Index / StoreIndex: <code>vm_save_binary_class</code> /
-<code>a64_save_binary_class</code> の「初回 population」と「poly 遷移」の 2 分岐
-から <code>runtime::pmc_record_binary(vm, globals, pc, old_lhs, old_rhs)</code>
-を呼ぶ。新クラスは直前にバイトコード IC へ書いた値を pc から読み
-戻し、<strong>置き換えられた旧ペアも引数で渡して一緒に記録する</strong>。
-fixnum fast path(<code>vm_save_binary_integer</code>)は IC に無記録で
-スタンプするため、displacement の瞬間がそのペアを PMC に残す唯一の
-機会 — IC は実行とともに変化するので、これを取り逃すと IC を
-通過したクラスが失われる。callsite は
-<code>cfp → iseq → get_pc_index → callsite_map</code> で解決
-(record 分岐のみのコスト)。
-なお「fast path のスタンプが一度も displace されずに終わった」
-サイトはその 1 クラスが PMC に載らないが、IC 自体が生きている —
-<strong>消費側は IC の現内容と PMC の和集合を観測集合として扱う</strong>こと。</li>
-<li>UnOp: 同様に <code>vm_save_lhs_class</code> / <code>a64_save_lhs_class</code> から
-<code>pmc_record_unary</code>(レシーバのみ)。</li>
+<code>a64_save_binary_class</code> の「初回 population」と「多相への遷移」の 2 分岐
+から <code>runtime::pmc_record_binary(vm, globals, pc, old_lhs, old_rhs)</code> を
+呼ぶ。置き換えられた旧ペアも一緒に記録する。fixnum fast path は IC に
+記録せずスタンプするので、置き換えの瞬間がそのペアを PMC に残す唯一の
+機会である。一度も置き換えられなかったスタンプは PMC に載らないが IC には
+残るので、消費側は <strong>IC の現内容と PMC の和集合</strong>を観測集合として扱う。</li>
+<li>UnOp: <code>vm_save_lhs_class</code> / <code>a64_save_lhs_class</code> から
+<code>pmc_record_unary</code>。</li>
 </ul>
 </li>
-<li><strong>ダンプ</strong>: <code>--features profile</code> の終了時統計(<code>Store::show_stats</code>)に
-「polymorphic method cache」節を追加。サイト数サマリ
-(recorded / polymorphic / megamorphic)と、slow-path 観測数順の
-多相サイト top 40 を <code>class(/arg)(=resolved-func) xN</code> 形式で表示。
-count は <strong>slow-path 観測数</strong>(fast path は記録しないので呼び出し
-総数ではない)。</li>
-<li>実測例(gem 起動込みの小スクリプト): 3,984 サイト記録・35 多相・
-13 megamorphic。<code>initialize</code> / <code>__builtin_allocate__</code>(overflow 196)や
-Errno 網羅の <code>is_a?</code>(overflow 130)が megamorphic として正しく
-弁別され、<code>nil?</code> は <code>Array=Kernel#nil? | NilClass=Kernel#nil? | …</code> と
-全 way 同一 FuncId が観測できる — §7.2 の「同一 FuncId way の畳み込み」
-の実データがそのまま得られる。</li>
+<li><strong>count</strong> は slow path での観測数であって呼び出し総数ではない。</li>
+<li><strong>ダンプ</strong>: <code>--features profile</code> の終了時統計（<code>Store::show_stats</code>）の
+「polymorphic method cache」節。サイト数（recorded / polymorphic /
+megamorphic）と、観測数順の多相サイト上位 40 件を
+<code>class(/arg)(=resolved-func) xN</code> の形で表示する。</li>
 </ul>
-<h2 id="8-このブランチに含まれる実装"><a class="header" href="#8-このブランチに含まれる実装">8. このブランチに含まれる実装</a></h2>
-<ul>
-<li><code>x86_64: make the Float-unbox guards page-tolerant</code> — §3.3。
-集合ガード(下記)が受け手 state を未確定のまま残すために必要。</li>
-<li>VM 検出の全命令完備(unop / Index / StoreIndex)— §7.4。</li>
-<li>PMC の記録と profile ダンプ — §7.5。</li>
-<li><strong>PMC 消費 v1</strong>: 観測クラス集合が単一 <strong>native</strong> FuncId に収束する
-method call サイトへの <code>GuardClassIn</code>(集合メンバーシップガード)+
-通常呼び出し。FuncId は <code>jit_check_call</code> で再計算し PMC の保存値は
-使わない。iseq ターゲットはレシーバクラス特殊化があるため対象外
-(<code>polymorphic_call</code> テストが検出した制約)。<code>nil?</code> / <code>is_a?</code> /
-<code>frozen?</code> 型の 4-way 多相サイトが deopt ゼロ・ほぼ単相速度になる。</li>
-</ul>
-<p>検証済み: フルスイート green、<code>Weird#is_a?</code> 等の第三クラス・
-オーバーライドは CRuby と一致。</p>
-<h2 id="9-実装済み-クラス非依存-inline-生成器pmc-消費-v22026-08"><a class="header" href="#9-実装済み-クラス非依存-inline-生成器pmc-消費-v22026-08">9. 実装済み: クラス非依存 inline 生成器(PMC 消費 v2、2026-08)</a></h2>
-<p>§8 の v1 は集合ガード通過後を <strong>builtin 呼び出し</strong>に固定していた
-(inline 生成器は単一 <code>recv_class</code> 前提のため全面スキップ)。v2 は
-「生成コードがレシーバクラスに一切依存しない」生成器だけを型で選別し、
-集合ガードの背後でもインライン発火させる。</p>
-<ul>
-<li><strong>契約の型強制</strong>: <code>InlineGenClassIndependent</code>(<code>globals.rs</code>)は
-<code>InlineGen</code> から <code>ClassId</code> / <code>Option&lt;ClassId&gt;</code> 引数を<strong>持たない</strong>
-別型。クラスを参照したくても引数に無いので、契約違反はコンパイル
-エラーになる。<code>InlineFuncInfo::InlineGenClassIndependent</code> variant +
-<code>define_builtin_inline_func_class_independent</code> 登録経路を追加。</li>
-<li><strong>dispatch</strong>(<code>compile_method_call</code>): クラス非依存 variant は
-<code>same_target_set_guarded</code> でも発火。他の variant(<code>InlineGen</code>、
-Float 前提の <code>CFunc_*</code>)は従来どおり集合ガード時スキップ。</li>
-<li><strong>対象(v2 時点)</strong>: <code>Kernel#nil?</code>(値比較のみ)、
-<code>object_id</code> / <code>__id__</code>(<code>Value::id()</code> のみ)、<strong><code>frozen?</code>(新規
-インライン、両アーキ <code>emit_frozen_pred</code>)</strong>。frozen? の述語は
-<code>Value::is_frozen</code> の鏡写し: 即値→true、ヒープ Numeric
-(Bignum/Float/Complex/Rational)→true、他は header FROZEN bit
-(chilled 文字列は bit が落ちているので false)。</li>
-<li><strong>対象外のまま</strong>: <code>is_a?</code> / <code>instance_of?</code> / <code>respond_to?</code> 系は
-静的 recv_class で畳み込む設計なので <code>InlineGen</code> のまま(多相
-サイトでは builtin 呼び出し継続)。動的 ancestor チェック版を書けば
-対象化できるが別段階。</li>
-</ul>
-<p>テスト: <code>polymorphic_class_independent_inline</code>(4-way サイトでの
-nil?/frozen?/object_id、frozen? 述語の全表現アーム、warmup 後の
-<code>frozen?</code> オーバーライドの deopt)。</p>
-<h2 id="10-実装済み-メソッド呼び出し残余の-generic-send2026-09"><a class="header" href="#10-実装済み-メソッド呼び出し残余の-generic-send2026-09">10. 実装済み: メソッド呼び出し残余の generic send(2026-09)</a></h2>
-<p>PIC の最終アームで学習の余地がない(PMC 満杯・overflow)とき、および
-PMC が既に多相を観測しているサイトの単相/集合ガードのミスは、従来
-毎回 deopt していた。これを <strong>generic send</strong> に置き換え、「多相サイトは
-永久に deopt し続けない」を不変条件にした。</p>
+<p>PMC のエントリは class-version ガードの傘の下にある（再定義でサイトを
+含む本体が無効化される）ので、エントリ個別の無効化は要らない。</p>
+<h2 id="9-集合ガードの背後のインライン生成器"><a class="header" href="#9-集合ガードの背後のインライン生成器">9. 集合ガードの背後のインライン生成器</a></h2>
+<p><code>InlineGen</code>（<code>globals.rs</code>）は受け手と引数のクラスを <code>Option&lt;CachedClass&gt;</code>
+で受け取る。生成器を発火させること自体が「実行時に受け手がどのクラスでも、
+このサイトの名前はこの生成器のメソッドに解決する」という呼び出し側の保証で
+あり、集合ガードと PIC のアームはこれを満たす。<code>Some(class)</code> はクラスが
+静的にも確定していることを加え、<code>None</code> は確定していないことを示す。生成する
+コードがクラスに依存する生成器は <code>None</code> で辞退し（<code>false</code> を返す）、値の
+表現だけを読む生成器（<code>nil?</code>、<code>frozen?</code>（<code>emit_frozen_pred</code>）、<code>__id__</code>、
+<code>object_id</code>）は発火し続ける。登録経路は 1 つで、クラス非依存版を別に
+登録する必要はない。</p>
+<p><code>is_a?</code> / <code>instance_of?</code> / <code>respond_to?</code> 系は静的なクラスで畳み込むので、
+多相サイトでは辞退してビルトイン呼び出しになる。</p>
+<h2 id="10-generic-send-の残余"><a class="header" href="#10-generic-send-の残余">10. generic send の残余</a></h2>
+<p>PIC の最終アームで学習の余地がない（PMC 満杯・overflow）とき、および PMC が
+既に多相を観測しているサイトの単相 / 集合ガードのミスは、deopt ではなく
+<strong>generic send</strong> の残余に落ちる。多相サイトが永久に deopt し続けることはない。</p>
 <ul>
 <li><strong>形</strong>: 残余は <code>dispatch.rs</code> の宣言型マージの 1 アーム
-(<code>RecvMissMode::Residual</code>、<code>pic.rs</code> の最終アーム / <code>method_call_with_residual</code>)。
-ガードのミス先が deopt ではなく残余ラベルになる。</li>
+（<code>RecvMissMode::Residual</code>、<code>pic.rs</code> の最終アーム /
+<code>method_call_with_residual</code>）。ガードのミス先が残余ラベルになる。</li>
 <li><strong>探索</strong>: <code>GuardSendResolvable</code> がレシーバクラスを 1-way キャッシュ
-(<code>runtime::GenericSendCache</code>: class, class version, fid)と照合し、
-ミスなら <code>jit_generic_send_check</code> で探索して書き戻す。解決できない
-(未定義・private・<code>method_missing</code> 経由)か、呼び先が <code>binding</code> /
-<code>eval</code> 系の効果を持つときは 0 を返し、その場合だけ deopt する(VM が
-例外や frame 捕捉を正しく扱う)。</li>
+（<code>runtime::GenericSendCache</code>: class, class version, fid）と照合し、ミスなら
+<code>jit_generic_send_check</code> で探索して書き戻す。解決できない（未定義・private・
+<code>method_missing</code> 経由）か、呼び先が <code>binding</code> / <code>eval</code> 系の効果を持つときは
+0 を返し、そのときだけ deopt する。</li>
 <li><strong>呼び出し</strong>: <code>GenericSend</code> はキャッシュの fid から FuncData を取り、
-wrapper 経由で呼ぶ(self 特化本体へは wrapper がディスパッチ)。
-splat・kw・ブロックのない 8 引数以下の呼び出しは、呼び先が単純な
-シグネチャ(<code>META_KIND</code> の simple bit と <code>FUNCDATA_MIN == pos_num</code>)なら
-インラインでコピーし、それ以外は <code>vm_handle_arguments</code> で束縛する。</li>
+wrapper 経由で呼ぶ（self 特化本体へは wrapper が dispatch する）。splat・kw・
+ブロックのない 8 引数以下の呼び出しは、呼び先が単純なシグネチャ
+（<code>META_KIND</code> の simple bit と <code>FUNCDATA_MIN == pos_num</code>）ならインラインで
+コピーし、それ以外は <code>vm_handle_arguments</code> で束縛する。</li>
 <li><strong>間接的な binding</strong>: 呼び先が <code>send</code> や <code>Method#call</code> のように名前で
-呼び戻す builtin だと、admission 判定をすり抜けて <code>Kernel#binding</code> に
-届き、JIT フレームがヒープへ昇格する。残余アームでは
-<code>no_capture_guard</code> を落とし、send 後の capture ガードで deopt して
-ヒープ側のローカルを読む。</li>
-<li><strong>対象外</strong>: ブロック付き呼び出し、名前のない呼び出し。</li>
-<li><strong><code>...</code> 転送サイト</strong>(2026-11、#1948): 当初は対象外で、<code>relation_class.new(model, ...)</code>
-のようなメガモーフィックな転送サイトは呼び出しのたびに deopt していた。
-実行時の束縛は VM と同じ <code>vm_handle_arguments</code> なので、転送された rest が
-実 <code>Array</code> でも遅延転送マーカーでもそのまま束縛できる。JIT 側で要るのは、
-引数充填(<code>set_arguments</code> の転送アーム)を通らないぶんの後始末だけで、
-<code>settle_operands_for_runtime_binder</code> が elided のままの rest / <code>**kwrest</code> を
-実体化し、K1 の kw スキップに拒否権を出す(<code>arg_forwarding_jit.md</code>)。</li>
+呼び戻す builtin だと、admission の判定をすり抜けて <code>Kernel#binding</code> に
+届き、JIT フレームがヒープへ昇格する。残余アームでは <code>no_capture_guard</code> を
+落とし、send 後の capture ガードで deopt してヒープ側のローカルを読む。</li>
+<li><strong><code>...</code> 転送サイト</strong>: 実行時の束縛は VM と同じ <code>vm_handle_arguments</code> なので、
+転送された rest が実 <code>Array</code> でも遅延転送マーカーでもそのまま束縛できる。
+JIT 側では <code>settle_operands_for_runtime_binder</code> が elided のままの rest /
+<code>**kwrest</code> を実体化し、K1 の kw スキップに拒否権を出す
+（<code>arg_forwarding_jit.md</code>）。</li>
+<li><strong>メソッド本体に直接書かれた <code>super</code></strong> も対象になる
+（<code>generic_send_eligible</code>）。ブロック付きの呼び出しは対象外である。</li>
 </ul>
-<p>テスト: <code>pic_overflow_generic_residual</code>(アリティ差・kw・splat+ブロック
-引数・<code>method_missing</code>・private・<code>alias tag binding</code>)、
-<code>pic_residual_indirect_binding</code>(<code>alias tag send</code> 経由の binding と
-unboxed Float / Fixnum ローカル)、<code>mono_guard_generic_residual</code>。</p>
-<h2 id="11-試作-self-非特化本体2026-092026-10-に削除"><a class="header" href="#11-試作-self-非特化本体2026-092026-10-に削除">11. 試作: self 非特化本体(2026-09、2026-10 に削除)</a></h2>
-<p><code>MONORUBY_GENERIC_SELF=N</code> で、N 個の self クラス向けに特化済みのメソッドに
-<strong>self を仮定しない本体</strong> を 1 本作る試作があった(#1667)。<code>jit_entry</code> の
-キーを <code>Option&lt;ClassId&gt;</code> にし、<code>None</code> を非特化本体とする設計で、ivar は
-<code>runtime::generic_{get,set}_ivar</code> 経由、昇格は x86-64 のみだった。lobsters
-で 1 反復目と RSS は改善したが定常は変わらず、既定で無効のまま 15 ファイルに
-<code>Option</code> のキーが通る状態だったので削除した。メソッド本体に直接書かれた
-<code>super</code> を generic send の残余に載せる変更(<code>generic_send_eligible</code>)だけは、
-この試作と独立に効くので残している。</p>
+<p>ミスの扱いは <code>RecvMissMode</code> が決める。PMC がまだ単相のサイトのミスは
+再コンパイルを伴う exit（<code>Learn</code>）で、多相への切り替えの機会を与える。多相の
+ゲートが既に辞退したサイトでは、再コンパイルしても同じ本体になるので通常の
+deopt にとどめる。</p>
+<p>テスト: <code>pic.rs</code> の <code>pic_*</code>、<code>pic_overflow_generic_residual</code>（アリティ差・kw・
+splat+ブロック引数・<code>method_missing</code>・private・<code>alias tag binding</code>）、
+<code>pic_residual_indirect_binding</code>、<code>mono_guard_generic_residual</code>。</p>
 
                     </main>
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -284,10 +284,10 @@ false and silently degraded every chain-addressed load behind them back
 to the generic walk — found by instruction-count probes, +22% on the
 block-read benchmarks.</p>
 <h2 id="5-outer-float-claims-as-ordinary-state"><a class="header" href="#5-outer-float-claims-as-ordinary-state">5. Outer-float claims as ordinary state</a></h2>
-<p>The outer-frame float roadmap (write-through keeps, store-driven <code>S→Sf</code>
+<p>The outer-frame float claims (write-through keeps, store-driven <code>S→Sf</code>
 promotion with spill homes, home-directed reads, home-aliased bare-<code>F</code>
-reads, and loop-entry adoption) originally kept several side channels on
-the parked frame copies. Each has since become ordinary state:</p>
+reads, and loop-entry adoption) live in ordinary state rather than in side
+channels on the parked frame copies:</p>
 <ul>
 <li><strong>Read decisions</strong> consult the live chain (<code>outer_sf_float</code>,
 <code>outer_no_capture_guard</code> on <code>AbstractState</code>).</li>
@@ -318,9 +318,8 @@ from one yield to the next;</li>
 yield, where the caller’s <code>forget_constants</code> bet-confirmation drops
 every claim.</li>
 </ul>
-<p>With it went the last cross-frame <em>readers</em> of the parked copies’
-constant claims (<code>outer_const_count</code>, <code>adopt_outer_widenings</code>,
-<code>lost_constants_of</code>) — and one probe compile per specialized yield.</p>
+<p>So the parked copies’ constant claims have no cross-frame readers, and a
+specialized yield needs no probe compile.</p>
 <h2 id="7-what-the-parked-copy-still-is"><a class="header" href="#7-what-the-parked-copy-still-is">7. What the parked copy still is</a></h2>
 <p><code>JitStackFrame.abstract_state</code> — the frame a compile parks when it
 suspends for a nested compile — is no longer a truth channel for
@@ -395,7 +394,7 @@ bought.</li>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../design/regalloc_separation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../design/lir.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -409,7 +408,7 @@ bought.</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../design/regalloc_separation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../design/lir.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,9 +179,8 @@
                     <main>
                         <h1 id="benchmark"><a class="header" href="#benchmark">Benchmark</a></h1>
 <p>monoruby is performance-focused, and performance is measured continuously
-rather than quoted from a README. This page covers the live dashboards, how to
-reproduce a measurement locally, and the historical one-off comparisons that
-used to live in the project wiki.</p>
+rather than quoted from a README. This page covers the live dashboards and how
+to reproduce a measurement locally.</p>
 <h2 id="live-dashboards"><a class="header" href="#live-dashboards">Live dashboards</a></h2>
 <p>Every push to <code>master</code> that touches the interpreter re-runs the benchmark
 suite and republishes the <a href="https://sisshiki1969.github.io/monoruby/">project
@@ -241,7 +240,7 @@ match what you have installed.</p>
 <tr><th>Script</th><th>What it runs</th></tr>
 </thead>
 <tbody>
-<tr><td><code>bin/bench</code></td><td>The standard set (<code>app_fib</code>, <code>so_nbody</code>, <code>so_mandelbrot</code>, <code>app_aobench</code>, plb2) via benchmark-driver, against <code>4.0.5 --yjit</code> and <code>4.0.5 --zjit</code></td></tr>
+<tr><td><code>bin/bench</code></td><td>The standard set (<code>app_fib</code>, <code>so_nbody</code>, <code>so_mandelbrot</code>, <code>app_aobench</code>, plb2) via benchmark-driver, against <code>4.0.9 --yjit</code> and <code>4.0.9 --zjit</code></td></tr>
 <tr><td><code>bin/compare</code></td><td>Comparing <strong>two git refs of monoruby</strong> against each other — <code>bin/compare HEAD~1 HEAD</code> by default, over <code>app_fib</code>, <code>so_nbody</code>, <code>so_mandelbrot</code>, <code>quick_sort</code>, <code>integer</code>, <code>vm_send</code>, <code>vm_block</code>, <code>vm_yield</code></td></tr>
 <tr><td><code>bin/ruby-bench</code></td><td>The full yjit-bench suite (expects a <code>../ruby-bench</code> checkout), the same harness CI uses</td></tr>
 <tr><td><code>bin/optcarrot</code></td><td>optcarrot on ruby, <code>ruby --yjit</code> and monoruby in turn (expects <code>../optcarrot</code>)</td></tr>
@@ -290,69 +289,7 @@ JIT-compiled frames get names instead of raw addresses.
 <code>.cargo/config.toml</code> sets <code>-Cforce-frame-pointers=yes</code> globally, which is what
 makes the stacks walkable.</p>
 <p><code>--features profile</code> collects deopt and recompile statistics instead of a time
-profile — see <a href="development.html#measurement-and-profiling">Development and Build Options</a>.
-<a href="design/optcarrot_opt_profile.html">Where optcarrot –opt spends its time</a> is a
-worked example of both.</p>
-<h2 id="historical-measurements"><a class="header" href="#historical-measurements">Historical measurements</a></h2>
-<p>The two comparisons below are one-off measurements previously published in the
-project wiki. They are kept for the record and are <strong>not</strong> re-measured; for
-current numbers use the live dashboards above.</p>
-<h3 id="optcarrot-april-2024"><a class="header" href="#optcarrot-april-2024">optcarrot (April 2024)</a></h3>
-<p>Measured with <a href="https://github.com/mame/optcarrot">optcarrot</a>.</p>
-<p>Rubies:</p>
-<ul>
-<li>ruby 3.4.0dev (2024-04-27T08:56:20Z master 9ea77cb351) [x86_64-linux]</li>
-<li>truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM JVM [x86_64-linux]</li>
-<li>truffleruby 24.0.1, like ruby 3.2.2, Oracle GraalVM Native [x86_64-linux]</li>
-<li>monoruby 3e348afd4141c40978342e67ad26d42dc0b8d2a7</li>
-</ul>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_benchmark.png" alt="optcarrot benchmark"><span class="img-wrapper"><img src="design/optcarrot_benchmark.png" alt="optcarrot benchmark"></span></label></p>
-<p>fps history, 0–3000 frames:</p>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_fps_history.png" alt="optcarrot fps history"><span class="img-wrapper"><img src="design/optcarrot_fps_history.png" alt="optcarrot fps history"></span></label></p>
-<p>With <code>--opt</code> (optcarrot’s self-rewriting optimization mode):</p>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/optcarrot_fps_history_opt.png" alt="optcarrot fps history, –opt"><span class="img-wrapper"><img src="design/optcarrot_fps_history_opt.png" alt="optcarrot fps history, –opt"></span></label></p>
-<h3 id="yjit-bench-december-2024"><a class="header" href="#yjit-bench-december-2024">yjit-bench (December 2024)</a></h3>
-<p>Speed ratio against truffleruby; higher is better. Measured with
-<a href="https://github.com/Shopify/yjit-bench">yjit-bench</a> using
-<code>--rss --harness=harness-warmup</code>. Benchmark sources are from
-<a href="https://github.com/ruby/ruby/tree/master/benchmark">ruby/ruby’s <code>benchmark/</code></a>
-and <a href="https://github.com/attractivechaos/plb2">plb2</a>.</p>
-<p>Rubies:</p>
-<ul>
-<li>monoruby 0.3.0</li>
-<li>ruby 3.4.1 (2024-12-25 revision 48d4efcb85) +YJIT +PRISM [x86_64-linux]</li>
-<li>truffleruby 24.1.1, like ruby 3.2.4, Oracle GraalVM Native [x86_64-linux]</li>
-</ul>
-<p><label class="checkbox-label"><input class="checkbox-img" type="checkbox"><img src="design/chart.png" alt="micro benchmarks"><span class="img-wrapper"><img src="design/chart.png" alt="micro benchmarks"></span></label></p>
-<p>Raw data — execution time in milliseconds, resident set size (RSS) in MiB.
-<code>monoruby/yjit</code> and <code>monoruby/truffle</code> are time ratios; above 1 means monoruby
-is faster.</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th style="text-align: left">bench</th><th style="text-align: right">monoruby (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">yjit (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">truffle (ms)</th><th style="text-align: right">RSS (MiB)</th><th style="text-align: right">monoruby/yjit</th><th style="text-align: right">monoruby/truffle</th></tr>
-</thead>
-<tbody>
-<tr><td style="text-align: left">bedcov</td><td style="text-align: right">4412.0</td><td style="text-align: right">234.3</td><td style="text-align: right">4803.9</td><td style="text-align: right">413.8</td><td style="text-align: right">1881.8</td><td style="text-align: right">1909.5</td><td style="text-align: right">0.918</td><td style="text-align: right">2.345</td></tr>
-<tr><td style="text-align: left">binarytrees</td><td style="text-align: right">175.0</td><td style="text-align: right">28.7</td><td style="text-align: right">137.0</td><td style="text-align: right">22.0</td><td style="text-align: right">31.7</td><td style="text-align: right">1126.4</td><td style="text-align: right">1.278</td><td style="text-align: right">5.525</td></tr>
-<tr><td style="text-align: left">matmul</td><td style="text-align: right">39.7</td><td style="text-align: right">35.0</td><td style="text-align: right">121.8</td><td style="text-align: right">22.8</td><td style="text-align: right">1.4</td><td style="text-align: right">803.2</td><td style="text-align: right">0.326</td><td style="text-align: right">29.059</td></tr>
-<tr><td style="text-align: left">nbody</td><td style="text-align: right">8.5</td><td style="text-align: right">27.7</td><td style="text-align: right">21.9</td><td style="text-align: right">14.0</td><td style="text-align: right">1.1</td><td style="text-align: right">690.2</td><td style="text-align: right">0.389</td><td style="text-align: right">7.473</td></tr>
-<tr><td style="text-align: left">nqueens</td><td style="text-align: right">14.7</td><td style="text-align: right">24.7</td><td style="text-align: right">31.0</td><td style="text-align: right">14.2</td><td style="text-align: right">7.2</td><td style="text-align: right">637.9</td><td style="text-align: right">0.475</td><td style="text-align: right">2.044</td></tr>
-<tr><td style="text-align: left">optcarrot</td><td style="text-align: right">520.4</td><td style="text-align: right">79.0</td><td style="text-align: right">720.9</td><td style="text-align: right">54.7</td><td style="text-align: right">432.2</td><td style="text-align: right">1506.3</td><td style="text-align: right">0.722</td><td style="text-align: right">1.204</td></tr>
-<tr><td style="text-align: left">rubykon</td><td style="text-align: right">214.9</td><td style="text-align: right">34.9</td><td style="text-align: right">348.2</td><td style="text-align: right">18.6</td><td style="text-align: right">65.2</td><td style="text-align: right">2279.9</td><td style="text-align: right">0.617</td><td style="text-align: right">3.298</td></tr>
-<tr><td style="text-align: left">so_mandelbrot</td><td style="text-align: right">39.9</td><td style="text-align: right">22.9</td><td style="text-align: right">509.5</td><td style="text-align: right">14.5</td><td style="text-align: right">26.3</td><td style="text-align: right">548.8</td><td style="text-align: right">0.078</td><td style="text-align: right">1.517</td></tr>
-<tr><td style="text-align: left">sudoku</td><td style="text-align: right">41.6</td><td style="text-align: right">23.9</td><td style="text-align: right">88.8</td><td style="text-align: right">14.9</td><td style="text-align: right">17.5</td><td style="text-align: right">1165.2</td><td style="text-align: right">0.469</td><td style="text-align: right">2.381</td></tr>
-<tr><td style="text-align: left">fib</td><td style="text-align: right">16.7</td><td style="text-align: right">23.5</td><td style="text-align: right">17.4</td><td style="text-align: right">15.0</td><td style="text-align: right">8.8</td><td style="text-align: right">483.4</td><td style="text-align: right">0.960</td><td style="text-align: right">1.895</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="machine"><a class="header" href="#machine">Machine</a></h3>
-<p>Both historical runs used the same machine:</p>
-<ul>
-<li>Architecture: x86_64</li>
-<li>CPU(s): 32 — 13th Gen Intel(R) Core(TM) i9-13900HX, 16 cores / 2 threads per core</li>
-<li>Caches (sum of all): L1d 768 KiB (16), L1i 512 KiB (16), L2 32 MiB (16), L3 36 MiB (1)</li>
-</ul>
+profile — see <a href="development.html#measurement-and-profiling">Development and Build Options</a>.</p>
 
                     </main>
 

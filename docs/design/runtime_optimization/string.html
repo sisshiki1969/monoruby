@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-afb61271.js"></script>
+        <script src="../../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -320,13 +320,8 @@ Broken は <code>iter_char_bytes</code> を歩く。</li>
 <li><code>compatible_encoding</code> / <code>Encoding::compatible</code> は <code>rb_enc_compatible</code> の
 移植で、キャッシュ済みの <code>cr</code> を消費して再走査しない。</li>
 </ul>
-<p><a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a>
-はエンコーディングごとの文字境界層の提案（<em>proposed</em>）で、§2 に現状の
-<code>RStringInner</code> の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の <code>to_str</code>
-退避）の監査がある。ただしその文書は <code>content: Vec&lt;u8&gt;</code> 時代の記述で、
-SmallVec / 共有 union への改修より前のものであり、§2 が挙げる反復の穴も
-すでに埋まっている（EUC-JP / Shift_JIS / Emacs-Mule は <code>precise_mbclen</code> を
-持ち、<code>CharByteIter</code> はそれを通る）。</p>
+<p>多バイトエンコーディングの文字境界は、EUC-JP / Shift_JIS / Emacs-Mule が
+<code>precise_mbclen</code> を持ち、<code>CharByteIter</code> はそれを通る。</p>
 <hr>
 <h2 id="3-リテラル"><a class="header" href="#3-リテラル">3. リテラル</a></h2>
 <h3 id="31-fstring-プール"><a class="header" href="#31-fstring-プール">3.1 fstring プール</a></h3>
@@ -623,7 +618,7 @@ SevenBit→0、Valid→1、Unknown はラップ、Broken→2 とし、<code>ja</
 inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも <code>h["k"] = v</code> の
 格納キー（<code>Value::frozen_hash_key</code> が複製して freeze）も frozen なので
 <code>{"content-type" =&gt; "text/plain"}</code> は boxed map を作らない（134 → 57 ns）。
-詳細は <a href="hash.html">hash.md</a> §1.1、§1.3、§4.2。</p>
+詳細は <a href="hash.html">hash.md</a> §1.1、§1.3、§3。</p>
 <hr>
 <h2 id="6-ruby-で書かれているメソッド"><a class="header" href="#6-ruby-で書かれているメソッド">6. Ruby で書かれているメソッド</a></h2>
 <p><code>builtins/string.rb</code>:</p>
@@ -693,7 +688,7 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 <tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td>共有 root の write barrier、<code>young_child_exists</code></td></tr>
 <tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td><code>(STRING_CLASS, "freeze")</code> / <code>"!="</code> の BOP</td></tr>
 <tr><td><a href="../chain_deopt.html"><code>../chain_deopt.md</code></a> / <a href="../deopt_log.html"><code>../deopt_log.md</code></a></td><td><code>setbyte</code> / <code>&lt;&lt;</code> が deopt でなく detach + 再試行を選ぶ背景</td></tr>
-<tr><td><a href="../c_extention.html"><code>../c_extention.md</code></a></td><td><code>nul_terminated_buf_ptr</code> と FFI</td></tr>
+<tr><td><a href="../c_api.html"><code>../c_api.md</code></a></td><td>C 拡張に渡す文字列（<code>RSTRING_PTR</code> / <code>StringValueCStr</code>）の扱い</td></tr>
 </tbody>
 </table>
 </div>

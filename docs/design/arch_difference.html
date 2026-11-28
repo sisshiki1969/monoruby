@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-afb61271.js"></script>
+        <script src="../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,11 +178,10 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="x86-64--aarch64-jit-backend-differences"><a class="header" href="#x86-64--aarch64-jit-backend-differences">x86-64 / aarch64 JIT backend differences</a></h1>
-<p>A survey of how the two JIT machine-code backends differ today, focused on
-<strong>AsmInst coverage</strong> and <strong>lowering logic</strong>. Current as of the loop-JIT entry
-pin (<code>#1176</code>).</p>
-<p>The two trees are mirrors of each other — same file names, 20 files and
-~12.1 k lines each:</p>
+<p>How the two JIT machine-code backends differ, focused on <strong>AsmInst
+coverage</strong> and <strong>lowering logic</strong>.</p>
+<p>The two trees are mirrors of each other — same file names, 20 files each
+(~15 k lines on x86-64, ~16 k on aarch64):</p>
 <pre><code>monoruby/src/codegen/arch/{x86_64,aarch64}/
     codegen.rs  compile/  guard.rs  invoker.rs  jit_module.rs
     vmgen.rs    vmgen/    wrapper.rs
@@ -192,139 +191,89 @@ pin (<code>#1176</code>).</p>
 AsmIR) and <code>jitgen/asmir/compile_shared.rs</code> (the arch-neutral AsmInst
 lowering dispatcher).</li>
 </ul>
-<blockquote>
-<p>Line-number links below are omitted on purpose: both backends have been
-re-split since this document was first written (<code>#994</code> broke the aarch64
-<code>compile.rs</code> / <code>vmgen.rs</code> monoliths into the <code>compile/</code> and <code>vmgen/</code>
-directories above), and the previous revision’s line anchors had all gone
-stale. Grep for the function names instead.</p>
-</blockquote>
-<blockquote>
-<p><strong>History.</strong> An earlier revision of this document (pre-<code>#704</code>) described
-aarch64 as a <em>streaming port that bails to the VM</em> on any instruction shape it
-could not lower, and catalogued ~two dozen bail sites. <strong>That is no longer
-true.</strong> As of <code>#704</code> aarch64 lowers every <code>AsmInst</code> and every side exit, so it
-never bails out of JIT compilation. The sections below describe the current,
-bail-free state; §4 covers the asymmetry that <em>does</em> remain (recompilation
-strategy — not coverage).</p>
-</blockquote>
+<p>Line-number links are omitted on purpose; grep for the function names.</p>
 <hr>
 <h2 id="1-the-big-picture-one-front-end-two-backends-coverage-symmetric"><a class="header" href="#1-the-big-picture-one-front-end-two-backends-coverage-symmetric">1. The big picture: one front-end, two backends, coverage-symmetric</a></h2>
 <p>Both backends consume the <strong>same</strong> arch-neutral <code>AsmIR</code> produced by <code>jitgen</code>
 (TraceIR → register-allocated AsmIR). They diverge only at the final
 AsmIR → machine-code step, driven by a single shared dispatcher,
-<code>Codegen::compile_asmir</code>
-(<code>jitgen/asmir/compile_shared.rs</code>),
-which lowers each <code>AsmInst</code> by one of two routes:</p>
+<code>Codegen::compile_asmir</code> (<code>jitgen/asmir/compile_shared.rs</code>), which lowers
+each <code>AsmInst</code> by one of two routes:</p>
 <ol>
 <li><strong>Shared arm</strong> — the <code>match</code> in <code>compile_asmir</code> handles the instruction
-structurally and calls a tiny per-arch <strong>emission primitive</strong>
-(<code>emit_reg_move</code>, <code>emit_reg_to_stack</code>, <code>emit_guard_class</code>,
-<code>emit_integer_binop</code>, …). Only the emitted bytes differ per arch.</li>
-<li><strong>Per-arch arm</strong> — the <code>other =&gt;</code> fallthrough calls <code>compile_asmir_arch</code>,
-the backend-private match
-(<code>compile_asmir_arch</code> in each backend’s <code>compile/mod.rs</code>).
-On both arches this handles only the <em>same four</em> specialized inlined-frame
-variants (<code>GuardClassVersionSpecialized</code>,
+structurally: it builds <code>LInst</code>s for the per-arch <code>encode_linst</code>
+(<code>doc/lir.md</code>), or calls a per-arch emission helper (<code>emit_*</code>,
+<code>guard_class</code> / <code>a64_guard_class</code>, <code>integer_binop</code> /
+<code>a64_integer_binop</code>, …). Only the emitted bytes differ per arch.</li>
+<li><strong>Per-arch arm</strong> — the <code>other =&gt;</code> fallthrough calls <code>compile_asmir_arch</code>
+(each backend’s <code>compile/mod.rs</code>). On both arches it handles the <em>same
+four</em> specialized variants (<code>GuardClassVersionSpecialized</code>,
 <code>GuardConstVersionSpecialized</code>, <code>RecompileDeoptSpecialized</code>,
-<code>SetArgumentsForwarded</code>); everything else is handled by the shared arm.</li>
+<code>SetArgumentsForwarded</code>); its wildcard arm is <code>unreachable!()</code>.</li>
 </ol>
-<h3 id="the-bool-return-is-now-vestigial"><a class="header" href="#the-bool-return-is-now-vestigial">The <code>bool</code> return is now vestigial</a></h3>
-<p>Every emission primitive (and <code>compile_asmir</code> itself) returns a <code>bool</code>. In the
-pre-<code>#704</code> port this was the aarch64 “not-yet-ported / out-of-range → bail to
-the VM” signal. <strong>Today both backends always return <code>true</code>:</strong></p>
-<ul>
-<li>x86-64 is the original fully-featured reference backend; it never declines.</li>
-<li>aarch64 now lowers everything too — large frame/field/sp offsets are
-materialized through scratch registers rather than bailing, and the
-<code>...</code>-forwarding <em>deferral</em>, once disabled upstream for aarch64, is lowered
-there as well (<code>a64_set_arguments_forwarded_deferred</code>).</li>
-</ul>
-<p>There is no <code>return false</code> anywhere in the aarch64 lowering (<code>compile/</code>,
-<code>guard.rs</code>), and <code>compile_asmir_arch</code>’s wildcard arm is <code>unreachable!()</code>. The driver chain (<code>gen_asm</code> / <code>gen_machine_code</code> / <code>jit_compile</code>)
-no longer acts on the result either; the <code>bool</code> is kept only because flipping
-~150 signatures to <code>()</code> is pure churn.</p>
+<h3 id="the-bool-return-is-vestigial"><a class="header" href="#the-bool-return-is-vestigial">The <code>bool</code> return is vestigial</a></h3>
+<p><code>compile_asmir</code> and many emission helpers return a <code>bool</code>, once the “decline
+this compile” signal. <strong>Both backends always return <code>true</code></strong>: aarch64
+lowers everything too — large frame / field / sp offsets are materialized
+through scratch registers, and the <code>...</code>-forwarding deferral is lowered
+there as well (<code>a64_set_arguments_forwarded_deferred</code>). The driver chain
+(<code>gen_asm</code> / <code>gen_machine_code</code> / <code>jit_compile</code>) does not act on the result;
+the <code>bool</code> stays only because changing the signatures to <code>()</code> is churn.</p>
 <hr>
 <h2 id="2-asminst-coverage--full-on-both-arches"><a class="header" href="#2-asminst-coverage--full-on-both-arches">2. AsmInst coverage — full on both arches</a></h2>
-<p>The large majority of <code>AsmInst</code> variants are dispatched through the shared
-<code>compile_asmir</code> match and lowered by per-arch emit primitives. Structurally
-identical families covered on both arches include:</p>
+<p>Every <code>AsmInst</code> variant is lowered on both arches, almost all through the
+shared <code>compile_asmir</code> match:</p>
 <ul>
-<li>Register / stack moves: <code>RegMove</code>, <code>RegToAcc</code>, <code>AccToStack</code>, <code>RegToStack</code>,
-<code>StackToReg</code>, <code>LitToReg</code>, <code>LitToStack</code>.</li>
-<li>Control flow: <code>CondBr</code>, <code>NilBr</code>, <code>CheckLocal</code>, <code>OptCase</code>, <code>Deopt</code>,
-<code>HandleError</code>, <code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>.</li>
-<li>Guards: <code>GuardClass</code>, <code>GuardClassVersion</code>, <code>GuardConstBaseClass</code>,
-<code>GuardConstVersion</code>, <code>GuardArrayTy</code>, <code>GuardFrozen</code>, <code>GuardCapture</code>,
-<code>CheckBOP</code>, <code>CheckStack</code>, <code>ExecGc</code>.</li>
-<li>Arithmetic: <code>IntegerBinOp</code>, <code>IntegerCmp</code>, <code>FloatBinOp</code>, <code>FloatUnOp</code>,
-<code>FloatCmp</code>, <code>FixnumNeg</code>, <code>FixnumBitNot</code>, <code>RegAdd</code>, <code>RegSub</code>.</li>
+<li>Register / stack moves: <code>RegMove</code>, <code>RegToStack</code>, <code>RegToLfpStack</code>,
+<code>StackToReg</code>, <code>LitToReg</code>, <code>LitToStack</code>, <code>RegAdd</code>, <code>RegSub</code>.</li>
+<li>Control flow: <code>CondBr</code>, <code>NilBr</code>, <code>Br</code>, <code>BrFlags</code>, <code>CheckLocal</code>,
+<code>OptCase</code>, <code>Deopt</code>, <code>HandleError</code>, <code>Ret</code>, <code>MethodRet</code>, <code>BlockBreak</code>.</li>
+<li>Guards: <code>GuardClass</code>, <code>GuardClassIn</code>, <code>GuardClassVersion</code>,
+<code>GuardConstBaseClass</code>, <code>GuardConstVersion</code>, <code>GuardArrayTy</code>, <code>GuardFrozen</code>,
+<code>GuardCapture</code>, <code>CheckBOP</code>, <code>CheckStack</code>, <code>ExecGc</code>.</li>
+<li>Arithmetic: <code>IntegerBinOpReg</code>, <code>IntegerBinOpImm</code>, <code>IntegerCmpReg</code>,
+<code>IntegerCmpImm</code>, <code>IntegerDouble</code>, <code>IntegerSucc</code>, <code>FloatBinOp</code>,
+<code>FloatUnOp</code>, <code>FloatCmp</code>, <code>FixnumNeg</code>, <code>FixnumBitNot</code>, <code>MathSqrt</code>.</li>
 <li>Condition flags: <code>CmpFlags</code>, <code>CmpImmFlags</code>, <code>TestBitFlags</code>,
 <code>FloatCmpFlags</code> (set the flags only) and <code>BrFlags</code> (branch on them).</li>
-<li>FP transfer: <code>FprMove</code>, <code>FprSwap</code>, <code>F64ToFpr</code>, <code>FixnumToFpr</code>, <code>FloatToFpr</code>,
-<code>FprToStack</code>, <code>I64ToBoth</code>, <code>FprSave</code>, <code>FprRestore</code>, <code>CFunc_F_F</code>,
-<code>CFunc_FF_F</code>.</li>
-<li>Allocation / C-call: <code>CreateArray</code>, <code>NewArray</code>, <code>NewHash</code>, <code>NewRange</code>,
-<code>ConcatStr</code>, <code>ToA</code>, <code>DeepCopyLit</code>, <code>ConcatRegexp</code>, <code>ExpandArray</code>,
-<code>GenericBinOp</code>, <code>OptEqCmp</code>, <code>ArrayTEq</code>.</li>
+<li>FP transfer: <code>FprMove</code>, <code>FprSwap</code>, <code>FixnumToFpr</code>, <code>FloatToFpr</code>,
+<code>FprToStack</code>, <code>FprSave</code>, <code>FprRestore</code>, <code>FloatArgMove</code>,
+<code>FloatRetStore</code> / <code>FloatRetLoad</code>, the C calls <code>CFunc</code>.</li>
+<li>Allocation / C-call: <code>CreateArray</code>, <code>CreateArrayFrom</code>, <code>NewArray</code>,
+<code>NewHash</code>, <code>NewRange</code>, <code>CreateRange</code>, <code>ConcatStr</code>, <code>ToA</code>, <code>DeepCopyLit</code>,
+<code>ConcatRegexp</code>, <code>ExpandArray</code>, <code>GenericBinOp</code>, <code>GenericSend</code>, <code>OptEqCmp</code>,
+<code>ArrayTEq</code>, the <code>Hash*</code> probes.</li>
 <li>Variables: <code>LoadGVar</code>, <code>StoreGVar</code>, <code>LoadCVar</code>, <code>StoreCVar</code>, <code>CheckCVar</code>,
-<code>LoadDynVar</code>, <code>StoreDynVar</code>, ivar/struct-slot inline &amp; heap loads/stores,
-constants (<code>StoreConstant</code>, <code>GuardConst*</code>).</li>
-<li><code>defined?</code> family, method/class definition (<code>MethodDef</code>, <code>ClassDef</code>,
-<code>SingletonClassDef</code>, …), method-call prologue (<code>GuardClassVersion</code>,
-<code>SetupMethodFrame</code>, <code>SetArguments</code>, <code>Call</code>, <code>Init</code>, <code>Preparation</code>),
-exceptions (<code>Raise</code>, <code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>), <code>Yield</code>, <code>Inline</code>,
-and the specialized inlined-frame family.</li>
+<code>LoadDynVar</code>, <code>StoreDynVar</code>, ivar / struct-slot inline and heap loads and
+stores, constants (<code>StoreConstant</code>, <code>GuardConst*</code>).</li>
+<li><code>defined?</code> family, method / class definition (<code>MethodDef</code>, <code>ClassDef</code>,
+<code>SingletonClassDef</code>, …), method-call prologue (<code>SetupMethodFrame</code>,
+<code>SetArguments</code>, <code>Call</code>, <code>Init</code>, <code>Preparation</code>), exceptions (<code>Raise</code>,
+<code>Retry</code>, <code>Redo</code>, <code>EnsureEnd</code>), <code>Yield</code>, <code>Inline</code>, and the specialized
+inlined-frame family.</li>
 </ul>
-<p>Both backends emit all of these unconditionally. The aarch64 wildcard in
-<code>compile_asmir_arch</code> is <code>unreachable!("handled by the shared compile_asmir dispatcher")</code> — it can no longer be a bail.</p>
-<h3 id="how-aarch64-lowers-what-used-to-bail"><a class="header" href="#how-aarch64-lowers-what-used-to-bail">How aarch64 lowers what used to bail</a></h3>
-<p>The pre-<code>#704</code> bail sites were overwhelmingly <strong>12-bit immediate-range limits</strong>
-(aarch64 fixed-width instructions encode only small immediates). They are now
-handled, not declined:</p>
-<ul>
-<li><strong>LFP-relative frame offsets, callee-frame / prologue / loop-JIT <code>sub sp</code>,
-RSP-relative argument stores, block-arg offsets, class-def field offsets</strong> —
-offsets that overflow the field are materialized into a scratch register
-(<code>mov xN, #imm</code> + register-offset addressing) instead of bailing. See the
-<code>a64_frame_*</code> / <code>a64_sp_*</code> / <code>a64_addr_*</code> helpers in <code>compile/mod.rs</code>.</li>
-<li><strong>RValue heap-field offsets</strong> (inline/heap ivar &amp; struct-slot access) — same
-scratch-materialization treatment.</li>
-<li><strong>Float <code>FloatBinOp</code> / <code>FloatUnOp</code></strong> — the full <code>BinOpK</code> / <code>UnOpK</code> set is
-lowered (the old port handled only <code>Add|Sub|Mul|Div</code> / <code>Neg|Pos</code>).</li>
-<li><strong>Live FP-pool register across a runtime call</strong> — the runtime-call primitives
-save/restore the live xmm pool (<code>emit_fpr_save</code> / <code>emit_fpr_restore</code>) around
-the call, so they no longer bail on a live pool register.</li>
-<li><strong>Deopt write-back &amp; forwarded arguments</strong> — the side-exit generator
-reconstructs live frame state for all shapes, the elided objects of the
-escape analysis included (<code>a64_gen_virtual_materialize</code>), and the
-source-routed <code>...</code> forward (<code>g(*rest, **kw, &amp;blk)</code> with the rest an
-elided object) is lowered by <code>a64_set_arguments_forwarded_deferred</code>.</li>
-</ul>
+<h3 id="how-aarch64-lowers-large-immediates"><a class="header" href="#how-aarch64-lowers-large-immediates">How aarch64 lowers large immediates</a></h3>
+<p>aarch64’s fixed-width instructions encode only small immediates. Offsets
+that overflow the field — LFP-relative frame offsets, callee-frame /
+prologue / loop-JIT <code>sub sp</code>, RSP-relative argument stores, block-arg
+offsets, RValue heap-field offsets — are materialized into a scratch
+register (<code>mov xN, #imm</code> + register-offset addressing): the <code>a64_frame_*</code>,
+<code>a64_field_*</code>, <code>a64_sp_*</code> and <code>a64_rsp_slot_addr</code> helpers in
+<code>compile/mod.rs</code>. A live FP-pool register across a runtime call is saved
+and restored around it (<code>emit_fpr_save</code> / <code>emit_fpr_restore</code>), and the deopt
+write-back reconstructs the live frame state for every shape, the elided
+objects of the escape analysis included (<code>a64_gen_virtual_materialize</code>).</p>
 <hr>
-<h2 id="3-former-3-aarch64-bail-conditions--removed"><a class="header" href="#3-former-3-aarch64-bail-conditions--removed">3. (former §3 “aarch64 bail conditions” — removed)</a></h2>
-<p>This section catalogued the aarch64 bail sites. With the full port (<code>#704</code>)
-there are no bail sites left; the content has been folded into §2’s “How
-aarch64 lowers what used to bail”. The remaining <em>non-bail</em> asymmetries are in
-§4.</p>
-<hr>
-<h2 id="4-remaining-asymmetry-recompilation-strategy-not-coverage"><a class="header" href="#4-remaining-asymmetry-recompilation-strategy-not-coverage">4. Remaining asymmetry: recompilation strategy (not coverage)</a></h2>
-<p>One mechanism still differs — <strong>recompiling already-emitted code</strong> on a
-class-version miss, and only for <strong>non-specialized</strong> frames. It is not a
-coverage gap: where x86 recompiles in place, aarch64 deopts to the VM, which
-then re-JITs through the normal warm-up counters. Correctness is identical;
-only the recompile <em>strategy</em> (and thus steady-state performance after a
-class-version change) differs. §4.2 records an eviction asymmetry that no
-longer exists.</p>
-<h3 id="41-class-version-miss-recompilation"><a class="header" href="#41-class-version-miss-recompilation">4.1 Class-version-miss recompilation</a></h3>
-<p><strong>The guard itself is symmetric now.</strong> Both <code>guard_class_version</code> and
+<h2 id="3-recompilation-and-eviction--symmetric"><a class="header" href="#3-recompilation-and-eviction--symmetric">3. Recompilation and eviction — symmetric</a></h2>
+<p>Recovering from a broken assumption works the same way on both arches; only
+the helpers that implement it are per-arch.</p>
+<h3 id="31-class-version-miss-recompilation"><a class="header" href="#31-class-version-miss-recompilation">3.1 Class-version-miss recompilation</a></h3>
+<p><strong>The guard.</strong> Both <code>guard_class_version</code> and
 <code>a64_guard_class_version</code> compare the global version word against the <em>unit’s
 patchable snapshot word</em> (the <code>class_version_label</code> <code>jit_compile</code> creates), so
 a successful salvage re-validates the unit’s code in place on either arch by
-storing the current version into that word (<code>Codegen::set_class_version</code>). An
-earlier revision of this document quoted an aarch64 comment saying <em>“we do not
-recompile on miss yet — just deopt”</em>; that text is gone.</p>
-<p>The <strong>recovery jump-back</strong> is ported too: both arches now have a
+storing the current version into that word (<code>Codegen::set_class_version</code>).</p>
+<p>The <strong>recovery jump-back</strong> is symmetric too: both arches have a
 <code>jit_recompile_method_with_recovery</code> (the aarch64 one returns a tri-state —
 salvaged / recompiled / recompile-panicked — since aarch64 surfaces a
 recompile panic as a Ruby <code>FatalError</code>, which x86 does not). On either arch a
@@ -338,20 +287,14 @@ recompiles on both arches. x86 uses <code>guard_class_version_specialized</code>
 <code>gen_recompile_specialized</code>; aarch64 uses <code>GuardClassVersionSpecialized</code> /
 <code>RecompileDeoptSpecialized</code> → <code>a64_call_recompile_specialized</code>, which rewrites
 the specialized body’s <code>SpecializedCall</code> <code>bl</code>.</p>
-<h3 id="42-on-stack-eviction-bop-redefinition--no-longer-asymmetric"><a class="header" href="#42-on-stack-eviction-bop-redefinition--no-longer-asymmetric">4.2 On-stack eviction (BOP redefinition) — no longer asymmetric</a></h3>
-<p>This section used to record an asymmetry: x86 recorded a return-address patch
-point at every call site and, on <strong>BOP (basic-op) redefinition</strong>, wrote a <code>jmp</code>
-into the live return path so the suspended frame deopted; aarch64 did that for
-specialized calls only, and relied on the inline class-version deopt for the
-rest.</p>
-<p>Both halves are gone. Every call/yield site on both arches now records its
-return address (<code>set_deopt_with_return_addr</code>) purely as a <em>key</em>, and BOP
-redefinition runs the arch-neutral chain-deopt walk (<code>Codegen::chain_deopt_into</code>),
-which converts each suspended JIT frame into an interpreter frame from the
-stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md</code>
-§10.</p>
+<h3 id="32-on-stack-eviction-bop-redefinition--symmetric"><a class="header" href="#32-on-stack-eviction-bop-redefinition--symmetric">3.2 On-stack eviction (BOP redefinition) — symmetric</a></h3>
+<p>Every call / yield site on both arches records its return address
+(<code>set_deopt_with_return_addr</code>) purely as a <em>key</em>, and BOP redefinition runs
+the arch-neutral chain-deopt walk (<code>Codegen::chain_deopt_into</code>), which
+converts each suspended JIT frame into an interpreter frame from the stack
+alone — no code is patched, on either arch. See <code>doc/chain_deopt.md</code>.</p>
 <hr>
-<h2 id="5-guard-logic-comparison"><a class="header" href="#5-guard-logic-comparison">5. Guard logic comparison</a></h2>
+<h2 id="4-guard-logic-comparison"><a class="header" href="#4-guard-logic-comparison">4. Guard logic comparison</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -364,8 +307,8 @@ stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md
 <tr><td><code>guard_array_ty</code></td><td>yes (<code>ObjTy::ARRAY</code> at <code>RVALUE_OFFSET_TY</code>)</td><td>yes</td></tr>
 <tr><td><code>guard_capture</code></td><td>yes (<code>branch_if_captured</code>)</td><td>yes</td></tr>
 <tr><td><code>float_to_f64</code> unbox</td><td>yes (flonum / heap-Float, 0.0 sign-bit trick)</td><td>yes (mirrored)</td></tr>
-<tr><td>class-version guard</td><td>unit snapshot word + recovery jump-back (§4.1)</td><td>same — recovery jump-back ported (§4.1)</td></tr>
-<tr><td>eviction on BOP redefinition</td><td>arch-neutral chain-deopt walk, no code patching (§4.2)</td><td>identical (§4.2)</td></tr>
+<tr><td>class-version guard</td><td>unit snapshot word + recovery jump-back (§3.1)</td><td>same — recovery jump-back ported (§3.1)</td></tr>
+<tr><td>eviction on BOP redefinition</td><td>arch-neutral chain-deopt walk, no code patching (§3.2)</td><td>identical (§3.2)</td></tr>
 <tr><td>deopt recording (<code>deopt</code> / <code>profile</code>)</td><td><code>log_deoptimize</code> from every deopt handler, per-guard trampolines, class-guard miss recorder</td><td><code>log_deoptimize</code> from every deopt handler; no trampolines (<code>guard: unknown</code>, see <code>doc/deopt_log.md</code>) and no class-guard miss recorder</td></tr>
 </tbody>
 </table>
@@ -374,7 +317,7 @@ stack alone — no code is patched, on either arch. See <code>doc/chain_deopt.md
 for symmetry with x86, but never return <code>false</code> — every <code>ClassId</code> is handled,
 immediates inline and everything else via the heap fallback).</p>
 <hr>
-<h2 id="5b-local-slot-addressing-rbp-x86-vs-lfp-aarch64"><a class="header" href="#5b-local-slot-addressing-rbp-x86-vs-lfp-aarch64">5b. Local-slot addressing: rbp (x86) vs LFP (aarch64)</a></h2>
+<h2 id="5-local-slot-addressing-rbp-x86-vs-lfp-aarch64"><a class="header" href="#5-local-slot-addressing-rbp-x86-vs-lfp-aarch64">5. Local-slot addressing: rbp (x86) vs LFP (aarch64)</a></h2>
 <p>The two backends address a frame’s own local/temporary slots through different
 base registers, and this leaks into one correctness-relevant corner:</p>
 <div class="table-wrapper">
@@ -403,18 +346,18 @@ rbp-relative, so a call <strong>result</strong> written to an <code>S</code> slo
 lands on the dead stack frame and is lost (the VM then reads the stale heap
 copy). With a non-empty GP pool this was masked because results stayed pool-
 resident (<code>G</code>) and the deopt re-homed them via the LFP; it surfaces once the
-pool is empty, which <code>GP_ALLOC_POOL = &amp;[]</code> now makes unconditional on both
-arches (<code>LinkMode::G</code> was abolished; <code>jitgen/gp_alloc.rs</code> drives GP reuse
-locally instead, identically on both).
-aarch64 never had the bug because <em>all</em> its slot stores are already LFP-relative.</p>
-<p>The fix is <code>AsmInst::RegToLfpStack</code> / <code>LMem::LfpSlot</code> (this commit): the result
+pool is empty, as <code>GP_ALLOC_POOL = &amp;[]</code> makes it on both arches
+(<code>jitgen/gp_alloc.rs</code> keeps Fixnums in registers only within a basic block).
+aarch64 never had the problem because <em>all</em> its slot stores are already
+LFP-relative.</p>
+<p><code>AsmInst::RegToLfpStack</code> / <code>LMem::LfpSlot</code> handles it: the result
 of a possibly-capturing call (the <code>send</code> / <code>compile_yield</code> paths, gated on
 <code>!no_capture_guard()</code>) is stored via the LFP (<code>def_rax2acc_capturing</code>) so it
 follows the frame onto the heap — matching what aarch64 does for every slot, and
 what the deopt write-back does for <code>G</code>/<code>F</code> slots. On aarch64 <code>LfpSlot</code> lowers
 identically to <code>Slot</code>.</p>
 <hr>
-<h2 id="5c-other-current-asymmetries"><a class="header" href="#5c-other-current-asymmetries">5c. Other current asymmetries</a></h2>
+<h2 id="6-other-current-asymmetries"><a class="header" href="#6-other-current-asymmetries">6. Other current asymmetries</a></h2>
 <p>Neither a coverage gap nor a guard difference, but worth knowing:</p>
 <div class="table-wrapper">
 <table>
@@ -422,7 +365,7 @@ identically to <code>Slot</code>.</p>
 <tr><th></th><th>x86-64</th><th>aarch64</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>Installing / re-pointing JIT code</strong></td><td>patches branches in place (<code>apply_jmp_patch_address</code>, the <code>patch_point</code> <code>call</code>)</td><td>indirect heap slots — <code>ISeqInfo::jit_slot</code> and <code>jit_guard_free_slot</code> are <code>#[cfg(target_arch = "aarch64")]</code> fields — plus <code>Codegen::patch_call_to_entry</code>, a single <code>bl</code> rewrite under the MAP_JIT writable/executable flip</td></tr>
+<tr><td><strong>Installing / re-pointing JIT code</strong></td><td>patches branches in place (<code>apply_jmp_patch_address</code>, the <code>patch_point</code> <code>call</code>)</td><td>indirect heap-leaked dispatch words — <code>ISeqInfo::jit_slot</code> and <code>jit_guard_free_slot</code> are <code>#[cfg(target_arch = "aarch64")]</code> fields</td></tr>
 <tr><td><strong>Cold-code placement</strong></td><td>cold handlers go on page 1 (<code>select_page</code>, ~90 sites)</td><td>page 1 is past <code>B</code>/<code>BL</code> range from page 0, so side-exit handlers, and the slow paths of the safepoint poll and the class- / const-version guards (<code>Codegen::a64_cold_stub</code>), go into <em>side-exit islands</em> in the same code stream: one at the frame’s end, behind a <code>b skip</code> only where code can fall into it, plus range thunks every 8 KiB of hot code (<code>a64_drain_side_exits</code>, <code>a64_thunk_side_exits</code>). The hot path is one conditional branch to cold code, as on x86. In exchange aarch64 has an optimization x86 has no use for: <code>AsmIr::as_pure_deopt</code> / <code>pure_deopt_target</code> (<code>#[cfg(target_arch = "aarch64")]</code>) emit a deopt-only block’s handler <em>at</em> the block label, so predecessors branch straight onto the deopt code</td></tr>
 <tr><td><strong>Branch range</strong></td><td>never a constraint</td><td>a large loop body can put a <code>TBZ</code>/<code>TBNZ</code> further from its deopt than imm14 (+/-32 KiB) reaches, which panics the emit. <code>jit_compile_loop</code> catches it and leaves the codeptr unpublished; <code>a64_op_loop_start</code>’s tri-state slot (<code>0</code> / <code>1</code> sentinel / codeptr) stops the retry loop</td></tr>
 <tr><td><strong>A panic inside a compile</strong></td><td>contained at every entry point (<code>compiler.rs</code> <code>contain_compile_panic</code>): nothing is published, the warm-up counter has run out so the method / loop stays interpreted, and a failed recompile leaves the old code deopting as before</td><td>the same for a first compile; a <em>recompile</em> panic additionally sets a Ruby <code>FatalError</code> (the row below)</td></tr>
@@ -432,20 +375,20 @@ identically to <code>Slot</code>.</p>
 </tbody>
 </table>
 </div>
-<p>The last row is symmetric by design as of <code>#1176</code>: both pin the entry to
+<p>The last row is symmetric by design: both pin the entry to
 <code>total - PROLOGUE_OVERHEAD</code> rather than subtracting from the <code>sp</code> they inherit,
 because the frame may have been built by either the VM’s <code>init_method</code> or a JIT
 prologue and only the latter has already reserved the unit’s spill region.</p>
 <hr>
-<h2 id="6-practical-consequences"><a class="header" href="#6-practical-consequences">6. Practical consequences</a></h2>
+<h2 id="7-practical-consequences"><a class="header" href="#7-practical-consequences">7. Practical consequences</a></h2>
 <ul>
 <li><strong>Correctness is equal.</strong> Both backends produce correct results.</li>
 <li><strong>Coverage is equal.</strong> Both backends JIT every method/loop the front-end
-produces; aarch64 no longer falls back to the VM for any instruction shape.</li>
-<li><strong>Recompile behavior is symmetric</strong> (§4.1): a salvaged class-version miss
+produces; aarch64 does not fall back to the VM for any instruction shape.</li>
+<li><strong>Recompile behavior is symmetric</strong> (§3.1): a salvaged class-version miss
 resumes compiled code in place on both arches; a genuine change recompiles
 and pays one deopt.</li>
-<li><strong>A very large loop body may stay interpreted on aarch64</strong> (§5c, branch
+<li><strong>A very large loop body may stay interpreted on aarch64</strong> (§6, branch
 range). x86 has no such limit.</li>
 </ul>
 <h3 id="one-line-summary"><a class="header" href="#one-line-summary">One-line summary</a></h3>
@@ -456,7 +399,7 @@ registers), so the <code>bool</code> bail return is vestigial. What remains is
 non-coverage: different <strong>code-installation</strong> mechanisms (branch patching
 vs indirect slots) and <strong>cold-code placement</strong> (page 1 vs in-stream
 islands, which buys aarch64 the <code>as_pure_deopt</code> collapse), and aarch64’s <strong>branch-range</strong>
-ceiling on very large loop bodies (§5c). Guards, the recovery jump-back,
+ceiling on very large loop bodies (§6). Guards, the recovery jump-back,
 BOP eviction, block/method inlining and the GP pool are all symmetric.</p>
 </blockquote>
 

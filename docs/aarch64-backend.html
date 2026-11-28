@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-70a11531.js";
+            window.path_to_searchindex_js = "searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-afb61271.js"></script>
+        <script src="toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,16 +177,17 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <p>monoruby runs natively on <strong>aarch64</strong> — macOS on Apple Silicon is fully supported (VM tier + JIT), and CI runs on GitHub’s Apple Silicon runners. The aarch64 backend was ported in mid-2026 and lowers the <strong>complete</strong> instruction set: it never declines a compilation. This page is an overview; the detailed comparison is <a href="design/arch_difference.html"><code>doc/arch_difference.md</code></a>.</p>
+                        <p>monoruby runs natively on <strong>aarch64</strong> — macOS on Apple Silicon is fully supported (VM tier + JIT), and CI runs on GitHub’s Apple Silicon runners. The aarch64 backend lowers the <strong>complete</strong> instruction set: it never declines a compilation. This page is an overview; the detailed comparison is <a href="design/arch_difference.html"><code>doc/arch_difference.md</code></a>.</p>
 <h2 id="how-the-backends-are-organized"><a class="header" href="#how-the-backends-are-organized">How the backends are organized</a></h2>
 <pre><code>codegen/jitgen/                 arch-neutral front-end: bytecode → TraceIR → AsmIR
-codegen/jitgen/asmir/           arch-neutral lowering dispatcher (compile_asmir → LIR)
-codegen/arch/x86_64/            x86-64 backend: VM tier, invokers, wrappers, encode_linst
+codegen/jitgen/asmir/           arch-neutral lowering dispatcher (compile_asmir)
+codegen/jitgen/lir.rs           arch-neutral low-level IR (LInst)
+codegen/arch/x86_64/            x86-64 backend: VM tier, invokers, wrappers, encode_linst, emit_*
 codegen/arch/aarch64/           aarch64 backend: same structure, mirrored file layout
 </code></pre>
-<p>Everything above machine-code emission is shared. The arch-neutral dispatcher lowers each <code>AsmInst</code> either through common code paths built on small per-arch emission primitives (<code>emit_reg_move</code>, <code>emit_guard_class</code>, <code>emit_integer_binop</code>, …) or into arch-neutral <strong>LIR</strong>, which each architecture encodes with its own <code>encode_linst</code> (selected by <code>cfg(target_arch)</code>, no dynamic dispatch). Machine code is emitted with the <a href="https://github.com/sisshiki1969/monoasm">monoasm</a> dynamic assembler, which provides both <code>monoasm!</code> (x86-64) and <code>monoasm_arm64!</code> DSLs.</p>
-<h2 id="full-coverage--no-bail"><a class="header" href="#full-coverage--no-bail">Full coverage — no bail</a></h2>
-<p>Historically the aarch64 port could “bail” (fall back to the VM) on instructions it didn’t yet support — almost always because an offset didn’t fit AArch64’s 12-bit immediate encodings. Today every <code>AsmInst</code> and every side exit is lowered: displacements that fit are folded into <code>ldur</code>/<code>stur</code>/scaled <code>ldr</code>/<code>str</code>, and larger frame/field/sp offsets are <strong>materialized through reserved scratch registers</strong> (<code>x9</code>/<code>x10</code>). The <code>bool</code> “decline” return still present in some lowering signatures is vestigial.</p>
+<p>Everything above machine-code emission is shared. The arch-neutral dispatcher lowers each <code>AsmInst</code> either into arch-neutral <strong>LIR</strong> (<code>LInst</code>), which each architecture encodes with its own <code>encode_linst</code>, or by calling a per-arch emission helper (<code>emit_*</code>, <code>guard_class</code> / <code>a64_guard_class</code>, <code>integer_binop</code> / <code>a64_integer_binop</code>, …). Both are selected by <code>cfg(target_arch)</code>, with no dynamic dispatch. Machine code is emitted with the <a href="https://github.com/sisshiki1969/monoasm">monoasm</a> dynamic assembler, which provides both <code>monoasm!</code> (x86-64) and <code>monoasm_arm64!</code> DSLs. See <a href="design/lir.html">Unified low-level IR</a>.</p>
+<h2 id="full-coverage"><a class="header" href="#full-coverage">Full coverage</a></h2>
+<p>Every <code>AsmInst</code> and every side exit is lowered on aarch64. Displacements that fit are folded into <code>ldur</code>/<code>stur</code>/scaled <code>ldr</code>/<code>str</code>, and larger frame/field/sp offsets are <strong>materialized through reserved scratch registers</strong> (<code>x9</code>/<code>x10</code>). The <code>bool</code> “decline” return still present in some lowering signatures is vestigial: it is always <code>true</code>.</p>
 <h2 id="register-mapping"><a class="header" href="#register-mapping">Register mapping</a></h2>
 <div class="table-wrapper">
 <table>
@@ -196,21 +197,23 @@ codegen/arch/aarch64/           aarch64 backend: same structure, mirrored file l
 <tbody>
 <tr><td><code>&amp;mut Executor</code></td><td><code>rbx</code></td><td><code>x19</code></td></tr>
 <tr><td><code>&amp;mut Globals</code></td><td><code>r12</code></td><td><code>x20</code></td></tr>
-<tr><td>Program counter</td><td><code>r13</code></td><td><code>x21</code></td></tr>
+<tr><td>Program counter (VM tier)</td><td><code>r13</code></td><td><code>x21</code></td></tr>
 <tr><td>Local frame pointer (LFP)</td><td><code>r14</code></td><td><code>x22</code></td></tr>
-<tr><td>(former accumulator slot)</td><td><code>r15</code></td><td><code>x23</code></td></tr>
+<tr><td>Accumulator (VM tier only)</td><td><code>r15</code></td><td><code>x23</code></td></tr>
+<tr><td><code>self</code>’s ivar buffer in JIT code (<code>SELF_IVAR_BASE</code>)</td><td><code>r13</code></td><td><code>x24</code></td></tr>
 <tr><td>Scratch for lowering temps</td><td>—</td><td><code>x9</code>–<code>x15</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>JIT code keeps no fixed accumulator. Inside it <code>r13</code> (aarch64: <code>x24</code>) caches the buffer of <code>self</code>’s heap ivar table across a run of instructions that cannot grow it.</p>
 <p>The C-call ABIs differ (arguments in <code>rdi/rsi/rdx/…</code> vs <code>x0..x7</code>), so call-argument lowering shuffles into the ABI registers explicitly rather than using a 1:1 map.</p>
 <h2 id="remaining-differences"><a class="header" href="#remaining-differences">Remaining differences</a></h2>
-<p>Correctness and instruction coverage are identical across the two backends; the few remaining asymmetries only affect <em>transition costs</em> around recompilation (e.g. how a class-version guard miss recovers: x86-64 patches and recompiles in place in some paths where aarch64 deopts and re-JITs via warm-up counters). These are catalogued, with rationale, in <a href="design/arch_difference.html"><code>doc/arch_difference.md</code></a>.</p>
+<p>Correctness and instruction coverage are identical across the two backends. What differs is mechanism, not coverage: x86-64 installs and re-points compiled code by patching branches in place while aarch64 goes through indirect dispatch words; cold handlers sit on a separate code page on x86-64 but in in-stream side-exit islands on aarch64 (page 1 is out of <code>B</code>/<code>BL</code> range); and a very large loop body can exceed aarch64’s conditional-branch range, which leaves that loop interpreted. These are catalogued in <a href="design/arch_difference.html"><code>doc/arch_difference.md</code></a>.</p>
 <h2 id="building-and-testing-on-aarch64"><a class="header" href="#building-and-testing-on-aarch64">Building and testing on aarch64</a></h2>
 <ul>
 <li>On Apple Silicon macOS, a normal <code>cargo build</code> produces a native binary (Homebrew <code>libffi</code> + <code>pkg-config</code> are required — see the target-specific dependency block in <code>monoruby/Cargo.toml</code>).</li>
 <li>From an x86-64 Linux host, <code>bin/setup-aarch64-cross</code> sets up a cross toolchain and <code>bin/test-aarch64</code> runs the test suite under emulation.</li>
-<li>CI runs the full test scope natively on <code>macos-latest</code> (Apple Silicon) for every push and pull request.</li>
+<li>CI runs the test scope natively on <code>macos-latest</code> (Apple Silicon) for every push and pull request; the manual <code>gc-stress</code> workflow also runs on native arm64 Linux (<code>ubuntu-24.04-arm</code>).</li>
 </ul>
 
                     </main>

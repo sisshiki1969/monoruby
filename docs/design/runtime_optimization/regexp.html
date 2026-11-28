@@ -35,10 +35,10 @@
             const path_to_root = "../../";
             const default_light_theme = "light";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-70a11531.js";
+            window.path_to_searchindex_js = "../../searchindex-a8400f70.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../../toc-afb61271.js"></script>
+        <script src="../../toc-2dc4913e.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -347,8 +347,8 @@ GP レジスタへの即値ロードになる。<strong><code>/re/</code> を回
 <code>define_method</code> 本体で止まる（<code>Lfp::mfp</code>、
 <a href="../stack_frame.html"><code>../stack_frame.md</code></a>）。</p>
 <p>native な builtin フレームは svar スコープを作らない。<code>Executor::current_mfp</code>
-は<strong>動的な</strong> CFP 連鎖を <code>is_native()</code> と <code>is_svar_transparent()</code> のフレーム
-越しに歩く。<code>is_svar_transparent</code> は monoruby 自身の <code>builtins/*.rb</code> から
+は<strong>動的な</strong> CFP 連鎖を <code>is_native()</code> と <code>is_internal_builtin()</code> のフレーム
+越しに歩く。<code>is_internal_builtin</code> は monoruby 自身の <code>builtins/*.rb</code> から
 コンパイルされた全 iseq に立つので、<code>"wawa".to_enum(:scan, /./).map { $&amp; }</code>
 は monoruby の <code>Enumerable#map</code> が Ruby フレームでも <code>scan</code> の match を見る。</p>
 <p><strong>遅延確保</strong>: <code>svar_container_of</code> はスロットがゼロなら <code>None</code> を返し、
@@ -416,8 +416,6 @@ Regexp を持たず、<code>#regexp</code> / <code>#==</code> / <code>#hash</cod
 <li><code>RegexpInner::match_pred</code>: 真偽だけの照合で、<strong><code>$~</code> に触れず <code>MatchData</code>
 も作らない</strong>。<code>Regexp#match?</code>、<code>String#match?</code>、<code>Array#grep</code> /
 <code>Enumerable#grep</code>（grep は <code>$~</code> を乱してはいけない、CRuby 準拠）。</li>
-<li><code>captures_from_pos_no_save</code>: 特殊変数の副作用無しの生の照合。<code>gsub</code> +
-ブロックの先行探索と <code>replace_all_block_inner</code> の走査。</li>
 <li><code>strscan_match</code>: <code>onig_match</code> / <code>onig_search</code> を再利用 region に、<code>$~</code>
 無し（§3.6）。</li>
 <li><code>String#match</code> / <code>Regexp#match</code> は<strong>保存したばかりの <code>$~</code> を返り値として
@@ -473,13 +471,9 @@ nil / true / false だけ）。<code>case/when</code> に regexp が来ると <c
 飛ばす。</p>
 <h3 id="33-バイト--文字オフセット変換"><a class="header" href="#33-バイト--文字オフセット変換">3.3 バイト ↔ 文字オフセット変換</a></h3>
 <p><strong>文字添字 → バイト添字のキャッシュは無い。</strong> 変換は毎回線形走査
-（<code>byte_to_char_index</code> は <code>char_indices().enumerate()</code>、<code>char_to_byte_pos</code> は
-<code>char_indices().nth(cp)</code>、<code>Regexp#match</code> の native 経路は
+（<code>byte_to_char_index</code> は <code>char_indices().enumerate()</code>、<code>Regexp#match</code> の native 経路は
 <code>iter_char_bytes().take(cp).map(len).sum()</code>）。ASCII のみのショートカットが
-緩和のすべてで、背景と計画は
-<a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a>
-（<code>CharByteIter</code>、「Onigmo coupling」の制限、多エンコーディングの Onigmo
-走査は別件という注記）。</p>
+緩和のすべてである。</p>
 <h3 id="34-部分文字列の共有と一巡の-splice"><a class="header" href="#34-部分文字列の共有と一巡の-splice">3.4 部分文字列の共有と一巡の splice</a></h3>
 <ul>
 <li><code>string_substring</code>: <code>len &gt; 32</code> で親がヒープ／共有ならコピー無しの CoW
@@ -527,14 +521,14 @@ splice 端点が UTF-8 境界なら変更後の code range 分類を O(1) に短
 <tr><td><code>String#[]</code> / <code>slice</code>（Regexp）</td><td>名前付きは <code>get_group_members</code> でグループ番号を解決し、最右の参加グループ。<code>$~</code> を設定</td></tr>
 <tr><td><code>String#index</code></td><td><strong>String の needle はエンジンに入らない</strong> — バイト／文字境界の部分文字列探索で <code>$~</code> を触らず（issue #721）、壊れた UTF-8 も許容。Regexp 経路はミス時に <code>$~</code> を消し、末尾のゼロ幅一致を専用に扱う</td></tr>
 <tr><td><code>String#rindex</code></td><td>前方走査ループ。最終的な <code>$~</code> は返す位置での追加 1 プローブで再確立</td></tr>
-<tr><td><code>String#sub</code> / <code>sub!</code></td><td>Hash / 置換 String / ブロックの 3 腕が <code>with_coerced_regexp</code>（Regexp・String（エスケープ）・<code>to_str</code>）に集まる。結果は <code>apply_template_encoding</code> で再タグ</td></tr>
+<tr><td><code>String#sub</code> / <code>sub!</code></td><td>Hash / 置換 String / ブロックの 3 腕が <code>with_coerced_regexp</code>（Regexp・String（エスケープ）・<code>to_str</code>）に集まる。結果はレシーバのエンコーディングに再タグ</td></tr>
 <tr><td><code>String#gsub</code> / <code>gsub!</code></td><td>ブロック形は <code>replace_all_block</code> が <strong>frozen スナップショットを取る前に生きたレシーバで最初の一致を先行探索</strong>する: 「一致無し」の一般的なケースがスナップショット + splice でなくコピー 1 回で済み、本走査は 0 でなく最初の一致位置から始まる（<code>gsub_block_without_a_match_probes_first</code> テスト）。ブロック結果のエンコーディング互換は文字列化前に検査</td></tr>
 <tr><td><code>String#scan</code></td><td>先に frozen スナップショット。yield する各断片は CoW <code>string_substring</code>。CRuby のゼロ幅一致を落とさないよう <code>captures_iter</code> でなく手動走査。ループ後 <code>$~</code> を<strong>最後の</strong>一致に戻す（終端の不一致で消えるため）</td></tr>
 <tr><td><code>String#split</code></td><td>区切り <code>SepKind::{Awk, Chars, Str, Re}</code>: <strong>空ソースの Regexp は文字分割、単一スペースのソースはリテラル文字列分割に降格し、どちらもエンジンに入らない</strong>。非 UTF-8 + 空区切りの専用文字経路、<code>limit == 1</code> の短絡、CRuby の <code>split_string</code> を写した空フィールドの遅延カウンタ</td></tr>
 <tr><td><code>String#start_with?</code></td><td>Regexp はエンジン（<code>m.start() == 0</code> でアンカー）。<strong>String は生の <code>starts_with</code> バイト検査</strong> + <code>enc_char_boundary</code> で、エンジンも確保も無し</td></tr>
 <tr><td><code>String#end_with?</code></td><td>Regexp は <code>TypeError</code>（CRuby どおり）。String は <code>ends_with</code> + 境界検査</td></tr>
 <tr><td><code>String#include?</code></td><td>2 つの <code>regex_view</code> に <code>str::contains</code></td></tr>
-<tr><td><code>String#tr</code> / <code>tr_s</code> / <code>delete</code> / <code>count</code> / <code>squeeze</code></td><td>3 段: (1) ASCII のみのレシーバ <strong>かつ</strong> ASCII のみの指定なら <code>[u64; 2]</code> の 128 ビットマップ（削除／否定）か平坦な <code>[u8; 128]</code> 変換表で全部バイト単位、(2) 非 ASCII レシーバに ASCII 指定は <code>tr_translate_bytes</code>、(3) 汎用の <code>chars()</code> 走査。<code>Charset</code> は <code>ascii_bitmap: [u64; 2]</code> + <code>non_ascii: BTreeSet&lt;char&gt;</code> + <code>negated</code> で、<code>contains_ascii_byte</code> はシフト / AND / XOR 各 1 回</td></tr>
+<tr><td><code>String#tr</code> / <code>tr_s</code> / <code>delete</code> / <code>count</code> / <code>squeeze</code></td><td>3 段: (1) ASCII のみのレシーバ <strong>かつ</strong> ASCII のみの指定なら <code>[u64; 2]</code> の 128 ビットマップ（削除／否定）か平坦な <code>[u8; 128]</code> 変換表で全部バイト単位、(2) 文字が自身のバイトであるレシーバは文字単位・コードポイント比較の走査（<code>tr_translate_cp</code>）、(3) 汎用の <code>chars()</code> 走査。<code>Charset</code> は <code>ascii_bitmap: [u64; 2]</code> + <code>non_ascii: BTreeSet&lt;char&gt;</code> + <code>negated</code> で、<code>contains_ascii_byte</code> はシフト / AND / XOR 各 1 回</td></tr>
 </tbody>
 </table>
 </div>
@@ -575,8 +569,8 @@ UTF-8 / 代理ビュー上で走る。</li>
 against X string」）、<code>Regexp#match</code> の <code>ArgumentError: invalid byte sequence</code>、String 側の <code>check_pattern_encoding_compat</code> 等。</li>
 <li>代理写像は多バイトのバイト指向エンコーディングに対する CRuby のエンコー
 ディング別文字走査の<strong>バイト単位の近似</strong>である。</li>
-<li>結果のエンコーディング: <code>apply_template_encoding</code> が <code>sub</code> / <code>gsub</code> の出力を
-レシーバのエンコーディングに再タグし（置換機構は既定で UTF-8 を組む）、
+<li>結果のエンコーディング: <code>sub</code> / <code>gsub</code> の出力はレシーバのエンコーディングに
+再タグされ（置換機構は既定で UTF-8 を組む）、
 <code>Regexp#source</code> は <code>fixed_encoding?</code> に従い、補間 regexp は修飾子で固定
 されない限り補間内容から取る。</li>
 </ul>
@@ -592,7 +586,7 @@ against X string」）、<code>Regexp#match</code> の <code>ArgumentError: inva
 <tr><td>非補間リテラル</td><td>1 回コンパイル、frozen、共有</td><td>同じだがさらに早く、<em>bytecodegen</em> 時にコンパイルして <code>FrozenLiteral</code> で出す。コンパイルエラーは実行時 <code>RegexpError</code> でなく<strong>ロード時の構文エラー</strong></td></tr>
 <tr><td>エンコーディング別の再コンパイル</td><td><code>rb_reg_prepare_re</code> が regexp オブジェクト上にキャッシュ</td><td><strong>プロセス全体</strong>の 2 つのキャッシュ（<code>REGEX_CACHE</code> / <code>NATIVE_CACHE</code>）、どちらも <code>RwLock&lt;HashMap&gt;</code> で<strong>上限無し</strong>。<code>Arc&lt;Regex&gt;</code> でスレッド間共有</td></tr>
 <tr><td>エンジンが見るエンコーディング</td><td>被照合の実エンコーディングで Onigmo が動く</td><td>既定で UTF-8 / ASCII。<code>Regexp#match</code> + 非 SevenBit + 対応コーデックだけ native 経路。多バイト <code>NamedByte</code>（Big5 / GB18030 / EUC-KR/TW）は意図的に除外。他はバイト ↔ <code>U+00XX</code> の代理空間</td></tr>
-<tr><td><code>$~</code> の格納</td><td>MFP の <code>vm_svar</code></td><td>同じ設計を意図的に写す: LEP の <code>LFP_SVAR</code>、遅延確保の <code>[$~, $_]</code>、ブロック / lambda が <code>outer</code> を辿る。追加で <code>is_svar_transparent</code>（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い）</td></tr>
+<tr><td><code>$~</code> の格納</td><td>MFP の <code>vm_svar</code></td><td>同じ設計を意図的に写す: LEP の <code>LFP_SVAR</code>、遅延確保の <code>[$~, $_]</code>、ブロック / lambda が <code>outer</code> を辿る。追加で <code>is_internal_builtin</code>（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い）</td></tr>
 <tr><td><code>Regexp#match?</code> の <code>MatchData</code> 回避</td><td>あり（<code>rb_reg_match_p</code>）</td><td>あり（<code>match_pred</code>）。CRuby より広く <code>Array#grep</code> / <code>Enumerable#grep</code> も使う</td></tr>
 <tr><td><code>MatchData</code> オブジェクトの再利用</td><td><code>rb_reg_search0</code> が backref スロットの busy でない <code>MatchData</code> を再利用</td><td><strong>常に新規確保</strong>。40 バイトのペイロード、<code>SmallVec&lt;[Span; 2]&gt;</code> の inline 容量、コピー無しの CoW haystack スナップショットで緩和</td></tr>
 <tr><td><code>onig_region</code> の再利用</td><td>照合ごとに再利用</td><td><code>captures_from_pos</code> は照合ごとに <code>OnigRegion</code> を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル <code>Region</code>）<strong>のみ</strong>（<code>onig_region_clear</code> + memset で約 3.3 %）</td></tr>
@@ -641,7 +635,6 @@ supported”）。<code>Regexp.linear_time?</code> が false を返すものを�
 <tr><td><code>builtins/fiber.rs</code> / <code>builtins/thread.rs</code> の svar テスト</td><td><code>root_svar</code> の分離</td></tr>
 <tr><td><a href="../stack_frame.html"><code>../stack_frame.md</code></a></td><td><code>LFP_SVAR</code> スロットと LEP の所有規則</td></tr>
 <tr><td><a href="../gc.html"><code>../gc.md</code></a></td><td><code>sp_match_regex</code> / <code>sp_match_haystack</code> の root</td></tr>
-<tr><td><a href="../encoding_char_iteration_design.html"><code>../encoding_char_iteration_design.md</code></a></td><td>バイト ↔ 文字オフセット、<code>CharByteIter</code></td></tr>
 <tr><td><a href="../bop_redefinition.html"><code>../bop_redefinition.md</code></a></td><td><code>Regexp#===</code> が表に無い理由の背景</td></tr>
 <tr><td><a href="../lir.html"><code>../lir.md</code></a> / <a href="../arch_difference.html"><code>../arch_difference.md</code></a></td><td><code>ConcatRegexp</code> マクロ命令</td></tr>
 <tr><td><a href="../threads.html"><code>../threads.md</code></a> / <a href="../refinements.html"><code>../refinements.md</code></a></td><td>実行コンテキストごとの <code>$~</code> / <code>$_</code>、LEP 走査の再利用</td></tr>
@@ -657,7 +650,7 @@ supported”）。<code>Regexp.linear_time?</code> が false を返すものを�
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../../design/encoding_char_iteration_design.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../../design/c_api.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -671,7 +664,7 @@ supported”）。<code>Regexp.linear_time?</code> が false を返すものを�
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../../design/encoding_char_iteration_design.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../../design/c_api.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
