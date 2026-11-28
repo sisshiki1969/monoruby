@@ -25,6 +25,17 @@ dispatcher lowers to `LInst`. What remains outside `encode_linst` is the
 specialized inlined-frame family and the zero-byte patch/recompile bookkeeping
 that is *not* byte emission — see §8.
 
+> **2026-11 simplification.** The *`encode_linst_macro`-style* macro-ops (§5)
+> were a pure relay: `compile_asmir` copied an `AsmInst` into an `LInst` with
+> the same fields, and `encode_linst_macro` unpacked it into a call of the
+> per-arch `emit_*` helper. The 86 of them built in one place only are gone
+> from `LInst`; their `compile_asmir` arm calls the `emit_*` helper directly.
+> `LInst` keeps the decomposed primitives, the decomposed-style delegations
+> (guards, `IntegerBinOp`, …) and the six macro-ops built in more than one
+> place (`SelectPage`, `BindLabel`, `HandleError`, `InlineRet`, `MethodRet`,
+> `ChainExit`), which still reach `encode_linst_macro`. The migration log
+> below describes the state before that change.
+
 ---
 
 ## 1. Motivation

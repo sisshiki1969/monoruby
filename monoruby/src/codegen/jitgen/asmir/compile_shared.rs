@@ -130,12 +130,7 @@ impl Codegen {
                     .map(|l| frame.resolve_label(&mut self.jit, *l))
                     .collect();
                 let else_dest = frame.resolve_label(&mut self.jit, else_label);
-                self.encode_linst(LInst::OptCase {
-                    max,
-                    min,
-                    else_dest,
-                    branch_dests,
-                });
+                self.emit_opt_case(max, min, else_dest, branch_dests);
             }
             // Type guard: deopt if `r`'s runtime class is not `class`.
             AsmInst::GuardClass(r, class, deopt) => {
@@ -172,7 +167,7 @@ impl Codegen {
                 // `&mut self`, which cannot be borrowed inside one.
                 let deopt =
                     self.deopt_label(labels, deopt, DeoptCause::Static("unconditional deopt"));
-                self.encode_linst(LInst::Deopt { deopt })
+                self.emit_deopt(&deopt);
             }
             // Branch to the error handler if the preceding runtime call failed
             // (returned a null/None result in the accumulator).
@@ -189,11 +184,8 @@ impl Codegen {
             // bails if the write-back needs an unsupported feature).
             AsmInst::CheckStack { write_back, error } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::CheckStack {
-                    write_back,
-                    error,
-                    base: frame.base_stack_offset,
-                });
+                let base = frame.base_stack_offset;
+                self.emit_check_stack(write_back, &error, base);
             }
             // GC safepoint.
             AsmInst::ExecGc {
@@ -207,12 +199,8 @@ impl Codegen {
                     deopt,
                     DeoptCause::Static("basic op redefined (evicted at a poll)"),
                 );
-                self.encode_linst(LInst::ExecGc {
-                    write_back,
-                    error,
-                    deopt,
-                    base: frame.base_stack_offset,
-                });
+                let base = frame.base_stack_offset;
+                self.emit_exec_gc(write_back, &error, &deopt, base);
             }
             // Constant base-class guard: deopt if the constant's base class (in
             // the accumulator) is not the cached one.
@@ -246,136 +234,113 @@ impl Codegen {
                 error,
             } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::StoreConstant {
-                    id,
-                    using_fpr,
-                    error,
-                })
+                self.emit_store_constant(id, using_fpr, &error);
             }
             // Variable access. gvar/cvar go via a runtime call; dynvar walks the
             // outer-LFP chain.
-            AsmInst::LoadErrinfo => self.encode_linst(LInst::LoadErrinfo),
-            AsmInst::StoreErrinfo { src } => self.encode_linst(LInst::StoreErrinfo { src }),
+            AsmInst::LoadErrinfo => {
+                self.emit_load_errinfo();
+            }
+            AsmInst::StoreErrinfo { src } => {
+                self.emit_store_errinfo(src);
+            }
             AsmInst::LoadGVar {
                 name,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::LoadGVar {
-                name,
-                pc,
-                using_fpr,
-            }),
+            } => {
+                self.emit_load_gvar(name, pc.cache_word_addr(), using_fpr);
+            }
             AsmInst::StoreGVar {
                 name,
                 pc,
                 src,
                 using_fpr,
-            } => self.encode_linst(LInst::StoreGVar {
-                name,
-                pc,
-                src,
-                using_fpr,
-            }),
+            } => {
+                self.emit_store_gvar(name, pc.cache_word_addr(), src, using_fpr);
+            }
             AsmInst::LoadCVar {
                 name,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::LoadCVar {
-                name,
-                pc,
-                using_fpr,
-            }),
-            AsmInst::LoadDynVar { src } => self.encode_linst(LInst::LoadDynVar { src }),
-            AsmInst::StoreDynVar { dst, src } => self.encode_linst(LInst::StoreDynVar { dst, src }),
+            } => {
+                self.emit_load_cvar(name, pc.cache_word_addr(), using_fpr);
+            }
+            AsmInst::LoadDynVar { src } => {
+                self.emit_load_dyn_var(src);
+            }
+            AsmInst::StoreDynVar { dst, src } => {
+                self.emit_store_dyn_var(dst, src);
+            }
             // Runtime allocation / C-call family: each builds a heap object via a
             // runtime call.
-            AsmInst::CreateArray { src, len } => self.encode_linst(LInst::CreateArray { src, len }),
+            AsmInst::CreateArray { src, len } => {
+                self.emit_create_array(src, len);
+            }
             AsmInst::NewArray {
                 callid,
                 inline,
                 using_fpr,
-            } => self.encode_linst(LInst::NewArray {
-                callid,
-                inline,
-                using_fpr,
-            }),
+            } => {
+                self.emit_new_array(callid, inline, using_fpr);
+            }
             AsmInst::ArrayMinMax {
                 base,
                 args,
                 len,
                 min,
                 using_fpr,
-            } => self.encode_linst(LInst::ArrayMinMax {
-                base,
-                args,
-                len,
-                min,
-                using_fpr,
-            }),
+            } => {
+                self.emit_array_min_max(base, args, len, min, using_fpr);
+            }
             AsmInst::CreateArrayFrom {
                 base,
                 src,
                 len,
                 using_fpr,
-            } => self.encode_linst(LInst::CreateArrayFrom {
-                base,
-                src,
-                len,
-                using_fpr,
-            }),
+            } => {
+                self.emit_create_array_from(base, src, len, using_fpr);
+            }
             AsmInst::LoadCallerSlot { base, slot } => {
-                self.encode_linst(LInst::LoadCallerSlot { base, slot })
+                self.emit_load_caller_slot(base, slot);
             }
             AsmInst::StoreCallerSlot { base, slot, src } => {
-                self.encode_linst(LInst::StoreCallerSlot { base, slot, src })
+                self.emit_store_caller_slot(base, slot, src);
             }
-            AsmInst::NewHash(args, len, using_fpr) => self.encode_linst(LInst::NewHash {
-                args,
-                len,
-                using_fpr,
-            }),
+            AsmInst::NewHash(args, len, using_fpr) => {
+                self.emit_new_hash(args, len, using_fpr);
+            }
             AsmInst::HashInsert {
                 hash,
                 args,
                 len,
                 using_fpr,
-            } => self.encode_linst(LInst::HashInsert {
-                hash,
-                args,
-                len,
-                using_fpr,
-            }),
+            } => {
+                self.emit_hash_insert(hash, args, len, using_fpr);
+            }
             AsmInst::ArrayConcat {
                 dst,
                 src,
                 using_fpr,
-            } => self.encode_linst(LInst::ArrayConcat {
-                dst,
-                src,
-                using_fpr,
-            }),
+            } => {
+                self.emit_array_concat(dst, src, using_fpr);
+            }
             AsmInst::NewRange {
                 start,
                 end,
                 exclude_end,
                 using_fpr,
-            } => self.encode_linst(LInst::NewRange {
-                start,
-                end,
-                exclude_end,
-                using_fpr,
-            }),
+            } => {
+                self.emit_new_range(start, end, exclude_end, using_fpr);
+            }
             AsmInst::CreateRange {
                 start,
                 end,
                 exclude_end,
                 using_fpr,
-            } => self.encode_linst(LInst::CreateRange {
-                start,
-                end,
-                exclude_end,
-                using_fpr,
-            }),
+            } => {
+                self.emit_create_range(start, end, exclude_end, using_fpr);
+            }
             AsmInst::RangeCover {
                 start,
                 end,
@@ -386,17 +351,19 @@ impl Codegen {
                 pure,
                 flags,
                 using_fpr,
-            } => self.encode_linst(LInst::RangeCover {
-                start,
-                end,
-                exclude_end,
-                arg,
-                fid,
-                inline,
-                pure,
-                flags,
-                using_fpr,
-            }),
+            } => {
+                self.emit_range_cover(
+                    start,
+                    end,
+                    exclude_end,
+                    arg,
+                    fid,
+                    inline,
+                    pure,
+                    flags,
+                    using_fpr,
+                );
+            }
             AsmInst::RangeOp {
                 op,
                 start,
@@ -404,37 +371,29 @@ impl Codegen {
                 exclude_end,
                 fid,
                 using_fpr,
-            } => self.encode_linst(LInst::RangeOp {
-                op,
-                start,
-                end,
-                exclude_end,
-                fid,
-                using_fpr,
-            }),
+            } => {
+                self.emit_range_op(op, start, end, exclude_end, fid, using_fpr);
+            }
             AsmInst::ConcatStr {
                 arg,
                 len,
                 using_fpr,
-            } => self.encode_linst(LInst::ConcatStr {
-                arg,
-                len,
-                using_fpr,
-            }),
-            AsmInst::ToA { src, using_fpr } => self.encode_linst(LInst::ToA { src, using_fpr }),
+            } => {
+                self.emit_concat_str(arg, len, using_fpr);
+            }
+            AsmInst::ToA { src, using_fpr } => {
+                self.emit_to_a(src, using_fpr);
+            }
             AsmInst::BlockCode {
                 src,
                 set,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::BlockCode {
-                src,
-                set,
-                pc,
-                using_fpr,
-            }),
+            } => {
+                self.emit_block_code(src, set, pc, using_fpr);
+            }
             AsmInst::DeepCopyLit(v, using_fpr) => {
-                self.encode_linst(LInst::DeepCopyLit { v, using_fpr })
+                self.emit_deep_copy_lit(v, using_fpr);
             }
             // Floating-point register transfer/convert family (aarch64 bails if
             // the FP pool register is not lowerable, hence the bool results).
@@ -580,7 +539,7 @@ impl Codegen {
                 lhs,
                 rhs,
             } => {
-                self.encode_linst(LInst::IntegerCmp { kind, lhs, rhs });
+                self.emit_integer_cmp(kind, lhs, rhs);
                 if let Some(dst) = dst {
                     self.encode_linst(LInst::Store {
                         src: GP::Rax,
@@ -595,7 +554,7 @@ impl Codegen {
                 lhs,
                 imm,
             } => {
-                self.encode_linst(LInst::IntegerCmpImm { kind, lhs, imm });
+                self.emit_integer_cmp_imm(kind, lhs, imm);
                 if let Some(dst) = dst {
                     self.encode_linst(LInst::Store {
                         src: GP::Rax,
@@ -681,21 +640,22 @@ impl Codegen {
             // An inline callee has no frame of its own to leave: its `Ret`
             // jumps to the continuation of the `InlineCall` it runs under.
             AsmInst::Ret if frame.frameless => self.encode_linst(LInst::InlineRet),
-            AsmInst::Ret => self.encode_linst(LInst::Ret {
+            AsmInst::Ret => {
                 // Only a handler-carrying iseq can ever own a parked
                 // deferral at its own `Ret` (#1186) — e.g. an OSR'd loop
                 // inside an `ensure` handler returning while the deferral
                 // is parked. Handler-free iseqs pay nothing.
-                check_deferred: store[frame.iseq_id].has_exception_handler(),
-            }),
+                let check_deferred = store[frame.iseq_id].has_exception_handler();
+                self.emit_ret(check_deferred);
+            }
             AsmInst::MethodRet(pc) => self.encode_linst(LInst::MethodRet {
                 pc,
                 loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
             }),
-            AsmInst::BlockBreak(pc) => self.encode_linst(LInst::BlockBreak {
-                pc,
-                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-            }),
+            AsmInst::BlockBreak(pc) => {
+                let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+                self.emit_block_break(pc, loop_jit_spill_bytes);
+            }
             // Emits nothing; registers this call's return address -> replay
             // data so `Codegen::chain_deopt` can convert a frame suspended
             // here from its return-address slot alone (`doc/chain_deopt.md`
@@ -715,21 +675,13 @@ impl Codegen {
                 deopt,
             } => {
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Static("class version"));
-                self.encode_linst(LInst::GuardClassVersion {
-                    class_version,
-                    position,
-                    with_recovery,
-                    deopt,
-                });
+                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
             }
             AsmInst::ContFramePc {
                 call_site_pc,
                 window,
             } => {
-                self.encode_linst(LInst::ContFramePc {
-                    call_site_pc,
-                    window,
-                });
+                self.emit_cont_frame_pc(call_site_pc, window);
             }
             AsmInst::SetupMethodFrame {
                 meta,
@@ -737,21 +689,13 @@ impl Codegen {
                 outer_lfp,
             } => {
                 let callsite = &store[callid];
-                let (block_fid, block_arg) = (callsite.block_fid, callsite.block_arg);
-                self.encode_linst(LInst::SetupMethodFrame {
-                    meta,
-                    outer_lfp,
-                    block_fid,
-                    block_arg,
-                });
+                let block_fid = callsite.block_fid;
+                let block_arg = callsite.block_arg;
+                self.emit_setup_method_frame(meta, outer_lfp, block_fid, block_arg);
             }
             AsmInst::SetArguments { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
-                self.encode_linst(LInst::SetArguments {
-                    callid,
-                    callee_fid,
-                    offset,
-                });
+                self.emit_set_arguments(callid, callee_fid, offset);
             }
             // Basic-operator-redefinition guard: deopt if any BOP was redefined.
             AsmInst::CheckBOP { deopt } => {
@@ -777,12 +721,11 @@ impl Codegen {
                 // through, so there is no operand to report here.
                 let deopt =
                     self.deopt_label(labels, deopt, DeoptCause::Static("recompile counter"));
-                self.encode_linst(LInst::RecompileDeopt {
-                    position,
-                    deopt,
-                    error,
-                    reason,
-                });
+                // Main-body recompile point (`AsmInst::RecompileDeopt`): always
+                // a whole-method/loop target — the specialized main-body twin
+                // is `AsmInst::RecompileDeoptSpecialized`. Every one of
+                // them in the unit shares the unit's recompile budget.
+                self.emit_unit_recompile_deopt(position, &deopt, error.as_ref(), reason);
             }
             // The call itself. x86 records a return-address deopt patch point;
             // aarch64 has no branch patching (class-version guards cover it).
@@ -833,16 +776,21 @@ impl Codegen {
                 let jit_slot = None;
                 #[cfg(not(target_arch = "aarch64"))]
                 let late_direct = if jit_entry.is_none() { late } else { None };
-                self.encode_linst(LInst::Call {
+                let is_iseq = is_iseq.is_some();
+                let call_site_bc_ptr = pc;
+                let call = self.emit_call(
                     codeptr,
-                    is_iseq: is_iseq.is_some(),
+                    is_iseq,
                     callee_pc,
-                    call_site_bc_ptr: pc,
+                    call_site_bc_ptr,
                     jit_entry,
                     jit_slot,
-                    late_direct,
                     evict,
-                });
+                );
+                if let (Some((iseq, class)), Some(call)) = (late_direct, call) {
+                    self.late_direct_calls
+                        .push((iseq, class, call.as_ptr() as u64));
+                }
             }
             // Method prologue: establish fp/lr, reserve the local frame, nil-fill
             // non-argument locals (aarch64 bails if the frame exceeds the 12-bit
@@ -859,10 +807,9 @@ impl Codegen {
             AsmInst::Init {
                 info,
                 prologue_offset,
-            } => self.encode_linst(LInst::Init {
-                info,
-                prologue_offset,
-            }),
+            } => {
+                self.emit_init(info, prologue_offset);
+            }
             // Per-method ivar-cache prep. The store/frame-dependent heap length
             // is resolved here; the encoder only emits the table-extend guard.
             AsmInst::Preparation => {
@@ -891,7 +838,7 @@ impl Codegen {
                 // This frame's own entry, pushed by `gen_machine_code`
                 // (the only caller of `gen_asm`).
                 *self.self_ivars_prepared.last_mut().unwrap() = covered || heap_len.is_some();
-                self.encode_linst(LInst::Preparation { heap_len });
+                self.emit_preparation(heap_len);
             }
             // Fixnum unary ops on the tagged value. Negate deopts on i63
             // overflow (e.g. -i63::MIN); bitwise-not cannot overflow.
@@ -998,7 +945,11 @@ impl Codegen {
             }
             // Inline struct-member store: field store + write barrier, with the
             // stored value also returned in the accumulator (rax).
-            AsmInst::StoreStructSlotInline { src, slot_index, wb } => {
+            AsmInst::StoreStructSlotInline {
+                src,
+                slot_index,
+                wb,
+            } => {
                 let disp = slot_index as i32 * 8 + RVALUE_OFFSET_INLINE as i32;
                 self.encode_linst(LInst::Store {
                     src,
@@ -1036,7 +987,11 @@ impl Codegen {
                     },
                 });
             }
-            AsmInst::StoreStructSlotHeap { src, slot_index, wb } => {
+            AsmInst::StoreStructSlotHeap {
+                src,
+                slot_index,
+                wb,
+            } => {
                 // Barrier first: it needs rdi = the struct (parent), before the
                 // deref repoints rdi at the heap buffer.
                 if wb {
@@ -1080,7 +1035,7 @@ impl Codegen {
             // Loop-JIT entry: pin the stack pointer to the frame's local-area
             // depth, which `offset` already carries.
             AsmInst::LoopJitRspBump { offset } => {
-                self.encode_linst(LInst::LoopJitRspBump { offset })
+                self.emit_loop_jit_rsp_bump(offset);
             }
             // Inline argument-setup stores into the callee frame, at a
             // (raw) rsp-relative offset the encoder legalizes per arch.
@@ -1118,7 +1073,7 @@ impl Codegen {
             // `&block` forwarding: proxy the block handler, or materialize it
             // into a Proc value (aarch64 bails on a live fpr / range overflow).
             AsmInst::BlockArgProxy { ret, outer, slot } => {
-                self.encode_linst(LInst::BlockArgProxy { ret, outer, slot })
+                self.emit_block_arg_proxy(ret, outer, slot);
             }
             AsmInst::BlockArg {
                 ret,
@@ -1129,13 +1084,7 @@ impl Codegen {
                 forward,
             } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::BlockArg {
-                    ret,
-                    using_fpr,
-                    call_site_bc_ptr,
-                    error,
-                    forward,
-                });
+                self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error, forward);
             }
             // `self`'s ivar buffer: `self.var_table.ptr`, two loads off self.
             AsmInst::LoadSelfIVarBase => {
@@ -1217,13 +1166,9 @@ impl Codegen {
                 is_object_ty,
                 using_fpr,
                 wb,
-            } => self.encode_linst(LInst::StoreIVarHeap {
-                src,
-                ivarid,
-                is_object_ty,
-                using_fpr,
-                wb,
-            }),
+            } => {
+                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr, wb);
+            }
             // Load a heap-spilled instance variable (bounds-checked unless self),
             // substituting nil for an out-of-range / unset slot.
             AsmInst::LoadIVarHeap {
@@ -1231,119 +1176,94 @@ impl Codegen {
                 is_object_ty,
                 self_,
                 dst,
-            } => self.encode_linst(LInst::LoadIVarHeap {
-                ivarid,
-                is_object_ty,
-                self_,
-                dst,
-            }),
+            } => {
+                self.emit_load_ivar_heap(ivarid, is_object_ty, self_, dst);
+            }
             // Runtime-call definition ops (undef a method / alias a global var).
             // aarch64 bails when an fpr pool register is live (no fpr save yet).
             AsmInst::UndefMethod { undef, using_fpr } => {
-                self.encode_linst(LInst::UndefMethod { undef, using_fpr })
+                self.emit_undef_method(undef, using_fpr);
             }
             AsmInst::CheckExit {
                 kind,
                 val,
                 using_fpr,
-            } => self.encode_linst(LInst::CheckExit {
-                kind,
-                val,
-                using_fpr,
-            }),
+            } => {
+                self.emit_check_exit(kind, val, using_fpr);
+            }
             AsmInst::AliasGvar {
                 new,
                 old,
                 using_fpr,
-            } => self.encode_linst(LInst::AliasGvar {
-                new,
-                old,
-                using_fpr,
-            }),
+            } => {
+                self.emit_alias_gvar(new, old, using_fpr);
+            }
             // Runtime-call class-variable / method-alias ops.
             AsmInst::CheckCVar {
                 name,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::CheckCVar {
-                name,
-                pc,
-                using_fpr,
-            }),
+            } => {
+                self.emit_check_cvar(name, pc.cache_word_addr(), using_fpr);
+            }
             AsmInst::StoreCVar {
                 name,
                 pc,
                 src,
                 using_fpr,
-            } => self.encode_linst(LInst::StoreCVar {
-                name,
-                pc,
-                src,
-                using_fpr,
-            }),
+            } => {
+                self.emit_store_cvar(name, pc.cache_word_addr(), src, using_fpr);
+            }
             AsmInst::AliasMethod {
                 new,
                 old,
                 using_fpr,
-            } => self.encode_linst(LInst::AliasMethod {
-                new,
-                old,
-                using_fpr,
-            }),
+            } => {
+                self.emit_alias_method(new, old, using_fpr);
+            }
             // defined? runtime-call family.
             AsmInst::DefinedYield { dst, using_fpr } => {
-                self.encode_linst(LInst::DefinedYield { dst, using_fpr })
+                self.emit_defined_yield(dst, using_fpr);
             }
             AsmInst::DefinedSuper { dst, using_fpr } => {
-                self.encode_linst(LInst::DefinedSuper { dst, using_fpr })
+                self.emit_defined_super(dst, using_fpr);
             }
             AsmInst::DefinedGvar {
                 dst,
                 name,
                 using_fpr,
-            } => self.encode_linst(LInst::DefinedGvar {
-                dst,
-                name,
-                using_fpr,
-            }),
+            } => {
+                self.emit_defined_gvar(dst, name, using_fpr);
+            }
             AsmInst::DefinedCvar {
                 dst,
                 name,
                 using_fpr,
-            } => self.encode_linst(LInst::DefinedCvar {
-                dst,
-                name,
-                using_fpr,
-            }),
+            } => {
+                self.emit_defined_cvar(dst, name, using_fpr);
+            }
             AsmInst::DefinedConst {
                 dst,
                 siteid,
                 using_fpr,
-            } => self.encode_linst(LInst::DefinedConst {
-                dst,
-                siteid,
-                using_fpr,
-            }),
+            } => {
+                self.emit_defined_const(dst, siteid, using_fpr);
+            }
             AsmInst::DefinedMethod {
                 dst,
                 recv,
                 name,
                 using_fpr,
-            } => self.encode_linst(LInst::DefinedMethod {
-                dst,
-                recv,
-                name,
-                using_fpr,
-            }),
+            } => {
+                self.emit_defined_method(dst, recv, name, using_fpr);
+            }
             AsmInst::DefinedIvar {
                 dst,
                 name,
                 using_fpr,
-            } => self.encode_linst(LInst::DefinedIvar {
-                dst,
-                name,
-                using_fpr,
-            }),
+            } => {
+                self.emit_defined_ivar(dst, name, using_fpr);
+            }
             // Generic binary-op / Array=== runtime calls.
             AsmInst::GenericBinOp {
                 lhs,
@@ -1352,14 +1272,9 @@ impl Codegen {
                 is_func_call,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::GenericBinOp {
-                lhs,
-                rhs,
-                func,
-                is_func_call,
-                pc,
-                using_fpr,
-            }),
+            } => {
+                self.emit_generic_binop(lhs, rhs, func, is_func_call, pc, using_fpr);
+            }
             AsmInst::OptEqCmp {
                 lhs,
                 rhs,
@@ -1368,50 +1283,39 @@ impl Codegen {
                 is_func_call,
                 pc,
                 using_fpr,
-            } => self.encode_linst(LInst::OptEqCmp {
-                lhs,
-                rhs,
-                kind,
-                func,
-                is_func_call,
-                pc,
-                using_fpr,
-            }),
+            } => {
+                self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, pc, using_fpr);
+            }
             AsmInst::ArrayTEq {
                 lhs,
                 rhs,
                 using_fpr,
-            } => self.encode_linst(LInst::ArrayTEq {
-                lhs,
-                rhs,
-                using_fpr,
-            }),
+            } => {
+                self.emit_array_teq(lhs, rhs, using_fpr);
+            }
             AsmInst::ArrayAny { reg, using_fpr } => {
-                self.encode_linst(LInst::ArrayAny { reg, using_fpr })
+                self.emit_array_any(reg, using_fpr);
             }
             // Regexp interpolation / keyword-rest fixup runtime calls.
             AsmInst::ConcatRegexp {
                 arg,
                 len,
                 using_fpr,
-            } => self.encode_linst(LInst::ConcatRegexp {
-                arg,
-                len,
-                using_fpr,
-            }),
-            AsmInst::CheckKwRest(slot) => self.encode_linst(LInst::CheckKwRest { slot }),
+            } => {
+                self.emit_concat_regexp(arg, len, using_fpr);
+            }
+            AsmInst::CheckKwRest(slot) => {
+                self.emit_check_kw_rest(slot);
+            }
             // Multiple-assignment array expansion.
             AsmInst::ExpandArray {
                 dst,
                 len,
                 rest_pos,
                 using_fpr,
-            } => self.encode_linst(LInst::ExpandArray {
-                dst,
-                len,
-                rest_pos,
-                using_fpr,
-            }),
+            } => {
+                self.emit_expand_array(dst, len, rest_pos, using_fpr);
+            }
             // Float C-function calls (Math.sqrt/sin/…): save the live FP pool
             // around the call.
             AsmInst::CFunc_F_F {
@@ -1448,12 +1352,7 @@ impl Codegen {
                 error,
             } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::MethodDef {
-                    name,
-                    func_id,
-                    using_fpr,
-                    error,
-                });
+                self.emit_method_def(name, func_id, using_fpr, &error);
             }
             AsmInst::SingletonMethodDef {
                 obj,
@@ -1463,37 +1362,32 @@ impl Codegen {
                 error,
             } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::SingletonMethodDef {
-                    obj,
-                    name,
-                    func_id,
-                    using_fpr,
-                    error,
-                });
+                self.emit_singleton_method_def(obj, name, func_id, using_fpr, &error);
             }
             // Exception / non-local control flow (raise / retry / redo / ensure).
             // All branch into the shared entry_raise unwind path.
-            AsmInst::Raise => self.encode_linst(LInst::Raise {
-                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-            }),
-            AsmInst::Retry(pc) => self.encode_linst(LInst::Retry {
-                pc,
-                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-            }),
-            AsmInst::Redo(pc) => self.encode_linst(LInst::Redo {
-                pc,
-                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-            }),
+            AsmInst::Raise => {
+                let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+                self.emit_raise(loop_jit_spill_bytes);
+            }
+            AsmInst::Retry(pc) => {
+                let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+                self.emit_retry(pc, loop_jit_spill_bytes);
+            }
+            AsmInst::Redo(pc) => {
+                let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+                self.emit_redo(pc, loop_jit_spill_bytes);
+            }
             AsmInst::EnsureEnd {
                 pc,
                 spliced_break,
                 spliced_ret,
-            } => self.encode_linst(LInst::EnsureEnd {
-                pc,
-                loop_jit_spill_bytes: frame.loop_jit_spill_bytes,
-                spliced_break: spliced_break.map(lower_spliced_arm),
-                spliced_ret: spliced_ret.map(lower_spliced_arm),
-            }),
+            } => {
+                let loop_jit_spill_bytes = frame.loop_jit_spill_bytes;
+                let spliced_break = spliced_break.map(lower_spliced_arm);
+                let spliced_ret = spliced_ret.map(lower_spliced_arm);
+                self.emit_ensure_end(pc, loop_jit_spill_bytes, spliced_break, spliced_ret);
+            }
             // The same splice across an *intermediate* frame's `ensure`:
             // defer keyed on that frame, tear down to its call site and
             // return into it tagged (#1185, stage 2).
@@ -1503,16 +1397,15 @@ impl Codegen {
                 callee,
                 expect,
                 pc,
-            } => self.encode_linst(LInst::SplicedExitToOuter {
-                kind,
-                host: host.unwrap_concrete(),
-                callee: callee.unwrap_concrete(),
-                expect: expect.unwrap_concrete(),
-                pc,
-            }),
+            } => {
+                let host = host.unwrap_concrete();
+                let callee = callee.unwrap_concrete();
+                let expect = expect.unwrap_concrete();
+                self.emit_spliced_exit_to_outer(kind, host, callee, expect, pc);
+            }
             AsmInst::SplicedExitLanding { kind, dest } => {
                 let dest = frame.resolve_label(&mut self.jit, dest);
-                self.encode_linst(LInst::SplicedExitLanding { kind, dest })
+                self.emit_spliced_exit_landing(kind, &dest);
             }
             // Generic `yield` (block target resolved at runtime). aarch64 builds
             // the block frame and calls the funcdata indirectly; both arches
@@ -1525,12 +1418,7 @@ impl Codegen {
                 evict,
             } => {
                 let error = labels[error].clone();
-                self.encode_linst(LInst::Yield {
-                    callid,
-                    simple,
-                    error,
-                    evict,
-                });
+                self.emit_yield(callid, simple, &error, evict);
             }
             // Generic send (target resolved at runtime): the admission test
             // deopts before anything is reserved; the send itself records its
@@ -1544,13 +1432,7 @@ impl Codegen {
             } => {
                 let deopt =
                     self.deopt_label(labels, deopt, DeoptCause::Static("generic send target"));
-                self.encode_linst(LInst::GuardSendResolvable {
-                    callid,
-                    recv,
-                    using_fpr,
-                    cache,
-                    deopt,
-                });
+                self.emit_guard_send_resolvable(callid, recv, using_fpr, cache, &deopt);
             }
             AsmInst::GenericSend {
                 callid,
@@ -1570,15 +1452,7 @@ impl Codegen {
                     && cs.block_arg.is_none()
                     && cs.pos_num <= GENERIC_SEND_COPY_MAX)
                     .then_some((cs.args, cs.pos_num));
-                self.encode_linst(LInst::GenericSend {
-                    callid,
-                    recv,
-                    cache,
-                    simple_args,
-                    error,
-                    evict,
-                    pc,
-                });
+                self.emit_generic_send(callid, recv, cache, simple_args, &error, evict, pc);
             }
             // ---- Specialized inlined-frame family ------------------------------
             // These lower an inlined callee / block frame. Each arm is identical
@@ -1600,22 +1474,16 @@ impl Codegen {
             // Outer-scope local access at a pre-resolved frame offset.
             AsmInst::StoreOuterFprHomeF { src, home } => {
                 let disp = home.unwrap_concrete();
-                self.encode_linst(LInst::StoreOuterFprHomeF {
-                    src,
-                    disp,
-                    base: frame.base_stack_offset,
-                })
+                let base = frame.base_stack_offset;
+                self.emit_store_outer_fpr_home_f(src, disp, base);
             }
             AsmInst::LoadOuterFprHomeF { dst, home } => {
                 let disp = home.unwrap_concrete().expect(
                     "home read of an unsaved fpr — the widen path leaves the \
                      reverse-map entry, so a referenced pool home is always saved",
                 );
-                self.encode_linst(LInst::LoadOuterFprHomeF {
-                    dst,
-                    disp,
-                    base: frame.base_stack_offset,
-                })
+                let base = frame.base_stack_offset;
+                self.emit_load_outer_fpr_home_f(dst, disp, base);
             }
             AsmInst::BoxOuterHomeToDynVar {
                 home, offset, reg, ..
@@ -1624,18 +1492,15 @@ impl Codegen {
                     "deferred outer home is always a spill slot — its resolve is unconditional",
                 );
                 let offset = offset.unwrap_concrete();
-                self.encode_linst(LInst::BoxOuterHomeToDynVar { disp, offset, reg });
+                self.emit_box_outer_home_to_dynvar(disp, offset, reg);
             }
             AsmInst::GuardFloatToOuterHomeF { home, deopt } => {
                 let disp = home.unwrap_concrete().expect(
                     "adopted outer home is always a spill slot — its resolve is unconditional",
                 );
                 let deopt = self.deopt_label(labels, deopt, DeoptCause::Value(GP::Rdi));
-                self.encode_linst(LInst::GuardFloatToOuterHomeF {
-                    src: GP::Rdi,
-                    disp,
-                    deopt,
-                });
+                let src = GP::Rdi;
+                self.emit_guard_float_to_outer_home_f(src, disp, &deopt);
             }
             AsmInst::LoadDynVarSpecialized { offset, reg } => {
                 let off = offset.unwrap_concrete();
@@ -1910,9 +1775,17 @@ impl Codegen {
             // Typed bool predicates (replace `emit_kernel_nil` / `emit_object_not`).
             AsmInst::IsNilToBool { dst, src } => self.encode_linst(LInst::IsNilToBool { dst, src }),
             AsmInst::NotToBool { dst, src } => self.encode_linst(LInst::NotToBool { dst, src }),
-            AsmInst::BoolBinOp { kind, dst, lhs, rhs } => {
-                self.encode_linst(LInst::BoolBinOp { kind, dst, lhs, rhs })
-            }
+            AsmInst::BoolBinOp {
+                kind,
+                dst,
+                lhs,
+                rhs,
+            } => self.encode_linst(LInst::BoolBinOp {
+                kind,
+                dst,
+                lhs,
+                rhs,
+            }),
             // `Math.sqrt` (replaces the `emit_math_sqrt` closure). Resolve the
             // deopt label and pass the frame base, like the guard family.
             AsmInst::MathSqrt { fsrc, fret, deopt } => {
@@ -1945,16 +1818,10 @@ impl Codegen {
                 using_fpr,
                 error,
             } => {
-                self.encode_linst(LInst::ClassDef {
-                    base,
-                    superclass,
-                    dst,
-                    name,
-                    func_id,
-                    is_module,
-                    using_fpr,
-                    error: labels[error].clone(),
-                });
+                let error = labels[error].clone();
+                self.class_def(
+                    base, superclass, dst, name, func_id, is_module, using_fpr, &error,
+                );
             }
             AsmInst::SingletonClassDef {
                 base,
@@ -1963,33 +1830,26 @@ impl Codegen {
                 using_fpr,
                 error,
             } => {
-                self.encode_linst(LInst::SingletonClassDef {
-                    base,
-                    dst,
-                    func_id,
-                    using_fpr,
-                    error: labels[error].clone(),
-                });
+                let error = labels[error].clone();
+                self.singleton_class_def(base, dst, func_id, using_fpr, &error);
             }
             // Forwarding-trampoline helper frame setup (aarch64 bails on an
             // out-of-range frame offset).
             AsmInst::SetArgumentsForwardedHelper { callid, callee_fid } => {
                 let offset = store[callee_fid].get_offset();
-                self.encode_linst(LInst::SetArgumentsForwardedHelper {
-                    callid,
-                    callee_fid,
-                    offset,
-                });
+                self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
             }
             // Trap for statically-unreachable code: call the panicking helper.
-            AsmInst::Unreachable => self.encode_linst(LInst::Unreachable),
+            AsmInst::Unreachable => {
+                self.emit_unreachable();
+            }
             // `**kwrest` fixup: call `correct_rest_kw(&table, lfp)`, which
             // answers the Hash. The (name, slot) table was laid down before
             // this unit's code (`Codegen::resolve_rest_kw_tables`).
-            AsmInst::RestKw { table, base, .. } => self.encode_linst(LInst::RestKw {
-                table: table.expect("kwrest table laid down before codegen"),
-                base,
-            }),
+            AsmInst::RestKw { table, base, .. } => {
+                let table = table.expect("kwrest table laid down before codegen");
+                self.emit_rest_kw(table, base);
+            }
             // Not a shared instruction: hand off to the per-arch backend.
             other => {
                 return self.compile_asmir_arch(store, frame, labels, other, class_version);
@@ -2120,349 +1980,11 @@ impl Codegen {
             // rather than in each backend's `encode_linst`.
             LInst::SelectPage(page) => self.jit.select_page(page),
             LInst::BindLabel(label) => self.jit.bind_label(label),
-            LInst::LoadIVarHeap {
-                ivarid,
-                is_object_ty,
-                self_,
-                dst,
-            } => {
-                self.emit_load_ivar_heap(ivarid, is_object_ty, self_, dst);
-            }
-            LInst::StoreIVarHeap {
-                src,
-                ivarid,
-                is_object_ty,
-                using_fpr,
-                wb,
-            } => {
-                self.emit_store_ivar_heap(src, ivarid, is_object_ty, using_fpr, wb);
-            }
-            LInst::StoreConstant {
-                id,
-                using_fpr,
-                error,
-            } => {
-                self.emit_store_constant(id, using_fpr, &error);
-            }
-            LInst::LoadErrinfo => {
-                self.emit_load_errinfo();
-            }
-            LInst::StoreErrinfo { src } => {
-                self.emit_store_errinfo(src);
-            }
-            LInst::LoadGVar {
-                name,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_load_gvar(name, pc.cache_word_addr(), using_fpr);
-            }
-            LInst::StoreGVar {
-                name,
-                pc,
-                src,
-                using_fpr,
-            } => {
-                self.emit_store_gvar(name, pc.cache_word_addr(), src, using_fpr);
-            }
-            LInst::LoadCVar {
-                name,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_load_cvar(name, pc.cache_word_addr(), using_fpr);
-            }
-            LInst::LoadDynVar { src } => {
-                self.emit_load_dyn_var(src);
-            }
-            LInst::StoreDynVar { dst, src } => {
-                self.emit_store_dyn_var(dst, src);
-            }
-            LInst::CreateArray { src, len } => {
-                self.emit_create_array(src, len);
-            }
-            LInst::NewArray {
-                callid,
-                inline,
-                using_fpr,
-            } => {
-                self.emit_new_array(callid, inline, using_fpr);
-            }
-            LInst::ArrayMinMax {
-                base,
-                args,
-                len,
-                min,
-                using_fpr,
-            } => {
-                self.emit_array_min_max(base, args, len, min, using_fpr);
-            }
-            LInst::CreateArrayFrom {
-                base,
-                src,
-                len,
-                using_fpr,
-            } => {
-                self.emit_create_array_from(base, src, len, using_fpr);
-            }
-            LInst::LoadCallerSlot { base, slot } => {
-                self.emit_load_caller_slot(base, slot);
-            }
-            LInst::StoreCallerSlot { base, slot, src } => {
-                self.emit_store_caller_slot(base, slot, src);
-            }
-            LInst::NewHash {
-                args,
-                len,
-                using_fpr,
-            } => {
-                self.emit_new_hash(args, len, using_fpr);
-            }
-            LInst::HashInsert {
-                hash,
-                args,
-                len,
-                using_fpr,
-            } => {
-                self.emit_hash_insert(hash, args, len, using_fpr);
-            }
-            LInst::ArrayConcat {
-                dst,
-                src,
-                using_fpr,
-            } => {
-                self.emit_array_concat(dst, src, using_fpr);
-            }
-            LInst::NewRange {
-                start,
-                end,
-                exclude_end,
-                using_fpr,
-            } => {
-                self.emit_new_range(start, end, exclude_end, using_fpr);
-            }
-            LInst::CreateRange {
-                start,
-                end,
-                exclude_end,
-                using_fpr,
-            } => {
-                self.emit_create_range(start, end, exclude_end, using_fpr);
-            }
-            LInst::RangeCover {
-                start,
-                end,
-                exclude_end,
-                arg,
-                fid,
-                inline,
-                pure,
-                flags,
-                using_fpr,
-            } => {
-                self.emit_range_cover(
-                    start,
-                    end,
-                    exclude_end,
-                    arg,
-                    fid,
-                    inline,
-                    pure,
-                    flags,
-                    using_fpr,
-                );
-            }
-            LInst::RangeOp {
-                op,
-                start,
-                end,
-                exclude_end,
-                fid,
-                using_fpr,
-            } => {
-                self.emit_range_op(op, start, end, exclude_end, fid, using_fpr);
-            }
-            LInst::ConcatStr {
-                arg,
-                len,
-                using_fpr,
-            } => {
-                self.emit_concat_str(arg, len, using_fpr);
-            }
-            LInst::ToA { src, using_fpr } => {
-                self.emit_to_a(src, using_fpr);
-            }
-            LInst::BlockCode {
-                src,
-                set,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_block_code(src, set, pc, using_fpr);
-            }
-            LInst::DeepCopyLit { v, using_fpr } => {
-                self.emit_deep_copy_lit(v, using_fpr);
-            }
-            LInst::UndefMethod { undef, using_fpr } => {
-                self.emit_undef_method(undef, using_fpr);
-            }
-            LInst::CheckExit {
-                kind,
-                val,
-                using_fpr,
-            } => {
-                self.emit_check_exit(kind, val, using_fpr);
-            }
-            LInst::AliasGvar {
-                new,
-                old,
-                using_fpr,
-            } => {
-                self.emit_alias_gvar(new, old, using_fpr);
-            }
-            LInst::CheckCVar {
-                name,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_check_cvar(name, pc.cache_word_addr(), using_fpr);
-            }
-            LInst::StoreCVar {
-                name,
-                pc,
-                src,
-                using_fpr,
-            } => {
-                self.emit_store_cvar(name, pc.cache_word_addr(), src, using_fpr);
-            }
-            LInst::AliasMethod {
-                new,
-                old,
-                using_fpr,
-            } => {
-                self.emit_alias_method(new, old, using_fpr);
-            }
-            LInst::DefinedYield { dst, using_fpr } => {
-                self.emit_defined_yield(dst, using_fpr);
-            }
-            LInst::DefinedSuper { dst, using_fpr } => {
-                self.emit_defined_super(dst, using_fpr);
-            }
-            LInst::DefinedGvar {
-                dst,
-                name,
-                using_fpr,
-            } => {
-                self.emit_defined_gvar(dst, name, using_fpr);
-            }
-            LInst::DefinedCvar {
-                dst,
-                name,
-                using_fpr,
-            } => {
-                self.emit_defined_cvar(dst, name, using_fpr);
-            }
-            LInst::DefinedConst {
-                dst,
-                siteid,
-                using_fpr,
-            } => {
-                self.emit_defined_const(dst, siteid, using_fpr);
-            }
-            LInst::DefinedMethod {
-                dst,
-                recv,
-                name,
-                using_fpr,
-            } => {
-                self.emit_defined_method(dst, recv, name, using_fpr);
-            }
-            LInst::DefinedIvar {
-                dst,
-                name,
-                using_fpr,
-            } => {
-                self.emit_defined_ivar(dst, name, using_fpr);
-            }
-            LInst::GenericBinOp {
-                lhs,
-                rhs,
-                func,
-                is_func_call,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_generic_binop(lhs, rhs, func, is_func_call, pc, using_fpr);
-            }
-            LInst::OptEqCmp {
-                lhs,
-                rhs,
-                kind,
-                func,
-                is_func_call,
-                pc,
-                using_fpr,
-            } => {
-                self.emit_opt_eq_cmp(lhs, rhs, kind, func, is_func_call, pc, using_fpr);
-            }
-            LInst::ArrayTEq {
-                lhs,
-                rhs,
-                using_fpr,
-            } => {
-                self.emit_array_teq(lhs, rhs, using_fpr);
-            }
-            LInst::ArrayAny { reg, using_fpr } => {
-                self.emit_array_any(reg, using_fpr);
-            }
-            LInst::ConcatRegexp {
-                arg,
-                len,
-                using_fpr,
-            } => {
-                self.emit_concat_regexp(arg, len, using_fpr);
-            }
-            LInst::CheckKwRest { slot } => {
-                self.emit_check_kw_rest(slot);
-            }
-            LInst::ExpandArray {
-                dst,
-                len,
-                rest_pos,
-                using_fpr,
-            } => {
-                self.emit_expand_array(dst, len, rest_pos, using_fpr);
-            }
-            LInst::Deopt { deopt } => {
-                self.emit_deopt(&deopt);
-            }
+
             LInst::HandleError { error } => {
                 self.emit_handle_error(&error);
             }
-            LInst::CheckStack {
-                write_back,
-                error,
-                base,
-            } => {
-                self.emit_check_stack(write_back, &error, base);
-            }
-            LInst::ExecGc {
-                write_back,
-                error,
-                deopt,
-                base,
-            } => {
-                self.emit_exec_gc(write_back, &error, &deopt, base);
-            }
-            LInst::IntegerCmp { kind, lhs, rhs } => {
-                self.emit_integer_cmp(kind, lhs, rhs);
-            }
-            LInst::IntegerCmpImm { kind, lhs, imm } => {
-                self.emit_integer_cmp_imm(kind, lhs, imm);
-            }
-            LInst::Ret { check_deferred } => {
-                self.emit_ret(check_deferred);
-            }
+
             LInst::InlineRet => {
                 self.emit_inline_ret();
             }
@@ -2472,242 +1994,11 @@ impl Codegen {
             } => {
                 self.emit_method_ret(pc, loop_jit_spill_bytes);
             }
-            LInst::BlockBreak {
-                pc,
-                loop_jit_spill_bytes,
-            } => {
-                self.emit_block_break(pc, loop_jit_spill_bytes);
-            }
+
             LInst::ChainExit { evict, replay } => {
                 self.register_chain_exit(evict, replay);
             }
-            LInst::Init {
-                info,
-                prologue_offset,
-            } => {
-                self.emit_init(info, prologue_offset);
-            }
-            LInst::LoopJitRspBump { offset } => {
-                self.emit_loop_jit_rsp_bump(offset);
-            }
-            LInst::BlockArgProxy { ret, outer, slot } => {
-                self.emit_block_arg_proxy(ret, outer, slot);
-            }
-            LInst::BlockArg {
-                ret,
-                using_fpr,
-                call_site_bc_ptr,
-                error,
-                forward,
-            } => {
-                self.emit_block_arg(ret, using_fpr, call_site_bc_ptr, &error, forward);
-            }
-            LInst::MethodDef {
-                name,
-                func_id,
-                using_fpr,
-                error,
-            } => {
-                self.emit_method_def(name, func_id, using_fpr, &error);
-            }
-            LInst::SingletonMethodDef {
-                obj,
-                name,
-                func_id,
-                using_fpr,
-                error,
-            } => {
-                self.emit_singleton_method_def(obj, name, func_id, using_fpr, &error);
-            }
-            LInst::Raise {
-                loop_jit_spill_bytes,
-            } => {
-                self.emit_raise(loop_jit_spill_bytes);
-            }
-            LInst::Retry {
-                pc,
-                loop_jit_spill_bytes,
-            } => {
-                self.emit_retry(pc, loop_jit_spill_bytes);
-            }
-            LInst::Redo {
-                pc,
-                loop_jit_spill_bytes,
-            } => {
-                self.emit_redo(pc, loop_jit_spill_bytes);
-            }
-            LInst::EnsureEnd {
-                pc,
-                loop_jit_spill_bytes,
-                spliced_break,
-                spliced_ret,
-            } => {
-                self.emit_ensure_end(pc, loop_jit_spill_bytes, spliced_break, spliced_ret);
-            }
-            LInst::SplicedExitToOuter {
-                kind,
-                host,
-                callee,
-                expect,
-                pc,
-            } => {
-                self.emit_spliced_exit_to_outer(kind, host, callee, expect, pc);
-            }
-            LInst::SplicedExitLanding { kind, dest } => {
-                self.emit_spliced_exit_landing(kind, &dest);
-            }
-            LInst::StoreOuterFprHomeF { src, disp, base } => {
-                self.emit_store_outer_fpr_home_f(src, disp, base);
-            }
-            LInst::LoadOuterFprHomeF { dst, disp, base } => {
-                self.emit_load_outer_fpr_home_f(dst, disp, base);
-            }
-            LInst::GuardFloatToOuterHomeF { src, disp, deopt } => {
-                self.emit_guard_float_to_outer_home_f(src, disp, &deopt);
-            }
-            LInst::BoxOuterHomeToDynVar { disp, offset, reg } => {
-                self.emit_box_outer_home_to_dynvar(disp, offset, reg);
-            }
-            LInst::Yield {
-                callid,
-                simple,
-                error,
-                evict,
-            } => {
-                self.emit_yield(callid, simple, &error, evict);
-            }
-            LInst::GuardSendResolvable {
-                callid,
-                recv,
-                using_fpr,
-                cache,
-                deopt,
-            } => {
-                self.emit_guard_send_resolvable(callid, recv, using_fpr, cache, &deopt);
-            }
-            LInst::GenericSend {
-                callid,
-                recv,
-                cache,
-                simple_args,
-                error,
-                evict,
-                pc,
-            } => {
-                self.emit_generic_send(callid, recv, cache, simple_args, &error, evict, pc);
-            }
-            LInst::Unreachable => {
-                self.emit_unreachable();
-            }
-            LInst::RestKw { table, base } => {
-                self.emit_rest_kw(table, base);
-            }
-            LInst::GuardClassVersion {
-                class_version,
-                position,
-                with_recovery,
-                deopt,
-            } => {
-                self.emit_guard_class_version(class_version, position, with_recovery, deopt);
-            }
-            LInst::RecompileDeopt {
-                position,
-                deopt,
-                error,
-                reason,
-            } => {
-                // Main-body recompile point (`AsmInst::RecompileDeopt`): always
-                // a whole-method/loop target — the specialized main-body twin
-                // is `AsmInst::RecompileDeoptSpecialized`. Every one of
-                // them in the unit shares the unit's recompile budget.
-                self.emit_unit_recompile_deopt(position, &deopt, error.as_ref(), reason);
-            }
-            LInst::ClassDef {
-                base,
-                superclass,
-                dst,
-                name,
-                func_id,
-                is_module,
-                using_fpr,
-                error,
-            } => {
-                self.class_def(
-                    base, superclass, dst, name, func_id, is_module, using_fpr, &error,
-                );
-            }
-            LInst::SingletonClassDef {
-                base,
-                dst,
-                func_id,
-                using_fpr,
-                error,
-            } => {
-                self.singleton_class_def(base, dst, func_id, using_fpr, &error);
-            }
-            LInst::ContFramePc {
-                call_site_pc,
-                window,
-            } => {
-                self.emit_cont_frame_pc(call_site_pc, window);
-            }
-            LInst::SetupMethodFrame {
-                meta,
-                outer_lfp,
-                block_fid,
-                block_arg,
-            } => {
-                self.emit_setup_method_frame(meta, outer_lfp, block_fid, block_arg);
-            }
-            LInst::SetArguments {
-                callid,
-                callee_fid,
-                offset,
-            } => {
-                self.emit_set_arguments(callid, callee_fid, offset);
-            }
-            LInst::SetArgumentsForwardedHelper {
-                callid,
-                callee_fid,
-                offset,
-            } => {
-                self.jit_set_arguments_forwarded_helper(callid, callee_fid, offset);
-            }
-            LInst::Preparation { heap_len } => {
-                self.emit_preparation(heap_len);
-            }
-            LInst::OptCase {
-                max,
-                min,
-                else_dest,
-                branch_dests,
-            } => {
-                self.emit_opt_case(max, min, else_dest, branch_dests);
-            }
-            LInst::Call {
-                codeptr,
-                is_iseq,
-                callee_pc,
-                call_site_bc_ptr,
-                jit_entry,
-                jit_slot,
-                late_direct,
-                evict,
-            } => {
-                let call = self.emit_call(
-                    codeptr,
-                    is_iseq,
-                    callee_pc,
-                    call_site_bc_ptr,
-                    jit_entry,
-                    jit_slot,
-                    evict,
-                );
-                if let (Some((iseq, class)), Some(call)) = (late_direct, call) {
-                    self.late_direct_calls
-                        .push((iseq, class, call.as_ptr() as u64));
-                }
-            }
+
             other => unreachable!("encode_linst_macro: unexpected {other:?}"),
         }
     }
