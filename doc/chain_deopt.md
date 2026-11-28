@@ -612,8 +612,8 @@ walk once the patch fallback was gone, and are now one function
 
 A basic-op redefinition is the one caller of the walk whose stale frames are
 not all on the redefining thread's stack. Every other Ruby thread is
-suspended under it — a green thread until the scheduler switches to it, a
-kernel thread until it gets the GVL (doc/threads.md §12) — and each holds
+suspended under it — a kernel thread waiting for the GVL (doc/threads.md
+§12) — and each holds
 compiled frames that inlined the operator just replaced. `check_bop_redefine`
 therefore walks every chain: its own, then the chain of each executor
 `scheduler::suspended_executors` returns (the context a thread parked or

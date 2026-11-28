@@ -1,14 +1,12 @@
-//! Phase-1 preemptive scheduling for the M:1 green-thread runtime.
+//! Timeslice preemption for Ruby threads.
 //!
 //! A dedicated timer OS thread arms the poll word's PREEMPT lane every
-//! [`TICK`] while two or more green threads are alive. The VM and JIT
+//! [`TICK`] while two or more Ruby threads are alive. The VM and JIT
 //! poll that word (any non-zero lane calls `execute_gc`) at every method
 //! call and loop back-edge, so the tick makes the running thread reach
 //! `execute_gc`, which consumes the lane and calls `scheduler::pass` —
 //! i.e. preemption is exactly "as if every thread called `Thread.pass`
-//! at its next safepoint", reusing the existing cooperative switching
-//! machinery unchanged: no new context-switch paths and zero codegen
-//! changes.
+//! at its next safepoint", which hands the GVL to the longest waiter.
 //!
 //! The lane protocol (who sets/clears which byte of the word) lives in
 //! poll_flag.rs; `execute_gc` consumes the PREEMPT lane through
@@ -157,10 +155,9 @@ fn timer_loop(shared: Arc<Shared>) {
 /// the lock leaves the child a mutex nobody will ever unlock, and the
 /// child then blocks the first time it touches the poll word — in
 /// practice at its own exit, where dropping `Codegen` calls
-/// [`codegen_dropped`]. (`native_pool::ForkLocks` is the same hazard on
-/// the pool's locks, solved by holding them across the fork. That does
-/// not work here: the timer is not quiesced for the fork, it just
-/// ticks.)
+/// [`codegen_dropped`]. (`fork::prepare` holds the other process-wide
+/// locks across the fork instead. That does not work here: the timer is
+/// not quiesced for the fork, it just ticks.)
 ///
 /// So the child does not inherit the lock at all. The forking thread
 /// reads the poll-word address here, before the fork, and
@@ -189,7 +186,7 @@ impl ForkState {
     /// the same poll-word address. The old one stays allocated — the
     /// absent timer's `Arc` clone still counts in this address space —
     /// which is the price of never touching its lock again. A child that
-    /// goes on to run two green threads starts a timer of its own
+    /// goes on to run two Ruby threads starts a timer of its own
     /// through [`on_thread_count`], against the new `Shared`.
     pub(crate) fn reset_child(self) {
         let _ = STATE.try_with(|st| {

@@ -469,7 +469,7 @@ impl<'a> JitContext<'a> {
         // ④-b: the unfrozen-slot proofs survive only across instructions
         // that provably execute no Ruby code and reach no safepoint — either
         // could freeze an object (a callee via `freeze`, a safepoint via
-        // green-thread preemption into a thread that freezes it). Take the
+        // preemption into a thread that freezes it). Take the
         // set here; arms that compiled a transparent lowering publish it
         // back via `restore_unfrozen` (minus the slot they redefine), the
         // ivar-store arms consume it (skipping a redundant frozen guard)

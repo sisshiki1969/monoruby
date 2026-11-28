@@ -1226,7 +1226,7 @@ fn arena_exhausted(pages: usize) -> ! {
 /// This runs when the thread's TLS destructors do, which is after the
 /// interpreter that used the heap is gone: `Globals` is a local of the
 /// thread's body, so it is dropped first. A `Value` never leaves the
-/// thread that allocated it (green threads share one OS thread), so no
+/// interpreter that allocated it (its threads run under its GVL), so no
 /// other thread can be holding one.
 ///
 /// Tracked `malloc` bytes released by [`Allocator::drop`], summed over

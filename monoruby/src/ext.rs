@@ -2571,8 +2571,8 @@ unsafe extern "C" fn mr_proc_call(
 
 // ---- threads ---------------------------------------------------------
 
-/// What `call_blocking` hands the native pool: the extension's function
-/// and its argument, raw — the worker touches no Ruby state.
+/// What `call_blocking` runs without the GVL: the extension's function
+/// and its argument, raw — the call touches no Ruby state.
 pub(crate) struct ExtWorkerCall {
     f: MrBlockingFn,
     arg: usize,

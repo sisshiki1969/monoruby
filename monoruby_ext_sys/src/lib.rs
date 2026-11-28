@@ -25,7 +25,7 @@
 //!    native object's `mark`, or pinned ([`MrApi::gc_pin`]). Values in C
 //!    memory the collector cannot see are otherwise reclaimed under it.
 //! 4. A call that may block in the kernel goes through
-//!    [`MrApi::call_blocking`], so the other green threads keep running.
+//!    [`MrApi::call_blocking`], so the other Ruby threads keep running.
 //! 5. `Init_foo` is called once, when the library is loaded.
 //!
 //! # Versioning
@@ -395,9 +395,9 @@ pub struct MrApi {
     ) -> MrValue,
 
     // ---- threads -------------------------------------------------------
-    /// Run `f(arg)` on a worker thread while this green thread parks.
+    /// Run `f(arg)` on the calling kernel thread with the GVL released.
     /// 0 with `f`'s result in `out`; -1 with an error pending when the
-    /// wait was interrupted (the call still completes on the worker).
+    /// call was interrupted.
     pub call_blocking: unsafe extern "C" fn(
         ctx: *mut MrContext,
         f: MrBlockingFn,

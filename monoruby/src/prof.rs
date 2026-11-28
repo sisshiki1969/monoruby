@@ -39,8 +39,8 @@
 //! ## How a sample is taken
 //!
 //! The profiler keeps, per OS thread, a pointer to the `Executor` whose
-//! code is running there ([`set_executor`], moved at every fiber and
-//! green-thread switch) and a *phase* byte saying which part of the
+//! code is running there ([`set_executor`], moved at every fiber
+//! switch) and a *phase* byte saying which part of the
 //! runtime is active (GC, JIT compilation, parsing / bytecode generation,
 //! the global allocator). A sample is the phase, the machine PC, the
 //! `FuncId`s of the Ruby frames (the `cfp` chain, newest first) and a few
@@ -280,8 +280,7 @@ pub(crate) fn phase(phase: Phase) -> PhaseGuard {
 ///
 /// *exec* is now the executor running on this OS thread (`null`: none).
 /// Called wherever control moves to another executor: the main program's
-/// start, a native thread's body, every fiber switch and green-thread
-/// resume.
+/// start, a native thread's body, every fiber switch.
 ///
 #[inline]
 pub(crate) fn set_executor(exec: *const Executor) {
@@ -2846,8 +2845,8 @@ mod tests {
         assert!(name.contains("prof::elf_functions"), "{name}");
     }
 
-    /// A thread leaving Ruby hands `null` (the native thread's exit, the
-    /// green scheduler regaining control): that clears the executor
+    /// A thread leaving Ruby hands `null` (the native thread's exit):
+    /// that clears the executor
     /// instead of panicking.
     #[test]
     fn set_executor_accepts_null() {

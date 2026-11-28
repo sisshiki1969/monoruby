@@ -728,8 +728,8 @@ module FFI
             # String copy happens inside the same builtin as the call.
             @returns_string = @return_type.equal?(FFI::Type::STRING)
             flags = @returns_string ? PREPARE_RETURN_STRING : 0
-            # `attach_function ..., blocking: true` -- run the call on a worker
-            # thread and park this green thread, so a C function that blocks in
+            # `attach_function ..., blocking: true` -- run the call with the
+            # GVL released, so a C function that blocks in
             # the kernel does not freeze every other thread. Costs tens of
             # microseconds per call, so it is the binding's decision, never a
             # default.

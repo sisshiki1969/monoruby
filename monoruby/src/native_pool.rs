@@ -1,37 +1,16 @@
-//! Native worker offload for kernel-blocking syscalls
-//! (see doc/threads.md §9).
+//! Kernel-blocking operations (see doc/threads.md §9).
 //!
 //! Some syscalls block *in the kernel* with no fd to poll — `flock(2)`
-//! waiting for a lock, `open(2)` on a FIFO waiting for its peer. In an
-//! M:1 runtime, calling them inline freezes the whole process: no other
-//! green thread can run, timers and signals are useless. This module
-//! runs such operations on short-lived native OS threads instead:
-//!
-//! 1. The builtin packages the operation as a [`NativeOp`] — raw fds,
-//!    paths and integers only, never heap references — and [`submit`]s
-//!    it, getting back a ticket id.
-//! 2. A worker thread performs the syscall (retrying `EINTR`) and
-//!    stores `(ret, errno)` in the process-global result table, then
-//!    writes one byte into the submitting interpreter's completion pipe.
-//! 3. The calling green thread parks on the pipe's read end through the
-//!    scheduler's ordinary fd poller (`scheduler::wait_fd`), so other
-//!    threads keep running — and a parked main thread sleeps in
-//!    `poll(2)` rather than spinning. On wake it [`try_take`]s its
-//!    result; several waiters share the pipe, so an unsatisfied waiter
-//!    just parks again (the retry-loop pattern used everywhere else).
-//!
-//! A waiter killed or raised into while parked [`discard`]s its ticket:
-//! the worker's eventual result is dropped instead of leaking, and the
-//! worker itself is left to finish harmlessly (there is no portable way
-//! to cancel a blocked syscall).
+//! waiting for a lock, `open(2)` on a FIFO waiting for its peer,
+//! `fcntl(F_SETLKW)` — and so do foreign calls a binding declared
+//! blocking. The builtin packages the operation as a [`NativeOp`] — raw
+//! fds, paths and integers only, never heap references — and hands it to
+//! [`run_blocking`], which runs it on the calling kernel thread with the
+//! GVL released (`scheduler::native::run_blocking`), so the other Ruby
+//! threads keep running meanwhile.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex, OnceLock};
-use std::time::Duration;
-
-/// A kernel-blocking operation. Raw bytes and fds only: workers must
-/// never touch the Ruby heap or the interpreter's thread-locals.
+/// A kernel-blocking operation. Raw bytes and fds only: it runs without
+/// the GVL and must never touch the Ruby heap or the interpreter.
 pub(crate) enum NativeOp {
     /// `flock(fd, op)` — `op` without `LOCK_NB` (the non-blocking form
     /// is executed inline by the caller).
@@ -58,8 +37,7 @@ pub(crate) enum NativeOp {
     /// its own function and argument, raw, as `Ffi`. (The sqlite3
     /// extension opens and closes its connections here — they touch the
     /// filesystem — and its SQLite is `SQLITE_THREADSAFE=1`, so a
-    /// connection opened on a worker is usable from the interpreter
-    /// thread afterwards.)
+    /// connection is usable from whichever thread holds the GVL next.)
     Ext(crate::ext::ExtWorkerCall),
 }
 
@@ -68,307 +46,48 @@ pub(crate) struct Completion {
     pub errno: i32,
 }
 
-/// Result table, keyed by ticket id. Process-global: workers are plain
-/// OS threads with no access to interpreter thread-locals.
-fn results() -> &'static Mutex<HashMap<u64, Completion>> {
-    static RESULTS: OnceLock<Mutex<HashMap<u64, Completion>>> = OnceLock::new();
-    RESULTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Tickets whose waiter gave up (killed / raised into while parked):
-/// the worker's late result is dropped on arrival.
-fn orphans() -> &'static Mutex<std::collections::HashSet<u64>> {
-    static ORPHANS: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
-    ORPHANS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
-}
-
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Create this thread's completion pipe: `(read, write)`. The read end
-/// is non-blocking so [`drain`] can slurp it dry.
-fn new_pipe() -> (i32, i32) {
-    let mut fds = [0i32; 2];
-    // SAFETY: plain pipe(2); fds array is properly sized.
-    let r = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    assert_eq!(r, 0, "native_pool: pipe(2) failed");
-    // SAFETY: fds are the freshly created pipe ends.
-    unsafe {
-        libc::fcntl(fds[0], libc::F_SETFL, libc::O_NONBLOCK);
-        libc::fcntl(fds[0], libc::F_SETFD, libc::FD_CLOEXEC);
-        libc::fcntl(fds[1], libc::F_SETFD, libc::FD_CLOEXEC);
-    }
-    (fds[0], fds[1])
-}
-
-thread_local! {
-    /// Completion pipe for this interpreter OS thread: `(read, write)`.
-    /// The read end is what waiters park on; workers write one byte to
-    /// the write end per completion. Lazily created; replaced wholesale
-    /// in a forked child ([`replace_pipe`]).
-    static PIPE: std::cell::Cell<(i32, i32)> = std::cell::Cell::new(new_pipe());
-}
-
-/// The fd waiters park on (readable when a completion has arrived).
-pub(crate) fn wake_fd() -> i32 {
-    PIPE.with(|p| p.get().0)
-}
-
-/// Drain the completion pipe (called by a woken waiter before it
-/// re-checks its ticket; the pipe is level-triggered, so leftover bytes
-/// would make the poller spin).
-pub(crate) fn drain() {
-    PIPE.with(|p| {
-        let mut buf = [0u8; 64];
-        // SAFETY: reading our own non-blocking pipe read end.
-        while unsafe { libc::read(p.get().0, buf.as_mut_ptr() as _, buf.len()) } > 0 {}
-    });
-}
-
-/// Give a freshly forked child its own completion pipe.
-///
-/// `fork(2)` copies the fd *table*, not the pipe: both processes end up
-/// reading and writing one shared buffer. A completion byte the parent's
-/// waiter was about to consume can then be swallowed by the child's own
-/// [`drain`], and that waiter parks forever with its result already
-/// sitting in the parent's table — a hang the parent cannot recover from,
-/// with nothing wrong on its side. Closing the inherited ends in the
-/// child affects only the child's fd table, so the parent's pipe is
-/// untouched.
-fn replace_pipe() {
-    PIPE.with(|p| {
-        let (r, w) = p.get();
-        // SAFETY: our own pipe ends, and the forking thread is the only
-        // thread the child has.
-        unsafe {
-            libc::close(r);
-            libc::close(w);
-        }
-        p.set(new_pipe());
-    });
-}
-
-/// One submitted operation, as a worker sees it: the ticket, the work,
-/// and the completion pipe of the interpreter thread waiting for it
-/// (workers are shared, so the fd travels with the job).
-struct Job {
-    id: u64,
-    op: NativeOp,
-    wake: i32,
-}
-
-#[derive(Default)]
-struct Pool {
-    queue: VecDeque<Job>,
-    /// Workers parked on the condvar, i.e. available to take a job now.
-    idle: usize,
-}
-
-fn pool() -> &'static (Mutex<Pool>, Condvar) {
-    static POOL: OnceLock<(Mutex<Pool>, Condvar)> = OnceLock::new();
-    POOL.get_or_init(|| (Mutex::new(Pool::default()), Condvar::new()))
-}
-
-/// How long a worker waits for its next job before exiting. Long enough
-/// that a program offloading steadily keeps its workers hot, short
-/// enough that a burst does not leave threads parked for the rest of the
-/// process.
-const WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Submit `op` to a worker thread; returns the ticket to poll with
-/// [`try_take`].
-///
-/// Reuses a parked worker when there is one — the round trip is then a
-/// condvar handoff rather than a `clone(2)`, which is what makes
-/// offloading affordable for anything called often. A new worker is
-/// started only when every existing one is busy: a worker busy with a
-/// kernel-blocking syscall may not come back for minutes, so queueing
-/// behind it would reintroduce exactly the stall this module exists to
-/// avoid.
-pub(crate) fn submit(op: NativeOp) -> u64 {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    let wake = PIPE.with(|p| p.get().1);
-    let (lock, cv) = pool();
-    let mut pool = lock.lock().unwrap();
-    pool.queue.push_back(Job { id, op, wake });
-    if pool.queue.len() > pool.idle {
-        std::thread::spawn(worker);
-    } else {
-        cv.notify_one();
-    }
-    id
-}
-
-/// A pool worker: take jobs until idle for [`WORKER_IDLE_TIMEOUT`].
-fn worker() {
-    let (lock, cv) = pool();
-    let mut pool = lock.lock().unwrap();
-    loop {
-        let job = loop {
-            if let Some(job) = pool.queue.pop_front() {
-                break Some(job);
-            }
-            pool.idle += 1;
-            let (guard, timeout) = cv.wait_timeout(pool, WORKER_IDLE_TIMEOUT).unwrap();
-            pool = guard;
-            pool.idle -= 1;
-            if timeout.timed_out() && pool.queue.is_empty() {
-                break None;
-            }
-        };
-        let Some(job) = job else { return };
-        drop(pool);
-        complete(job);
-        pool = lock.lock().unwrap();
-    }
-}
-
-/// Run one job and hand its result to the waiter.
-fn complete(job: Job) {
-    let (ret, errno) = run_op(&job.op, true);
-    let comp = Completion { ret, errno };
-    {
-        let mut orphans = orphans().lock().unwrap();
-        if orphans.remove(&job.id) {
-            // Waiter is gone; drop the result.
-            return;
-        }
-        results().lock().unwrap().insert(job.id, comp);
-    }
-    // SAFETY: `wake` is the submitting interpreter's pipe write end,
-    // which lives for that interpreter thread's lifetime. A failed
-    // or short write only delays the waiter until the next poller
-    // pass triggered by another completion — never corrupts state.
-    unsafe {
-        let byte = 1u8;
-        let _ = libc::write(job.wake, &byte as *const u8 as _, 1);
-    }
-}
-
-/// Every lock this module owns, held across a `fork(2)`.
-///
-/// Acquired by the forking thread *before* the fork and released after
-/// it, in whichever process goes on running. Without that, a worker can
-/// be holding one at the moment of the fork — and the child does not get
-/// that worker, only the forking thread, so it inherits a locked mutex
-/// nobody will ever release. The child then blocks forever on its first
-/// `lock()`, which is [`ForkLocks::reset_child`]'s own. Held by the
-/// forking thread instead, the lock is owned in both processes by a
-/// thread that exists there.
-///
-/// This is the `pthread_atfork` prepare/parent/child dance, written out:
-/// the lock order is the one every other path here uses (pool, then
-/// `complete`'s orphans-before-results), so it cannot deadlock against a
-/// worker.
-pub(crate) struct ForkLocks {
-    pool: std::sync::MutexGuard<'static, Pool>,
-    orphans: std::sync::MutexGuard<'static, std::collections::HashSet<u64>>,
-    results: std::sync::MutexGuard<'static, HashMap<u64, Completion>>,
-}
-
-/// Quiesce the pool for a `fork(2)` — see [`ForkLocks`]. The guard must be
-/// dropped (parent) or spent on [`ForkLocks::reset_child`] (child) as soon
-/// as the fork returns; nothing that offloads may run in between.
-pub(crate) fn prepare_fork() -> ForkLocks {
-    // A poisoned lock is no reason to leave the child wedged: the state
-    // behind it is about to be reset anyway.
-    let pool = pool().0.lock().unwrap_or_else(|e| e.into_inner());
-    let orphans = orphans().lock().unwrap_or_else(|e| e.into_inner());
-    let results = results().lock().unwrap_or_else(|e| e.into_inner());
-    ForkLocks {
-        pool,
-        orphans,
-        results,
-    }
-}
-
-impl ForkLocks {
-    /// Forget the inherited pool in a freshly forked child, and release
-    /// the locks there.
-    ///
-    /// Workers do not survive `fork(2)`: the child has only the forking
-    /// thread. What it does inherit is the bookkeeping — an `idle` count
-    /// naming workers that no longer exist, jobs queued for them, and
-    /// results addressed to waiters that belong to the parent. Left
-    /// alone, the child's first [`submit`] would see "an idle worker will
-    /// take it" and wait for a thread that will never run. The completion
-    /// pipe goes with it ([`replace_pipe`]), because that one is shared
-    /// with the parent rather than copied. Called from the child side of
-    /// every fork that keeps interpreting (`Process._fork`,
-    /// `Process.daemon`).
-    pub(crate) fn reset_child(mut self) {
-        self.pool.queue.clear();
-        self.pool.idle = 0;
-        self.orphans.clear();
-        self.results.clear();
-        replace_pipe();
-    }
-}
-
-/// Take the completion for `id`, if the worker has finished.
-pub(crate) fn try_take(id: u64) -> Option<Completion> {
-    results().lock().unwrap().remove(&id)
-}
-
-/// Abandon a ticket whose waiter is unwinding (kill / raise): whichever
-/// side arrives second cleans up.
-pub(crate) fn discard(id: u64) {
-    let mut orphans = orphans().lock().unwrap();
-    if results().lock().unwrap().remove(&id).is_none() {
-        orphans.insert(id);
-    }
-}
-
 impl NativeOp {
-    /// Whether `run_op` may re-issue this operation after `EINTR`: the
+    /// Whether the caller may re-issue this operation after `EINTR`: the
     /// three syscalls are idempotent waits, a foreign call is not.
     pub(crate) fn retries_eintr(&self) -> bool {
         !matches!(self, NativeOp::Ffi(_) | NativeOp::Ext(_))
     }
 }
 
-/// Perform `op` on the calling OS thread. With `retry_eintr` a syscall
-/// interrupted by a signal is issued again here (the pool worker, which
-/// has nothing else to do); without it the `EINTR` is returned to the
-/// caller, which handles the signal under the GVL and retries itself
-/// (the 1:1 model's `native::run_blocking`).
-pub(crate) fn run_op(op: &NativeOp, retry_eintr: bool) -> (i64, i32) {
+/// Perform `op` once on the calling kernel thread, as `(ret, errno)`.
+/// An `EINTR` is returned to the caller, which handles the signal under
+/// the GVL and issues the operation again (`native::run_blocking`).
+pub(crate) fn run_op(op: &NativeOp) -> (i64, i32) {
     match op {
-        NativeOp::Flock { fd, op } => loop {
+        NativeOp::Flock { fd, op } => {
             // SAFETY: plain flock(2) on a raw fd owned by the caller's
-            // IO object (kept alive by the parked waiter's frame).
+            // IO object (kept alive by the waiting caller's frame).
             let r = unsafe { libc::flock(*fd, *op) };
             if r == 0 {
                 return (0, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR || !retry_eintr {
-                return (r as i64, errno);
-            }
-        },
-        NativeOp::Open { path, flags, mode } => loop {
+            (r as i64, errno)
+        }
+        NativeOp::Open { path, flags, mode } => {
             // SAFETY: NUL-terminated path, plain open(2).
             let r = unsafe { libc::open(path.as_ptr(), *flags, *mode as libc::c_uint) };
             if r >= 0 {
                 return (r as i64, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR || !retry_eintr {
-                return (-1, errno);
-            }
-        },
-        NativeOp::Fcntl { fd, cmd, arg } => loop {
-            // SAFETY: fcntl(2) with a pointer third argument — this job
-            // owns `arg` for as long as the worker runs, and the waiter
-            // is parked meanwhile.
+            (-1, errno)
+        }
+        NativeOp::Fcntl { fd, cmd, arg } => {
+            // SAFETY: fcntl(2) with a pointer third argument — `arg` is
+            // this operation's own buffer, alive for the call.
             let r = unsafe { libc::fcntl(*fd, *cmd, arg.as_ptr()) };
             if r != -1 {
                 return (r as i64, 0);
             }
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno != libc::EINTR || !retry_eintr {
-                return (-1, errno);
-            }
-        },
+            (-1, errno)
+        }
         // No EINTR loop: the foreign function owns its own restart policy,
         // and retrying an arbitrary C call would not generally be safe.
         NativeOp::Ffi(call) => (call.run(), 0),
@@ -376,30 +95,13 @@ pub(crate) fn run_op(op: &NativeOp, retry_eintr: bool) -> (i64, i32) {
     }
 }
 
-/// Run `op` to completion on a worker while parking the calling green
-/// thread on the completion pipe: the standard submit → park → retry
-/// loop, shared by every offloaded builtin. On an interrupt delivered
-/// while parked (kill / raise) the ticket is discarded and the error
-/// propagates.
+/// Run `op` with the GVL released and hand back its outcome. A signal
+/// that ends the wait early runs the poll point and the operation is
+/// issued again; an interrupt queued meanwhile (kill / raise) propagates.
 pub(crate) fn run_blocking(
     vm: &mut crate::executor::Executor,
     globals: &mut crate::globals::Globals,
     op: NativeOp,
 ) -> crate::executor::Result<Completion> {
-    if crate::scheduler::native::enabled() {
-        // 1:1 model: on the calling kernel thread, GVL released — no
-        // worker, no completion pipe.
-        return crate::scheduler::native::run_blocking(vm, globals, op);
-    }
-    let id = submit(op);
-    loop {
-        if let Some(comp) = try_take(id) {
-            return Ok(comp);
-        }
-        if let Err(err) = crate::scheduler::wait_fd(vm, globals, wake_fd(), libc::POLLIN, None) {
-            discard(id);
-            return Err(err);
-        }
-        drain();
-    }
+    crate::scheduler::native::run_blocking(vm, globals, op)
 }

@@ -1,25 +1,21 @@
-//! The 1:1 thread model: each Ruby `Thread` runs on a kernel thread of
-//! its own, and the threads take turns under the Global VM Lock
-//! (`crate::gvl`). This is the default model; `MONORUBY_THREAD_MODEL=green`
-//! selects the M:1 green scheduler in the parent module instead.
+//! The thread model: each Ruby `Thread` runs on a kernel thread of its
+//! own, and the threads take turns under the Global VM Lock
+//! (`crate::gvl`).
 //!
-//! The registry is the parent module's, unchanged: `Scheduler::threads`,
-//! `main`, `current`, the pending reports all live in the `Vm`, and
-//! only the GVL holder touches them — so `current` is simply "the
-//! holder", written on every acquire. What this module replaces is the
-//! *switching*. Where a green thread saves its context and jumps to the
-//! scheduler loop, a native thread releases the GVL and blocks in
+//! The registry is the parent module's: `Scheduler::threads`, `main`,
+//! `current`, the pending reports all live in the `Vm`, and only the GVL
+//! holder touches them — so `current` is simply "the holder", written on
+//! every acquire. A thread that waits releases the GVL and blocks in
 //! `poll(2)` on its own wake pipe (the [`Parker`]) plus whatever fds it
-//! is waiting for; where the scheduler would queue a thread runnable,
-//! the waker writes a byte to that pipe. The GVL's FIFO handoff is the
-//! ready queue.
+//! is waiting for; a waker marks it runnable and writes a byte to that
+//! pipe. The GVL's FIFO handoff is the ready queue.
 //!
 //! Every park is at a VM safepoint inside a builtin (a `sleep`, a
-//! `join`, an fd wait), exactly where a green thread switched, so a
-//! thread that does not hold the lock always has GC-complete frames and
-//! the holder's collections can mark every thread through the registry
-//! (`Scheduler::mark`: each thread's `Executor`, and the main thread's
-//! through `main_exec`, published before main lets go of the lock).
+//! `join`, an fd wait), so a thread that does not hold the lock always
+//! has GC-complete frames and the holder's collections can mark every
+//! thread through the registry (`Scheduler::mark`: each thread's
+//! `Executor`, and the main thread's through `main_exec`, published
+//! before main lets go of the lock).
 //!
 //! Kernel threads serve the spawner's interpreter (`vm::adopt`), block
 //! the asynchronous signals so the kernel delivers them to the main
@@ -27,20 +23,11 @@
 //! interrupt the parent module delivers at the next delivery point.
 
 use std::cell::RefCell;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::gvl::{Gvl, GvlThread};
-
-/// Whether the 1:1 model is selected: it is, unless
-/// `MONORUBY_THREAD_MODEL=green` asks for the M:1 green scheduler
-/// (`native` names this model explicitly; anything else is ignored).
-/// Read once; the model cannot change while threads exist.
-pub(crate) fn enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| !std::env::var("MONORUBY_THREAD_MODEL").is_ok_and(|v| v == "green"))
-}
 
 /// Machine stack of a kernel thread: room for the 1 MiB Ruby-frame
 /// budget the primary context gets (`MAIN_STACK_SIZE`) and the Rust
@@ -156,9 +143,7 @@ thread_local! {
 }
 
 /// The GVL's part of `crate::fork::prepare`: its state, held by the
-/// forking thread across the fork (see `Gvl::prepare_fork`). Taken in
-/// both thread models; in the green one nobody else can be contending
-/// for it, so it costs one uncontended lock.
+/// forking thread across the fork (see `Gvl::prepare_fork`).
 pub(crate) fn gvl_fork_guard() -> crate::gvl::GvlForkGuard {
     let (gvl, main) = crate::vm::vm().gvl();
     GVL_THREAD.with(|t| match &*t.borrow() {
@@ -204,7 +189,6 @@ pub(super) fn publish_main_exec(vm: &mut Executor) {
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
         s.main_exec = Some(root_exec(vm));
-        s.in_scheduler = true;
     });
 }
 
@@ -299,10 +283,8 @@ pub(super) fn without_gvl<R>(vm: &mut Executor, f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// The 1:1 model's `native_pool::run_blocking`: the operation runs on
-/// the calling kernel thread with the GVL released instead of on a pool
-/// worker, so there is no completion pipe to park on and no 40 µs
-/// round trip. A signal ends the syscall early (`EINTR`) — an
+/// `native_pool::run_blocking`: the operation runs on the calling kernel
+/// thread with the GVL released. A signal ends the syscall early (`EINTR`) — an
 /// interrupt's unblocking signal, or on main a trapped signal — and is
 /// handled under the GVL like a park's: the poll point runs, a pending
 /// interrupt is delivered, and the syscall is issued again (they are
@@ -317,9 +299,8 @@ pub(crate) fn run_blocking(
     ensure_main(vm);
     let cur = current();
     deliver_pending_now(vm, globals, cur, true)?;
-    set_park_blocking(cur, true);
     loop {
-        let (ret, errno) = without_gvl(vm, || run_op(&op, false));
+        let (ret, errno) = without_gvl(vm, || run_op(&op));
         if errno == libc::EINTR && op.retries_eintr() {
             if crate::executor::execute_gc(vm, globals).is_none() {
                 return Err(vm.take_error());
@@ -339,8 +320,7 @@ pub(crate) fn run_blocking(
 
 /// `fd` is about to be closed. A thread parked in `poll(2)` on it would
 /// not notice — the kernel keeps polling the file the descriptor
-/// referred to — where the green scheduler's poller saw `POLLNVAL` at
-/// once. Wake every thread waiting on it; each re-checks its stream and
+/// referred to. Wake every thread waiting on it; each re-checks its stream and
 /// finds it closed (`IOError`, as CRuby's `rb_thread_fd_close`).
 pub(super) fn fd_closing(fd: i32) {
     // Reached from `FileDescriptor::drop`, possibly inside a sweep or
@@ -376,8 +356,7 @@ unsafe impl Send for Start {}
 
 /// Register a freshly created thread object and start its kernel
 /// thread, which queues itself on the GVL before this returns — so the
-/// `Thread.new` caller's `pass` hands it its first slice, as the green
-/// scheduler's eager dispatch does.
+/// `Thread.new` caller's `pass` hands it its first slice.
 pub(super) fn spawn(vm: &mut Executor, globals: &mut Globals, mut thread: Value) -> Result<()> {
     ensure_main(vm);
     ensure_ubf_handler();
@@ -504,7 +483,7 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
         debug_assert_eq!(inner.state(), ThreadState::Created);
         inner.native_tid = Some(super::current_kernel_tid());
         // Killed / raised into before the body ran: dies unstarted, the
-        // first queued interrupt deciding how (FIFO, as `dispatch`).
+        // first queued interrupt deciding how (FIFO).
         match inner.pending.pop_front() {
             Some(PendingInterrupt::Kill) => {
                 finalize_unstarted(globals, thread, None);
@@ -534,11 +513,12 @@ fn run_body(globals: &mut Globals, mut thread: Value) {
     // the same budget as the process main thread's.
     handle.init_stack_limit(globals);
     // The body block's LEP belongs to the spawning frame; claim it as
-    // this context's root svar scope (see `dispatch`).
+    // this context's root svar scope, or `$~` / `$_` would be shared
+    // with the spawner in both directions (CRuby: `ec->root_lep`).
     handle.enter_root_svar_scope(root_lep);
-    // The outcome is handed to the exit hook as the green invoker hands
-    // it: the result word, or 0 with the error pending on the executor,
-    // where the hook keeps it rooted while it runs Ruby (#1880).
+    // The outcome is handed to the exit hook as the result word, or 0
+    // with the error pending on the executor, where the hook keeps it
+    // rooted while it runs Ruby (#1880).
     let ret = match handle.invoke_proc(globals, proc, &args) {
         Ok(v) => v.id(),
         Err(err) => {
@@ -656,8 +636,8 @@ fn park(
 
 /// `cur` is about to park with nothing that could ever wake it but
 /// another thread. If every other live thread is in the same position,
-/// nothing will: the green scheduler's "No live threads left.
-/// Deadlock?" — a fatal error in the main thread. Returned to a main
+/// nothing will: "No live threads left. Deadlock?" — a fatal error in
+/// the main thread, as CRuby's. Returned to a main
 /// `cur` to raise in place; queued on main (and main woken) otherwise.
 fn check_deadlock(cur: Value, is_main: bool) -> Option<MonorubyErr> {
     if ignore_deadlock() {
@@ -687,7 +667,7 @@ fn check_deadlock(cur: Value, is_main: bool) -> Option<MonorubyErr> {
     None
 }
 
-/// `Kernel#sleep` / `Thread.stop`: see the green `sleep`.
+/// `Kernel#sleep` / `Thread.stop` (`scheduler::sleep_woken`).
 pub(super) fn sleep(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -697,7 +677,6 @@ pub(super) fn sleep(
     flush_pending_reports(vm, globals);
     let cur = current();
     deliver_pending_now(vm, globals, cur, true)?;
-    set_park_blocking(cur, true);
     {
         let mut cur = cur;
         let inner = cur.as_thread_inner_mut();
@@ -730,7 +709,6 @@ pub(super) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     flush_pending_reports(vm, globals);
     let mut cur = current();
     deliver_pending_now(vm, globals, cur, false)?;
-    set_park_blocking(cur, false);
     if is_current_main() {
         publish_main_exec(vm);
     }
@@ -744,7 +722,7 @@ pub(super) fn pass(vm: &mut Executor, globals: &mut Globals) -> Result<()> {
     deliver_pending_now(vm, globals, cur, false)
 }
 
-/// `Thread#join`: see the green `join`.
+/// `Thread#join` (`scheduler::join`).
 pub(super) fn join(
     vm: &mut Executor,
     globals: &mut Globals,
@@ -763,7 +741,6 @@ pub(super) fn join(
     loop {
         flush_pending_reports(vm, globals);
         deliver_pending_now(vm, globals, cur, true)?;
-        set_park_blocking(cur, true);
         if target.as_thread_inner().is_dead() {
             return Ok(true);
         }
@@ -814,15 +791,14 @@ pub(super) fn wait_fds(
     ensure_main(vm);
     let cur = current();
     deliver_pending_now(vm, globals, cur, true)?;
-    set_park_blocking(cur, true);
     park(vm, globals, cur, ThreadState::IoWaiting, fds, deadline)?;
     deliver_pending_now(vm, globals, cur, true)
 }
 
 /// Kill every other live thread at process exit and join their kernel
-/// threads, so none outlives the interpreter (see the green
-/// `terminate_all`). Bounded, like the green one: a thread that spins
-/// in its ensure clause forever is left behind.
+/// threads, so none outlives the interpreter (`scheduler::terminate_all`).
+/// Bounded: a thread that spins in its ensure clause forever is left
+/// behind.
 pub(super) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
     ensure_main(vm);
     if !is_current_main() {
@@ -900,8 +876,9 @@ pub(super) fn terminate_all(vm: &mut Executor, globals: &mut Globals) {
     flush_pending_reports(vm, globals);
 }
 
-/// The forking thread is the child's only thread — and its main
-/// thread. See the green `fork_child_reset_threads`.
+/// The forking thread is the child's only thread — and its main thread
+/// (CRuby's fork semantics: the others' kernel threads belong to the
+/// parent).
 pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
     SCHEDULER.with(|s| {
         let mut s = s.borrow_mut();
@@ -922,7 +899,7 @@ pub(super) fn fork_child_reset_threads(cur: Option<Value>) {
     });
     if let Some(mut cur) = cur {
         // The wake pipe is shared with the parent (fork copies the fd
-        // table): a fresh one, as the native pool's completion pipe.
+        // table): a fresh one.
         let inner = cur.as_thread_inner_mut();
         if inner.parker.is_some() {
             inner.parker = Some(Parker::new());

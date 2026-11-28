@@ -10,7 +10,7 @@
 //!   writes at capacity, `#flush`, `#close`, or exit.
 //! * `std::io::Stderr` is unbuffered with no way to turn buffering on.
 //! * Neither honours `IO#sync=`, and neither exposes how much is
-//!   buffered — which the green-thread scheduler needs in order to skip
+//!   buffered — which the IO builtins need in order to skip
 //!   an fd-readiness park when a read can already be satisfied.
 //!
 //! The buffers here are monoruby's own and implement CRuby's policy
@@ -266,7 +266,7 @@ pub(crate) enum DrainErr {
     /// A signal is pending: the caller must unwind to a VM poll point (to
     /// run the Ruby handler) and retry.
     Signal,
-    /// `EAGAIN` on an fd the green-thread scheduler put in non-blocking
+    /// `EAGAIN` on an fd the IO builtins put in non-blocking
     /// mode: the caller parks until the fd is writable, then retries.
     WouldBlock,
     Io(std::io::Error),

@@ -139,9 +139,8 @@ fn uncaught_report_uses_detailed_message() {
 }
 
 /// A thread that dies of an exception reports it the same way
-/// (`report_on_exception`): the message line is `#detailed_message`'s,
-/// under both thread models. The first line carries the thread's
-/// address and is left out.
+/// (`report_on_exception`): the message line is `#detailed_message`'s.
+/// The first line carries the thread's address and is left out.
 #[test]
 fn thread_report_uses_detailed_message() {
     let cases = [
@@ -158,22 +157,19 @@ fn thread_report_uses_detailed_message() {
             "-e:1:in 'block in <main>': boom (RuntimeError)\n",
         ),
     ];
-    for model in ["native", "green"] {
-        for (script, expected) in cases {
-            let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
-                .env_remove("RUBYOPT")
-                .env_remove("RUBYLIB")
-                .env("MONORUBY_THREAD_MODEL", model)
-                .args(["--disable=gems", "-e", script])
-                .output()
-                .expect("spawn monoruby");
-            let err = String::from_utf8_lossy(&out.stderr).into_owned();
-            let (head, rest) = err.split_once('\n').unwrap_or((&err, ""));
-            assert!(
-                head.ends_with("terminated with exception (report_on_exception is true):"),
-                "{model}: {script}: {err}"
-            );
-            assert_eq!(rest, expected, "{model}: {script}");
-        }
+    for (script, expected) in cases {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_monoruby"))
+            .env_remove("RUBYOPT")
+            .env_remove("RUBYLIB")
+            .args(["--disable=gems", "-e", script])
+            .output()
+            .expect("spawn monoruby");
+        let err = String::from_utf8_lossy(&out.stderr).into_owned();
+        let (head, rest) = err.split_once('\n').unwrap_or((&err, ""));
+        assert!(
+            head.ends_with("terminated with exception (report_on_exception is true):"),
+            "{script}: {err}"
+        );
+        assert_eq!(rest, expected, "{script}");
     }
 }

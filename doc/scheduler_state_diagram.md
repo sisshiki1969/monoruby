@@ -1,78 +1,73 @@
-# Green thread スケジューラ: Thread / Fiber の状態遷移図
+# スレッドと Fiber: Thread / Fiber の状態遷移図
 
-`doc/threads.md` の補足。スケジューラ(`src/scheduler.rs`)が管理する
-`ThreadState`(`src/value/rvalue/thread.rs`)と、Fiber の
-`FiberState`(`src/executor.rs` の `fiber_state()`)の状態遷移をまとめる。
+`doc/threads.md` の補足。スレッド registry(`src/scheduler.rs`)と 1:1 モデルの
+実装(`src/scheduler/native.rs`)が管理する `ThreadState`
+(`src/value/rvalue/thread.rs`)と、Fiber の `FiberState`(`src/executor.rs` の
+`fiber_state()`)の状態遷移をまとめる。各 Ruby スレッドはカーネルスレッドで、
+GVL を持っている間だけインタプリタに触る(`doc/threads.md` §12)。
 
 ## 1. Thread の状態遷移
 
-`ThreadState` は 6 状態:
+`ThreadState` は 7 状態:
 
 ```
-Created | Runnable | Sleeping | Joining | IoWaiting | Dead
+Created | Runnable | Sleeping | Joining | IoWaiting | Blocking | Dead
 ```
-
-![Thread 状態遷移図](thread_state_diagram.svg)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created : Thread.new / start / fork<br>spawn() が registry と ready キューに登録
+    [*] --> Created : Thread.new / start / fork<br>spawn() が registry に登録し<br>カーネルスレッドを起こす
 
-    Created --> Runnable : dispatch()<br>スタック確保 (initialize_stack) →<br>thread_invoker で本体起動
+    Created --> Runnable : thread_main が GVL を取り run_body が本体起動
     Created --> Dead : 起動前に #kill / #raise が queue 済み<br>本体を実行せず finalize_unstarted()
 
-    Runnable --> Sleeping : Kernel#sleep / Thread.stop<br>(sleepers へ登録、deadline は Option)
-    Runnable --> Joining : Thread#join / #value<br>(対象の joiners へ登録、timeout は sleepers 併用)
-    Runnable --> IoWaiting : fd 待ち wait_fd / wait_fds<br>(io_waiters へ登録、deadline は sleepers 併用)
-    Runnable --> Runnable : Thread.pass / タイマ・プリエンプション<br>(ready 末尾へ回る)<br>park_permit 消費時は park が即時復帰
+    Runnable --> Sleeping : Kernel#sleep / Thread.stop<br>(park: GVL を手放し wake pipe を poll)
+    Runnable --> Joining : Thread#join / #value<br>(対象の joiners へ登録して park)
+    Runnable --> IoWaiting : fd 待ち wait_fd / wait_fds<br>(wake pipe と待つ fd を一緒に poll)
+    Runnable --> Blocking : without_gvl<br>(flock / FIFO open / waitpid / 拡張の blocking 呼び出し)
+    Runnable --> Runnable : Thread.pass / タイマ・プリエンプション<br>(Gvl::yield_now で GVL を譲る)<br>park_permit 消費時は park が即時復帰
     Runnable --> Dead : 本体 return / 未捕捉例外 /<br>kill unwind 到達 → finalize()
 
-    Sleeping --> Runnable : ① #wakeup / #run<br>② deadline 経過 (wake_due_sleepers)<br>③ #kill / #raise (wake_worthy な割り込み)
+    Sleeping --> Runnable : ① #wakeup / #run<br>② deadline 経過<br>③ #kill / #raise (wake_worthy な割り込み)
     Joining --> Runnable : ① join 対象の死亡 (finalize_common が joiners を起床)<br>② timeout 経過<br>③ #kill / #raise
-    IoWaiting --> Runnable : ① fd ready / HUP / error (poll_io_waiters)<br>② deadline 経過<br>③ #kill / #raise
+    IoWaiting --> Runnable : ① fd ready / HUP / error<br>② deadline 経過<br>③ #kill / #raise
+    Blocking --> Runnable : 呼び出しの完了 / 割り込み (SIGVTALRM → EINTR)
 
     Dead --> [*] : registry から prune<br>(ユーザ参照が残る限りオブジェクトは生存)
 ```
 
 ### 遷移の詳細とコード対応
 
-| 遷移 | トリガ | 実装箇所 (`scheduler.rs`) |
+| 遷移 | トリガ | 実装箇所 (`scheduler/native.rs`) |
 |---|---|---|
-| `[*] → Created` | `Thread.new` が `ThreadInner::new` を生成、`spawn()` が `threads` + `ready` に登録 | `spawn` |
-| `Created → Runnable` | ready から取り出され `dispatch()` が初回起動(スタック確保 → `thread_invoker`) | `dispatch` の `Entry::Invoke` |
-| `Created → Dead` | 起動前に `#kill` / `#raise` が pending に積まれていた場合、本体を実行せず死亡(CRuby 意味論)。raise は終了例外として記録 | `dispatch` の `Entry::Skip` → `finalize_unstarted` |
-| `Runnable → Sleeping` | `Kernel#sleep` / `Thread.stop`。deadline `None` = `#wakeup` されるまで | `sleep` |
-| `Runnable → Joining` | `Thread#join` / `#value`。対象の `joiners` に登録。timeout 付きなら `sleepers` にも登録 | `join` |
-| `Runnable → IoWaiting` | ブロックする IO / `IO.select`。fd ごとに `io_waiters` へ登録(1 スレッドが複数 fd を待てる) | `wait_fd` / `wait_fds` |
-| `Runnable → Runnable` | `Thread.pass`(自発)、またはプリエンプション(`preempt.rs` のタイマが 10 ms ごとに poll フラグを立て、次のセーフポイントで `scheduler::pass` 相当)。ready 末尾へ | `pass` |
-| `Runnable → Dead` | 本体の正常終了(`result` 記録)、未捕捉例外(`exception` 記録)、または kill unwind のスレッド root 到達(クリーンな死) | `dispatch` 復帰後の `finalize` |
-| `Sleeping → Runnable` | `#wakeup` / `#run`(park 中でなければ `park_permit` を立てるだけで状態遷移なし)/ deadline 経過 / wake に値する割り込み | `wakeup_inner` / `wake_due_sleepers` / `interrupt` |
-| `Joining → Runnable` | join 対象の死亡(`finalize_common` が `joiners` を一括起床)/ timeout / 割り込み | `finalize_common` / `wake_due_sleepers` / `interrupt` |
-| `IoWaiting → Runnable` | `poll(2)` で fd が ready(HUP / error 含む — 起床側が再試行して実 errno を得る)/ deadline / 割り込み | `poll_io_waiters` / `wake_due_sleepers` / `interrupt` |
+| `[*] → Created` | `Thread.new` が `ThreadInner::new` を生成、`spawn()` が `threads` に登録してカーネルスレッドを起こす | `spawn` |
+| `Created → Runnable` | 新しいカーネルスレッドが GVL を取り、`run_body` が本体を始める | `thread_main` / `run_body` |
+| `Created → Dead` | 起動前に `#kill` / `#raise` が pending に積まれていた場合、本体を実行せず死亡(CRuby 意味論)。raise は終了例外として記録 | `run_body` → `finalize_unstarted` |
+| `Runnable → Sleeping` | `Kernel#sleep` / `Thread.stop`。deadline `None` = `#wakeup` されるまで | `sleep` → `park` |
+| `Runnable → Joining` | `Thread#join` / `#value`。対象の `joiners` に登録して park(timeout は park の deadline) | `join` → `park` |
+| `Runnable → IoWaiting` | ブロックする IO / `IO.select`。待つ fd と wake pipe を一緒に `poll(2)` | `wait_fds` → `park` |
+| `Runnable → Blocking` | fd で待てないカーネル待ち。GVL を外して呼んだカーネルスレッド上で実行 | `without_gvl` / `run_blocking` |
+| `Runnable → Runnable` | `Thread.pass`(自発)、またはプリエンプション(`preempt.rs` のタイマが 10 ms ごとに poll フラグを立て、次のセーフポイントで `scheduler::pass`)。GVL の待ち手がいれば譲る | `pass` |
+| `Runnable → Dead` | 本体の正常終了(`result` 記録)、未捕捉例外(`exception` 記録)、または kill unwind のスレッド root 到達 | `run_body` 末尾の `finalize` |
+| `Sleeping → Runnable` | `#wakeup` / `#run`(park 中でなければ `park_permit` を立てるだけ)/ deadline 経過 / wake に値する割り込み | `wakeup_inner` / `park` / `interrupt` → `wake_parked` |
+| `Joining → Runnable` | join 対象の死亡(`finalize_common` が `joiners` を起床)/ timeout / 割り込み | `finalize_common` / `park` / `interrupt` |
+| `IoWaiting → Runnable` | fd が ready(HUP / error 含む — 起床側が再試行して実 errno を得る)/ deadline / 割り込み | `park` / `interrupt` |
+| `Blocking → Runnable` | 呼び出しの完了。割り込みは `interrupt_blocking` が `SIGVTALRM` で `EINTR` を起こし、戻った側が配送する | `without_gvl` |
 | `Dead → (prune)` | `finalize_common` が state を `Dead` にし、joiners を起こし、`threads` registry から除去 | `finalize_common` |
 
 ### 注意点
 
-- **「Running」という状態はない**。`Runnable` は「ready キューにいる」と
-  「現在実行中(`Scheduler::current`)」の両方を含む。
-- **main スレッドは ready キューに入らない**。main が `Runnable` に戻ることが
-  `scheduler_loop` の終了条件で、ループが return して main が再開する。
-  各起床パス(`wakeup_inner` / `wake_due_sleepers` / `poll_io_waiters` /
-  `interrupt` / `finalize_common`)はすべて `Some(t) != main` を確認してから
-  ready に push する。
+- **「Running」という状態はない**。`Runnable` は「GVL を持っている」と
+  「GVL を待っている」の両方を含む。
 - **割り込みによる起床は「配送」ではない**。`#kill` / `#raise` は `pending`
   キューに積み、対象が park 中(`Sleeping | Joining | IoWaiting`)かつ
-  マスクが全て `:never` でなければ `Runnable` に戻すだけ。実際の配送は
-  `dispatch` の再開時(`Entry::ResumeInterrupt`: エラーをセットして 0 で
-  resume → park していた `park_switch` が `Err` を返す)か、main なら
-  `take_main_pending` で行われ、`Thread.handle_interrupt` のマスクに従う。
+  マスクが全て `:never` でなければ起こすだけ(`wake_parked`)。`Blocking` 中なら
+  `interrupt_blocking`。実際の配送は対象が GVL を取り直した後の
+  `deliver_pending_now` で行われ、`Thread.handle_interrupt` のマスクに従う。
 - **park_permit**(図中の self-loop): *running* な対象への
   `Thread#__wakeup_permit`(Mutex / Queue / ConditionVariable が使用)は
   `park_permit` を立て、対象の次の park は状態遷移せず即時復帰する。
   プリエンプション下の lost-wakeup 窓を塞ぐ(`doc/threads.md` §5)。
-- **タイムアウト付き join / IO 待ちは二重登録**される(`joiners`/`io_waiters` と
-  `sleepers` の両方)。どちらか一方の経路で起きたら他方のエントリは stale になり、
-  `wake_due_sleepers` / `prune_io_waiters` が状態を再検査して破棄する。
   スプリアス起床は常に許容され、呼び出し元のループが条件を再検査する。
 - **`Thread.allocate` の shell**(`Process::Waiter` 等)は最初から `Dead` で
   生成され、スケジュールされない。
@@ -82,7 +77,7 @@ stateDiagram-v2
 | `ThreadState` | `#status` | `#alive?` | `#stop?` |
 |---|---|---|---|
 | `Created` / `Runnable` | `"run"` | true | false |
-| `Sleeping` / `Joining` / `IoWaiting` | `"sleep"` | true | true |
+| `Sleeping` / `Joining` / `IoWaiting` / `Blocking` | `"sleep"` | true | true |
 | `Dead`(正常終了 / kill) | `false` | false | true |
 | `Dead`(例外終了) | `nil` | false | true |
 
@@ -141,28 +136,21 @@ stateDiagram-v2
     SIGSEGV になるため事前検査)。
   - `parent_fiber == None` のコンテキスト(main、および**スレッド root**)での
     `Fiber.yield` → `FiberError`("can't yield from main fiber")。
-- **Thread との関係**: Thread は Fiber のスタック切替機構(`rsp_save` 交換)を
-  土台にするが、スレッド root の `parent_fiber` は常に `None` で、切替は
-  専用スタブ(`thread_invoker` / `switch_to_scheduler` / `scheduler_resume`)が
-  `SCHED_RSP` 経由で行う。`ThreadInner::body_terminated()` は root Executor の
-  `FiberState::Terminated`(= `rsp_save == -1`)で本体終了を検知し、これが
-  Thread 側の `Runnable → Dead` 遷移(`finalize`)のトリガになる。
-- **スレッド内にネストした Fiber**: green thread が nested Fiber の中で park
-  した場合、`ThreadInner::resume_exec` は root ではなく park した Fiber の
-  Executor を指し、スケジューラはそこへ直接 resume する(`parent_fiber`
-  チェーンは切替をまたいで保存される)。
+- **Thread との関係**: スレッドはそれぞれ自分のカーネルスレッドのスタックで
+  走るので、Fiber のスタック切替は使わない。スレッド root の `parent_fiber` は
+  常に `None` で、`Fiber.yield` はそこで `FiberError` になる。
+- **スレッド内にネストした Fiber**: スレッドが nested Fiber の中で park
+  しても、そのカーネルスレッドがそこで止まるだけで、起きればその場から続く。
+  park / pass / `without_gvl` は止まっている Executor を `resume_exec` に
+  公開し、BOP 再定義の変換とバックトレースがそれを読む。
 
-## 3. 2 つの状態機械の関係(全体図)
+## 3. 2 つの状態機械の関係
 
 ```mermaid
 flowchart TB
-    subgraph sched["スケジューラ (main コンテキストのイベントループ)"]
-        ready["ready キュー (FIFO)"]
-        sleepers["sleepers (deadline)"]
-        io["io_waiters (fd, events)"]
-    end
+    gvl["GVL"]
 
-    subgraph thread["green thread"]
+    subgraph thread["Ruby スレッド (カーネルスレッド 1 本)"]
         direction TB
         root["thread root Executor<br>(parent_fiber = None)"]
         fib["nested Fiber<br>(parent_fiber → resumer)"]
@@ -170,13 +158,11 @@ flowchart TB
         fib -- "Fiber.yield" --> root
     end
 
-    ready -- "dispatch()<br>thread_invoker / scheduler_resume" --> thread
-    thread -- "park (switch_to_scheduler)<br>resume_exec を記録" --> sleepers
-    thread -- "park" --> io
-    thread -- "本体終了 (rsp_save = -1)" --> sched
+    thread -- "pass / park / without_gvl<br>resume_exec を公開して手放す" --> gvl
+    gvl -- "取得 (Gvl::on_acquired)" --> thread
 ```
 
-- スケジューラは Thread 単位でスケジュールし、Fiber の resume/yield は
-  スレッド内で完結する(スケジューラは関与しない)。
-- park はどの Fiber の中からでもよく、`resume_exec` が park した Executor を
-  指すので、再開は park 地点へ直接戻る。
+- スレッドの切り替えは GVL の受け渡しで、Fiber の resume/yield は
+  スレッド内で完結する(GVL は関与しない)。
+- park はどの Fiber の中からでもよく、そのカーネルスレッドはその場で止まるので、
+  再開は park 地点へ直接戻る。

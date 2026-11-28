@@ -1912,11 +1912,10 @@ impl MonorubyErr {
     }
 
     /// Internal marker: a blocking IO primitive hit `EAGAIN` on an fd put
-    /// into non-blocking mode by the green-thread scheduler's blocking-IO
-    /// emulation (or left non-blocking by `read_nonblock` /
+    /// into non-blocking mode by the blocking-IO emulation (or left non-blocking by `read_nonblock` /
     /// `write_nonblock`). This never surfaces to Ruby — `blocking_io_region`
-    /// in builtins/io.rs intercepts it, parks the current green thread on
-    /// the scheduler's fd poller (or, with no other live threads, blocks in
+    /// in builtins/io.rs intercepts it, parks the current thread on the fd
+    /// with the GVL released (or, with no other live threads, blocks in
     /// `poll(2)` directly), and restarts the operation once the fd is ready.
     /// Bytes consumed before the interrupt were pushed back by the
     /// primitives, so the restart loses no data.

@@ -112,8 +112,7 @@ monoruby の `Value`（`value.rs`）とは層（`capi.c`）が境界で相互変
   `#instance_variables` や inspect には出ない。
 - Ruby を呼ぶ API（`rb_funcall`、`rb_yield`、`rb_proc_call`、
   `rb_thread_call_without_gvl`）は戻ったあと `capi_cur` を呼ぶ前の値に戻す。
-  green thread の切り替えは LIFO でないので、呼び出し中に別スレッドが同じ
-  OS スレッドで拡張に入っても自分のフレームが残る。
+  入れ子の呼び出しが外側のフレームを壊さないための保存・復元。
 
 ### 3.3 GC: 呼び出し中は全部生かす
 
@@ -173,14 +172,14 @@ String 自身のバッファを返す。書き込み可能で、`rb_str_new(NULL
   （`native_extension_loading.md` §6.2）。
 - `rb_encoding` は名前ごとの小さな記録。添字 0/1/2 は CRuby と同じく
   ASCII-8BIT / UTF-8 / US-ASCII。
-- `rb_thread_call_without_gvl` は `call_blocking_ubf`（1:1 モデルでは GVL を
-  外して呼んだカーネルスレッド上で、green では native pool のワーカーで実行）。
+- `rb_thread_call_without_gvl` は `call_blocking_ubf`（GVL を外して、呼んだ
+  カーネルスレッド上で実行）。
   ubf は呼び出しの間 `ThreadInner::blocking_ubf` に記録され、そのスレッドへの
   `Thread#wakeup` / `#raise` / `#kill`（`interrupt_blocking`）と、main が
   ブロック中のシグナル（ポーリング点でそれを見たスレッドが呼ぶ）で 1 回だけ
   GVL を持ったまま呼ばれる（CRuby の `rb_threadptr_interrupt` と同じ）。
   `RUBY_UBF_IO` は関数なしで、割り込みの `SIGVTALRM` がシステムコールを
-  `EINTR` で切る（1:1 モデルのみ。green ではワーカーに送るシグナルがなく未対応）。
+  `EINTR` で切る。
   fixture は `tests/capi/capi_nogvl.c`。
 - 多くの関数は Ruby のメソッドを `rb_funcall` で呼ぶだけの薄い実装
   （TruffleRuby の `Truffle::CExt` と同じ方針）。正しさ優先で、ホットな

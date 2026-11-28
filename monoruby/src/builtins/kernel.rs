@@ -4170,8 +4170,8 @@ pub(super) fn fork(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: Byteco
     )?;
     let pid = pid_val.try_fixnum().unwrap_or(-1);
     if pid == 0 {
-        // Child process (the default `_fork` already reset the green-
-        // thread scheduler).
+        // Child process (the default `_fork` already reset the thread
+        // registry).
         if let Some(bh) = lfp.block() {
             // The block's end is the end of the child's main thread: the
             // child leaves through the process exit sequence (`at_exit`
@@ -4422,8 +4422,8 @@ pub(crate) fn sleep_thread(
         Some(sec) => Some(time_interval(vm, globals, sec)?),
         None => None,
     };
-    // With other live green threads, sleeping must yield to the
-    // scheduler so they run during the wait (and a no-duration sleep
+    // With other live threads, sleeping must release the GVL so they
+    // run during the wait (and a no-duration sleep
     // parks until Thread#wakeup instead of returning immediately).
     if crate::scheduler::has_other_live_threads() {
         let (_, woken) = crate::scheduler::sleep_woken(vm, globals, dur)?;
@@ -4487,7 +4487,7 @@ pub(crate) fn sleep_thread(
             }
         }
     } else {
-        // No other green thread can ever wake this sleeper, but a signal
+        // No other thread can ever wake this sleeper, but a signal
         // still can, so `sleep` must block here exactly as CRuby's
         // argument-less form does: run any trap handler at the poll point
         // and go back to sleep, returning only when the interrupt raises
@@ -4499,7 +4499,7 @@ pub(crate) fn sleep_thread(
         // fork child parked in `sleep` ran off the end of its block and
         // exited at once, so a parent that meant to signal it later raced
         // a child that was already gone. On Linux the child usually
-        // survived by accident — its pipe write leaves an fd-poller green
+        // survived by accident — its pipe write leaves an fd-polling
         // thread live, which routes `sleep` through the scheduler arm
         // above — but on darwin nothing kept it alive, which is why
         // `process_wait_wnohang_nil` failed there on every run.

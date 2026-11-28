@@ -922,8 +922,8 @@ fn flock_(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: BytecodePtr) ->
         (r as i64, errno)
     } else {
         // A blocking flock waits *in the kernel* with nothing to poll:
-        // inline it would freeze every green thread (and the process).
-        // Run it on a native worker and park this thread instead.
+        // run it with the GVL released, so the other threads keep
+        // running meanwhile.
         let comp = crate::native_pool::run_blocking(
             vm,
             globals,
@@ -1399,9 +1399,8 @@ fn file_init(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, mut obj: Value)
     };
     let open_flags = (oflags as i32) | libc::O_CLOEXEC;
     // A FIFO's open(2) blocks in the kernel until the peer end appears;
-    // opening it inline would freeze every green thread (and the
-    // process). Detect the FIFO up front and run the blocking open on
-    // a native worker instead, parking only this thread
+    // opening it with the GVL held would stop every other thread. Detect
+    // the FIFO up front and run the blocking open with the GVL released
     // (doc/threads.md §9). A TOCTOU miss here just falls back to
     // the previous inline behavior.
     let is_fifo = std::fs::metadata(bytes_to_pathbuf(&path_bytes))

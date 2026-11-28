@@ -515,7 +515,7 @@ OBJECT | STRING | BIGNUM | FLOAT | ARRAY | STRUCT | HASH
 Root::mark → YIELDER.mark      (ブロック/ファイバの yielder)
            → Globals::mark     (globals.rs)
            → Executor::mark    (executor.rs:248)
-           → scheduler::mark    (executor.rs:3729 — グリーンスレッドの root)
+           → scheduler::mark    (executor.rs:3729 — Ruby スレッドの root)
 ```
 
 `Executor::mark`(`executor.rs:248`)が辿るもの:
@@ -531,19 +531,19 @@ Root::mark → YIELDER.mark      (ブロック/ファイバの yielder)
 `Globals::mark` はクラステーブル・定数・グローバル変数・呼び出しサイト等の
 恒久ルートをマークする。
 
-### グリーンスレッド(`scheduler::mark`)
+### Ruby スレッド(`scheduler::mark`)
 
-green thread 導入後、GC ルートには**スケジューラの生存スレッド registry**が加わった
-(`scheduler::mark`, `scheduler.rs`)。`Scheduler::mark` は `threads` / `current` / `main` /
-`ready` / `sleepers` / `io_waiters` の全 Thread オブジェクトをマークし、`in_scheduler`
-中は main の Executor(`main_exec`)も deref してマークする。各 Thread は
-`impl GC for ThreadInner` を通じて自分の `handle` Executor(→ その CFP チェーン)と
-proc/args/result/exception/joiners/pending/masks/last_status をマークする。
+GC ルートには**スレッド registry** が含まれる(`scheduler::mark`, `scheduler.rs`)。
+`Scheduler::mark` は `threads` / `current` / `main` の全 Thread オブジェクトをマークし、
+current が main でない間は main の Executor(`main_exec`)も deref してマークする。
+各 Thread は `impl GC for ThreadInner` を通じて自分の `handle` Executor
+(→ その CFP チェーン)と proc/args/result/exception/joiners/pending/masks/last_status
+をマークする。
 
-したがって GC は事実上**複数の Executor**をマークする:各 green thread の `handle` と、
-`main_exec` 経由で辿る埋め込み側所有の main Executor。切替はセーフポイントでしか
-起きないので、サスペンド中のどのスレッドのフレームも GC-complete
-(詳細は `doc/threads.md` §2・§3.4・§8)。
+したがって GC は事実上**複数の Executor**をマークする:各スレッドの `handle` と、
+`main_exec` 経由で辿る埋め込み側所有の main Executor。GVL の受け渡しは
+セーフポイントでしか起きないので、GVL を待っているどのスレッドのフレームも
+GC-complete(詳細は `doc/threads.md` §2・§3.1・§12)。
 
 ### 8.1 ビルトインの一時値 — 素の `Vec<Value>` は**ルートではない**
 

@@ -360,7 +360,7 @@ pub struct Executor {
     /// The LEP this execution context treats as *its own* svar scope
     /// (CRuby's `ec->root_lep`).
     ///
-    /// A green thread / fiber body runs a block whose LEP belongs to
+    /// A thread / fiber body runs a block whose LEP belongs to
     /// the frame that *created* it — resolving `$~` / `$_` through
     /// that LEP would share the spawner's container and leak matches
     /// in both directions. CRuby sidesteps this by recording the
@@ -749,7 +749,7 @@ impl Executor {
         // `$-d` is its alias.
         globals.set_gvar(IdentId::get_id("$DEBUG"), Value::bool(false));
         globals.alias_global_variable(IdentId::get_id("$-d"), IdentId::get_id("$DEBUG"));
-        // A fresh interpreter must not see green-thread state left over
+        // A fresh interpreter must not see thread state left over
         // from a previous interpreter on this OS thread (test harness).
         crate::scheduler::reset();
         let mut executor = Self::default();
@@ -852,8 +852,8 @@ impl Executor {
     }
 
     ///
-    /// Set stack limit to (*rsp* - FIBER_STACK_BUDGET). Used for fiber /
-    /// green-thread contexts, whose 256 KiB stack allocations bound the
+    /// Set stack limit to (*rsp* - FIBER_STACK_BUDGET). Used for fiber
+    /// contexts, whose 256 KiB stack allocations bound the
     /// budget; the primary context gets the much larger MAIN_STACK_SIZE
     /// via the `init_stack_limit` invoker.
     ///
@@ -6238,7 +6238,7 @@ impl Executor {
         // Already-materialized Proc: return it directly, *without*
         // locating the owner frame's Cfp. This is not just a shortcut:
         // when the owner frame belongs to a different execution context
-        // — e.g. a `&block` parameter read from inside a green thread
+        // — e.g. a `&block` parameter read from inside a thread
         // whose lexical home is a heap-promoted frame on the *main*
         // thread's chain — the dynamic-chain search below can never find
         // it (and walking past a thread root used to panic on
@@ -7185,8 +7185,8 @@ impl<'a, 'b> alloc::GC<RValue> for Root<'a, 'b> {
             // executor outlives it for the duration.
             unsafe { root.as_ref().mark(alloc) };
         }
-        // Green threads: every live thread's stack frames (and the main
-        // thread's, while a green thread is the one triggering GC) are
+        // Threads: every other live thread's stack frames (and the main
+        // thread's, while another thread is the one triggering GC) are
         // reachable only through the scheduler registry.
         crate::scheduler::mark(alloc);
     }
@@ -7256,7 +7256,7 @@ pub(crate) extern "C" fn execute_gc(
     // dispatching so a trap handler (which JIT-compiles, GCs, …) can
     // re-enter freely. See doc/signal.md A6/A7.
     // Signal (trap-handler / default-exception) delivery happens only on
-    // the MAIN green thread, matching CRuby: a signal arriving while a
+    // the MAIN thread, matching CRuby: a signal arriving while a
     // non-main thread runs stays pending until main's next poll point.
     let pending = if crate::scheduler::signal_delivery_ok() {
         // Clear the SIGNAL lane *before* draining: a signal landing in
@@ -7271,17 +7271,15 @@ pub(crate) extern "C" fn execute_gc(
         // (an allocation-free `nil until flag` spin on main polls only
         // while the word is non-zero).
         //
-        // 1:1 model: the kernel delivered the signal to the main kernel
-        // thread (the others block it), so main is awake and queued for
-        // the GVL, or about to be. Hand the lock over now rather than
-        // at the next timeslice tick: the handler runs as soon as main
-        // holds the lock.
+        // The kernel delivered the signal to the main kernel thread (the
+        // others block it), so main is awake and queued for the GVL, or
+        // about to be. Hand the lock over now rather than at the next
+        // timeslice tick: the handler runs as soon as main holds the
+        // lock.
         if crate::codegen::signal_table::has_pending_signals() {
-            if crate::scheduler::native_enabled() {
-                preempt = true;
-            }
-            // Main blocked in an extension call (either model) comes
-            // back through the call's unblock function.
+            preempt = true;
+            // Main blocked in an extension call comes back through the
+            // call's unblock function.
             crate::scheduler::unblock_main_for_signal();
         }
         0

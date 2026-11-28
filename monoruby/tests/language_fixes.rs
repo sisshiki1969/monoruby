@@ -638,8 +638,8 @@ fn main_context_stack_budget_allows_deep_recursion() {
     // The primary context's Ruby-frame stack budget is 1 MiB (formerly
     // 64 KiB, which ActiveRecord's require chain outgrew — the nested
     // Kernel#require frames alone overflowed it). ~2000 nested frames
-    // must complete like CRuby. Fiber / green-thread contexts keep their
-    // own 64 KiB budget (bounded by their 256 KiB stack allocations).
+    // must complete like CRuby. Fiber contexts keep their own 64 KiB
+    // budget (bounded by their 256 KiB stack allocations).
     run_test_once("def __deep(n) = n == 0 ? 0 : 1 + __deep(n - 1); __deep(2000)");
     // Runaway recursion must still be caught by the stack guard (the
     // exact depth differs from CRuby, so no differential comparison).

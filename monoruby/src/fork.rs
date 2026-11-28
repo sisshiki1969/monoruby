@@ -3,9 +3,8 @@
 //! The child of a fork has one thread: the one that called `fork`. Every
 //! lock some *other* thread was holding at that instant is, in the
 //! child, held by nobody and released by nobody, and the child blocks
-//! the first time it takes it. monoruby's own threads are green, so the
-//! interpreter thread never contends with itself — but the process has
-//! other OS threads (the native offload workers, the preempt timer), and
+//! the first time it takes it. The process has many OS threads — every
+//! Ruby `Thread` is a kernel thread, the preempt timer is another — and
 //! an embedder may run several interpreters on several OS threads over
 //! the process-global state (the test harness does, one per test
 //! thread). The identifier table is what one of them was holding when
@@ -38,7 +37,7 @@
 //! data out through the guard it owns, forgets the guard, and installs
 //! a fresh lock — the inherited one is leaked, locked, never touched
 //! again, as `preempt::ForkState` leaves the timer's mutex. A `Mutex`
-//! (the streams', the pool's) is pthread's on Apple and a futex on
+//! (the streams') is pthread's on Apple and a futex on
 //! Linux; its owner unlocking it in the child is an ordinary unlock
 //! that wakes nobody, so those guards are simply dropped.
 //!
@@ -57,7 +56,7 @@
 //! code pages at all.
 
 use crate::rvalue::{io, regexp};
-use crate::{id_table, native_pool, preempt};
+use crate::{id_table, preempt};
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::{LockResult, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -148,7 +147,6 @@ impl<T: Default + 'static> ForkGuard<T> {
 /// one of these locks may run in between.
 pub(crate) struct ForkGuards {
     gvl: crate::gvl::GvlForkGuard,
-    pool: native_pool::ForkLocks,
     idents: id_table::ForkLock,
     regexps: regexp::ForkLocks,
     _streams: io::ForkLocks,
@@ -425,14 +423,11 @@ pub(crate) fn flush_coverage_profile() {
 }
 
 pub(crate) fn prepare(kind: ForkKind) -> ForkGuards {
-    // The GVL's state: in the 1:1 model another kernel thread may be
+    // The GVL's state: another kernel thread may be
     // inside `acquire` / `release` (it holds nothing else there), and
     // the child must not inherit that lock held by a thread it does not
     // have. Taken first, so no thread changes hands from here on.
     let gvl = crate::scheduler::native::gvl_fork_guard();
-    // The pool: its own lock order is pool, orphans, results, and a
-    // worker holds nothing else while it holds one of those.
-    let pool = native_pool::prepare_fork();
     let idents = id_table::prepare_fork();
     let regexps = regexp::prepare_fork();
     let streams = io::prepare_fork();
@@ -443,7 +438,6 @@ pub(crate) fn prepare(kind: ForkKind) -> ForkGuards {
     let jit = JitInheritance::prepare(kind);
     ForkGuards {
         gvl,
-        pool,
         idents,
         regexps,
         _streams: streams,
@@ -453,13 +447,12 @@ pub(crate) fn prepare(kind: ForkKind) -> ForkGuards {
 }
 
 impl ForkGuards {
-    /// The child's side: forget the pool and timer state inherited from
+    /// The child's side: forget the timer state inherited from
     /// threads the child does not have, replace the `RwLock`s, and
     /// release the mutexes.
     pub(crate) fn reset_child(self) {
         let ForkGuards {
             gvl,
-            pool,
             idents,
             regexps,
             _streams,
@@ -469,7 +462,6 @@ impl ForkGuards {
         // First: everything after this may emit code.
         jit.reset_child();
         gvl.reset_child();
-        pool.reset_child();
         preempt.reset_child();
         idents.reset_child();
         regexps.reset_child();

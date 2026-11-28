@@ -1182,7 +1182,7 @@ pub(crate) struct JitContext<'a> {
     /// redefine the slot, so `compile_instruction` takes the set into
     /// [`Self::instr_unfrozen`] on every instruction and only arms that
     /// compiled a provably-transparent lowering — no Ruby code, no
-    /// safepoint (a green-thread preemption could let another thread call
+    /// safepoint (a preemption could let another thread call
     /// `freeze`) — restore it (minus any slot they redefine).
     /// `compile_basic_block` clears it at BB entry (merges and loop heads
     /// make no path promise, and the loop-head safepoint is a preemption

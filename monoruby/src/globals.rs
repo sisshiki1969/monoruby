@@ -628,7 +628,7 @@ pub struct Globals {
     shipped_extension_features: std::collections::HashMap<PathBuf, PathBuf>,
     /// Features whose `require` body is currently executing, keyed by
     /// the canonical path registered in `$LOADED_FEATURES`, with the
-    /// loading green thread's object id. A second thread requiring the
+    /// loading thread's object id. A second thread requiring the
     /// same feature blocks until the entry clears (CRuby's per-feature
     /// load lock); the id is only compared / liveness-checked, never
     /// dereferenced, so the map needs no GC marking.
@@ -640,7 +640,7 @@ pub struct Globals {
     /// (Procs or Strings) fired after each Ruby-level assignment.
     pub(crate) gvar_traces: std::collections::HashMap<IdentId, Vec<Value>>,
     /// The fiber scheduler installed by `Fiber.set_scheduler` (monoruby
-    /// keeps one per process — fibers are M:1 on the main native thread).
+    /// keeps one per process).
     pub(crate) fiber_scheduler: Option<Value>,
     /// The exact Integer the next `srand` reports as the previous seed.
     pub(crate) random_seed_obj: Value,

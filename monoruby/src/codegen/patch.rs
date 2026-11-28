@@ -119,7 +119,7 @@ impl Codegen {
             Some(guard_free) => {
                 // SAFETY: heap-leaked `u64` published by an earlier
                 // `compile_patch`; valid for the process lifetime,
-                // single-threaded write (M:1 green threads).
+                // written only under the GVL.
                 unsafe { *(guard_free as *mut u64) = entry_addr };
             }
             None => {

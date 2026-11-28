@@ -1088,8 +1088,8 @@ unsafe fn child_exec(spec: &ExecSpec, fds: &mut ChildFds, ptrs: &mut ExecPtrs) -
                 libc::signal(sig, libc::SIG_DFL);
             }
         }
-        // ... and the signal mask: a non-main kernel thread of the 1:1
-        // model blocks the asynchronous signals
+        // ... and the signal mask: a non-main kernel thread blocks the
+        // asynchronous signals
         // (`native::block_async_signals`, so the kernel delivers them to
         // main), and the child would inherit a mask in which `SIGTERM`
         // stays pending forever (ruby/spec's `Process.kill` fixture

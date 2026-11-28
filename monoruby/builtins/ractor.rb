@@ -1,7 +1,7 @@
 # monoruby-hidden-ivars: true
 #
-# Ractor — a sequential-consistency emulation on top of monoruby's green
-# threads.
+# Ractor — a sequential-consistency emulation on top of monoruby's
+# threads (one at a time under the GVL).
 #
 # monoruby has no parallel execution and no object-isolation machinery;
 # every Ractor here is a Thread with an inbox (`#send` / `Ractor.receive`)
@@ -55,7 +55,7 @@ class Ractor
 
   class << self
     # Every Ractor other than the main one runs its block on its own
-    # (green) thread; the thread's value is the Ractor's value.
+    # thread; the thread's value is the Ractor's value.
     def new(*args, name: nil, &block)
       raise ArgumentError, "must be called with a block" unless block
       # CRuby warns while the main ractor is still the only one ever
