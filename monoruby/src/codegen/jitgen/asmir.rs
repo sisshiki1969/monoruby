@@ -1401,14 +1401,25 @@ impl AsmIr {
         state: &AbstractFrame,
         target: Option<RecompileTarget>,
     ) {
+        let deopt = self.bop_deopt_after(state, target);
+        self.push(AsmInst::CheckBOP { deopt });
+    }
+
+    /// The exit [`Self::check_bop_after`] takes, for a lowering that puts
+    /// the check on its own slow path (`AsmInst::ToA`). `state` is the
+    /// state after the instruction.
+    pub(super) fn bop_deopt_after(
+        &mut self,
+        state: &AbstractFrame,
+        target: Option<RecompileTarget>,
+    ) -> AsmDeopt {
         let pc = state.pc().next();
-        let deopt = match target {
+        match target {
             Some(target) if self.deopt_redirect.is_none() && self.deopt_recompile.is_none() => {
                 self.new_recompile_deopt_with_pc(state, pc, RecompileReason::BopRedefined, target)
             }
             _ => self.new_deopt_with_pc(state, pc),
-        };
-        self.push(AsmInst::CheckBOP { deopt });
+        }
     }
 
     pub(super) fn block_arg(
@@ -1449,9 +1460,16 @@ impl AsmIr {
         });
     }
 
-    pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId) {
+    /// `bop`: the result's slot and the exit to take, with the result
+    /// stored there, when the conversion ran Ruby that redefined a basic
+    /// operator (see [`Self::check_bop_after`]).
+    pub(super) fn to_a(&mut self, state: &AbstractFrame, src: SlotId, bop: (SlotId, AsmDeopt)) {
         let using_fpr = state.using_fpr_offset();
-        self.push(AsmInst::ToA { src, using_fpr });
+        self.push(AsmInst::ToA {
+            src,
+            using_fpr,
+            bop,
+        });
     }
 
     pub(super) fn concat_str(&mut self, state: &AbstractFrame, arg: SlotId, len: u16) {
@@ -1478,6 +1496,7 @@ impl AsmIr {
         dst: SlotId,
         len: u16,
         rest_pos: Option<u16>,
+        bop: AsmDeopt,
     ) {
         let using_fpr = state.using_fpr_offset();
         let len = len as _;
@@ -1487,6 +1506,7 @@ impl AsmIr {
             len,
             rest_pos,
             using_fpr,
+            bop,
         });
     }
 
@@ -3692,9 +3712,14 @@ pub(super) enum AsmInst {
         fid: FuncId,
         using_fpr: UsingFpr,
     },
+    /// rax <- `[src]` if it is an Array, else `runtime::to_a`. The call
+    /// (only) is followed by the basic-op check: `bop` is the result's
+    /// slot and the exit taken, with the result stored there, when the
+    /// Ruby it ran redefined a basic operator.
     ToA {
         src: SlotId,
         using_fpr: UsingFpr,
+        bop: (SlotId, AsmDeopt),
     },
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
     BlockCode {
@@ -4126,11 +4151,15 @@ pub(super) enum AsmInst {
         error: AsmError,
     },
 
+    /// The runtime call (only, not the inline fast path) is followed by
+    /// the basic-op check: `bop` is the exit taken when the `#to_ary` it
+    /// ran redefined a basic operator.
     ExpandArray {
         dst: SlotId,
         len: usize,
         rest_pos: Option<usize>,
         using_fpr: UsingFpr,
+        bop: AsmDeopt,
     },
     CreateArray {
         src: SlotId,

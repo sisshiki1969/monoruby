@@ -159,7 +159,10 @@ JIT がガード無しで基本演算を仮定するのは、整数・浮動小�
    出口は結果を書き戻して次の命令から VM で再開する。カウンタは無関係な
    再定義でも進むので、出口は数回で再コンパイルする
    （`RecompileReason::BopRedefined`）。依存していない本体は新しいカウンタで
-   作り直され、以後は抜けない。回帰テストは `tests/helper_bop_redefinition.rs`。
+   作り直され、以後は抜けない。splat と多重代入は Array をインラインで
+   扱う速い経路を持つので、比較はランタイム呼び出しの側にだけ置く
+   （`AsmInst::ToA` / `ExpandArray` の `bop`）。回帰テストは
+   `tests/helper_bop_redefinition.rs`。
 
 `fib(29)`（release、x86-64）で測ると、`fib` が使わない演算子
 （`Float#+`、`Integer#~` / `#|` / `#*`、`Array#[]`）を再定義しても実行時間は

@@ -1132,11 +1132,17 @@ impl<'a> JitContext<'a> {
                 state.flush_gp(ir);
                 let error = ir.new_error(state);
                 state.write_back(ir, src, Keep::All);
-                ir.to_a(state, src);
+                // Ruby runs only off the Array fast path, so the basic-op
+                // check (`check_bop_after_helper`) is on that path alone;
+                // its exit sees the result stored in `dst`.
+                let mut after = state.clone();
+                after.def_S(dst);
+                after.unset_side_effect_guard();
+                let deopt = ir.bop_deopt_after(&after, self.recv_miss_recompile_target());
+                ir.to_a(state, src, (dst, deopt));
                 ir.handle_error(error);
                 state.def_rax2acc(ir, dst);
                 state.unset_side_effect_guard();
-                self.check_bop_after_helper(state, ir);
             }
             TraceIr::BlockCode { dst, src } => {
                 // Only a Symbol becomes something else
@@ -1238,9 +1244,12 @@ impl<'a> JitContext<'a> {
                 for reg in dst.0..dst.0 + len {
                     state.def_S(SlotId(reg));
                 }
-                ir.expand_array(state, dst, len, rest_pos);
+                // `#to_ary` runs only off the Array fast path, so the
+                // basic-op check (`check_bop_after_helper`) is on that
+                // path alone.
+                let bop = ir.bop_deopt_after(state, self.recv_miss_recompile_target());
+                ir.expand_array(state, dst, len, rest_pos, bop);
                 ir.handle_error(error);
-                self.check_bop_after_helper(state, ir);
             }
             TraceIr::UndefMethod { undef } => {
                 state.flush_gp(ir);
