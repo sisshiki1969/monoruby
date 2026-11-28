@@ -304,9 +304,6 @@ impl Codegen {
             AsmInst::LoadCallerSlot { base, slot } => {
                 self.emit_load_caller_slot(base, slot);
             }
-            AsmInst::StoreCallerSlot { base, slot, src } => {
-                self.emit_store_caller_slot(base, slot, src);
-            }
             AsmInst::NewHash(args, len, using_fpr) => {
                 self.emit_new_hash(args, len, using_fpr);
             }
@@ -1650,16 +1647,6 @@ impl Codegen {
                     },
                 );
             }
-            AsmInst::ElidedArrayIndex { base, src, len } => {
-                self.lower_via_inline(
-                    store,
-                    labels,
-                    frame.base_stack_offset,
-                    move |cg, _, _, _| {
-                        cg.gen_elided_array_index(base, src, len);
-                    },
-                );
-            }
             AsmInst::ArrayIndexAssign {
                 kind,
                 using_fpr,
@@ -1846,9 +1833,9 @@ impl Codegen {
             // `**kwrest` fixup: call `correct_rest_kw(&table, lfp)`, which
             // answers the Hash. The (name, slot) table was laid down before
             // this unit's code (`Codegen::resolve_rest_kw_tables`).
-            AsmInst::RestKw { table, base, .. } => {
+            AsmInst::RestKw { table, .. } => {
                 let table = table.expect("kwrest table laid down before codegen");
-                self.emit_rest_kw(table, base);
+                self.emit_rest_kw(table);
             }
             // Not a shared instruction: hand off to the per-arch backend.
             other => {

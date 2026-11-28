@@ -2296,7 +2296,6 @@ impl<'a> BytecodeGen<'a> {
             self.push_nil()
         };
         self.temp = old;
-        self.note_local_scratch(ret, 2);
         self.emit(
             BytecodeInst::Range {
                 ret,

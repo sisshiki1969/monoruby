@@ -1,6 +1,6 @@
 //!
 //! Def-use and liveness tables for the slots of one iseq, in two layers
-//! (`doc/escape_analysis.md` §11).
+//! (`doc/escape_analysis.md` §9).
 //!
 //! **Layer A — [`SlotAnalysis`]**: what the bytecode alone decides. The
 //! slots each instruction reads and the one it defines, the basic blocks'
@@ -28,7 +28,7 @@
 //! ([`SlotAnalysis::frame_live_out`]): liveness as the interpreter sees
 //! it, where every instruction that may send a message reads every local
 //! (`TraceIr::may_dispatch`). It is what decides when an elided object
-//! held by a local may be dropped (`doc/escape_analysis.md` §12), and it
+//! held by a local may be dropped (`doc/escape_analysis.md` §10), and it
 //! depends on no inline cache, since the interpreter a side exit resumes
 //! in honours none of the compilation's.
 //!
@@ -484,7 +484,7 @@ impl SlotAnalysis {
     ///
     /// The frame liveness: per basic block, the slots live at its exit
     /// when every instruction that may send a message reads every local
-    /// (`doc/escape_analysis.md` §12). This is the interpreter's view of
+    /// (`doc/escape_analysis.md` §10). This is the interpreter's view of
     /// the frame: a call the compilation resolved to a callee that
     /// captures nothing is, after a side exit, a call that may reach
     /// `binding` or `eval`.
@@ -497,17 +497,6 @@ impl SlotAnalysis {
             });
             Self::dataflow(bb_info, &bb_use, &self.bb_def)
         })
-    }
-
-    /// Whether a basic block in `start..=end` writes *slot* (a plain
-    /// definition, `InstSummary::def`).
-    pub(crate) fn defined_in_blocks(
-        &self,
-        start: BasicBlockId,
-        end: BasicBlockId,
-        slot: SlotId,
-    ) -> bool {
-        (start..=end).any(|b| self.bb_def.contains(b.index(), slot))
     }
 
     ///
@@ -550,18 +539,6 @@ pub(crate) struct UnitLiveness {
     /// `live_out` with every capture point counted as a read of every
     /// local (`JitContext::table_observable_after`), built on first use.
     observable_out: std::cell::OnceCell<SlotSets>,
-}
-
-impl UnitLiveness {
-    /// Whether `begin..=end` holds a capture point. Either kind may
-    /// observe the object any local holds: a callee handed a block can
-    /// keep it and ask for its binding, which is the whole frame
-    /// (`doc/escape_analysis.md` §12).
-    pub(crate) fn captured_in(&self, begin: BcIndex, end: BcIndex) -> bool {
-        self.captures[begin.to_usize()..=end.to_usize()]
-            .iter()
-            .any(|c| c.is_some())
-    }
 }
 
 impl<'a> JitContext<'a> {
@@ -690,8 +667,8 @@ impl<'a> JitContext<'a> {
     /// the instruction at *bc_pos* as the interpreter sees the frame
     /// ([`SlotAnalysis::frame_live_out`]): by an instruction that reads
     /// it, or by any instruction that may send a message, before it is
-    /// written again. An elided object a local holds lives this long
-    /// (`doc/escape_analysis.md` §12): until then a side exit may hand
+    /// written again. An elided object a parameter holds lives this long
+    /// (`doc/escape_analysis.md` §10): until then a side exit may hand
     /// the frame to the interpreter, where the next call can be
     /// `binding`.
     ///

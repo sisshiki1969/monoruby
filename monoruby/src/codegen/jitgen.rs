@@ -273,25 +273,14 @@ pub(crate) enum VirtualSrc {
     /// An Array whose `len` elements are in the *caller's* frame, at the
     /// caller's slots `src .. src + len`, reached through `base`: the rest
     /// `Array` a specialized callee's `*rest` parameter would hold, or an
-    /// elided literal the caller passed as an argument. With `base` this
-    /// frame (`SlotBase::Own`), an Array a specialized callee returned
-    /// elided, whose elements its return segments copied into this frame's
-    /// slots (`doc/escape_analysis.md` §7).
+    /// elided literal the caller passed as an argument
+    /// (`doc/escape_analysis.md` §6). `base` is never `SlotBase::Own`.
     ///
     CallerSlots {
         src: SlotId,
         len: u16,
         base: SlotBase,
     },
-    ///
-    /// The `**kwrest` Hash a specialized callee's parameter would hold: the
-    /// literal keywords of the caller's call site `callid` that the callee
-    /// declares no parameter for, whose values are still in the caller's
-    /// kw window, reached through `base`. The names and slots are the
-    /// frame's `AbstractFrame::caller_kw` table; a side exit rebuilds the
-    /// Hash as a `WriteBack::forward_kwrest` entry.
-    ///
-    CallerKw { callid: CallSiteId, base: SlotBase },
     ///
     /// The Range `start..end` / `start...end` of a `TraceIr::Range` whose
     /// endpoints were proven Fixnum or `nil` when it was compiled (so
@@ -329,19 +318,12 @@ impl RangeEnd {
 
 impl VirtualSrc {
     /// Every slot of *this* frame the object's materialization reads: an
-    /// Array literal's element slots (or those of an Array returned elided
-    /// into this frame, `CallerSlots` over this frame), an elided Range's
-    /// endpoint slots.
+    /// Array literal's element slots, an elided Range's endpoint slots.
     pub(crate) fn own_slots(&self) -> impl Iterator<Item = SlotId> + '_ {
         let (range, ends) = match self {
-            VirtualSrc::Slots { src, len, .. }
-            | VirtualSrc::CallerSlots {
-                src,
-                len,
-                base: SlotBase::Own,
-            } => (src.0..src.0 + len, [None, None]),
+            VirtualSrc::Slots { src, len, .. } => (src.0..src.0 + len, [None, None]),
             VirtualSrc::Range { start, end, .. } => (0..0, [start.slot(), end.slot()]),
-            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } | VirtualSrc::CallerKw { .. } => {
+            VirtualSrc::Literal(_) | VirtualSrc::CallerSlots { .. } => {
                 (0..0, [None, None])
             }
         };
@@ -357,7 +339,6 @@ impl VirtualSrc {
     pub(crate) fn class_id(&self) -> ClassId {
         match self {
             VirtualSrc::Slots { .. } | VirtualSrc::CallerSlots { .. } => ARRAY_CLASS,
-            VirtualSrc::CallerKw { .. } => HASH_CLASS,
             VirtualSrc::Range { .. } => RANGE_CLASS,
             VirtualSrc::Literal(v) => v.class(),
         }
@@ -1959,9 +1940,6 @@ impl JitModule {
                     call rax;
                 }
             }
-            VirtualSrc::CallerKw { .. } => {
-                unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
-            }
             VirtualSrc::Range {
                 start,
                 end,
@@ -2107,9 +2085,7 @@ impl JitModule {
         // `Array` or an elided literal with elements in the frame's *own*
         // caller (`VirtualSrc::CallerSlots`, reached through the bp it
         // saved — `[rsi]`, matching `caller_slot_addr`'s `[rbp]`), a
-        // literal template (`VirtualSrc::Literal`), or one a local holds
-        // with its elements in the frame's own scratch slots (`Slots`,
-        // `Range`; reached through `rdx`, the frame's lfp — §10).
+        // literal template (`VirtualSrc::Literal`).
         for (dst, src) in wb.virtual_obj_entries() {
             monoasm! { &mut *self,
                 pushq rdi;
@@ -2145,45 +2121,9 @@ impl JitModule {
                         call  rax;
                     }
                 }
-                // An object a local holds (`doc/escape_analysis.md` §10):
-                // its elements, or its Range's endpoints, are in the
-                // frame's own scratch slots, reached through its lfp.
-                VirtualSrc::Slots { src, len, .. } => {
-                    monoasm! { &mut *self,
-                        lea   rdi, [rdx - (conv(src))];
-                        movq  rsi, (len as usize);
-                        movq  rax, (runtime::create_array);
-                        call  rax;
-                    }
-                }
-                VirtualSrc::Range {
-                    start,
-                    end,
-                    exclude_end,
-                } => {
-                    for (reg, end) in [(GP::Rdi, start), (GP::Rsi, end)] {
-                        match end {
-                            RangeEnd::Const(v) => {
-                                monoasm! { &mut *self,
-                                    movq R(reg as _), (v.id());
-                                }
-                            }
-                            RangeEnd::Slot(slot) => {
-                                monoasm! { &mut *self,
-                                    movq R(reg as _), [rdx - (conv(slot))];
-                                }
-                            }
-                        }
-                    }
-                    monoasm! { &mut *self,
-                        movl  rdx, (exclude_end as u32);
-                        movq  rax, (runtime::create_range);
-                        call  rax;
-                    }
-                }
-                VirtualSrc::CallerKw { .. } => {
-                    unreachable!("a handed-over kwrest is written back as `forward_kwrest`")
-                }
+                // A temporary's object never lives across a call, and a
+                // Range is never handed over.
+                VirtualSrc::Slots { .. } | VirtualSrc::Range { .. } => unreachable!(),
             }
             monoasm! { &mut *self,
                 popq  rdx;

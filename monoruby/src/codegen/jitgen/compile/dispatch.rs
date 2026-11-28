@@ -72,9 +72,6 @@ pub(super) struct DispatchMerge {
     /// The conditional branch consuming the dispatch's `dst`, emitted at the
     /// end of every arm (see the module docs).
     sink: Option<CondBrSink>,
-    /// The dispatch's destination, which the merge takes as a value in its
-    /// slot.
-    dst: Option<SlotId>,
 }
 
 impl<'a> JitContext<'a> {
@@ -106,14 +103,14 @@ impl<'a> JitContext<'a> {
         // as at a block's last instruction. A local's object nothing can
         // observe after the branch is performed as well: the dispatch is
         // still to run, and a receiver that misses every arm sends a
-        // message the interpreter resolves (`doc/escape_analysis.md` §12).
+        // message the interpreter resolves (`doc/escape_analysis.md` §10).
         for slot in operands {
             if state.virtual_at(*slot).is_some() {
                 self.materialize_virtual(state, ir, *slot);
             }
         }
         if let Some(sink) = sink {
-            self.settle_virtuals_before_branch(state, ir, sink.pos, false, &[], DeadLocal::Build);
+            self.settle_virtuals_before_branch(state, ir, sink.pos, &[], DeadLocal::Build);
         }
         state.write_back_slots(ir, operands);
         state.flush_gp(ir);
@@ -144,7 +141,6 @@ impl<'a> JitContext<'a> {
                 merge,
                 pc,
                 sink,
-                dst,
             },
         )
     }
@@ -167,14 +163,6 @@ impl<'a> JitContext<'a> {
         m: &DispatchMerge,
         jump: bool,
     ) {
-        // An object a specialized callee handed back elided
-        // (`doc/escape_analysis.md` §9) is allocated here: the merge takes
-        // the destination as a value, and a sunk branch reads it.
-        if let Some(dst) = m.dst
-            && arm.virtual_at(dst).is_some()
-        {
-            self.materialize_virtual(&mut arm, ir, dst);
-        }
         // The GP-pool residency is a layer *below* the link modes, and
         // the bridge does not see it: a slot both states call `S` bridges to
         // nothing even when this arm's only copy of its value is parked in a

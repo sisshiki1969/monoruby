@@ -23,21 +23,11 @@ impl<'a> JitContext<'a> {
                 #[cfg(feature = "jit-debug")]
                 eprintln!("    {mode:?} src:{src_bb:?}");
 
-                // The back edge keeps the elided objects the head carries
-                // (`doc/escape_analysis.md` §3) and materializes the rest:
-                // one the fixpoint found the body materializing was
-                // materialized on the forward entries instead
-                // (`incoming_context`), so the head does not carry it.
+                // No elided object crosses a block boundary
+                // (`settle_entries`): a stray one is built here.
                 let mut ir = AsmIr::new(self);
-                let head_virtuals = target.last().unwrap().virtuals().to_vec();
-                debug_assert!(
-                    head_virtuals.iter().all(|v| state.virtuals().contains(v)),
-                    "the back edge lacks an elided object the loop head carries: {:?} / {:?}",
-                    head_virtuals,
-                    state.virtuals()
-                );
                 let src_pin = state.gp_regfile.pin();
-                self.materialize_except(&mut state, &mut ir, &head_virtuals);
+                self.materialize_all(&mut state, &mut ir);
                 state.gen_bridge_all(&mut ir, &target, pc, &self.chain_surrender_table());
                 AbstractFrame::bridge_pin(src_pin, &mut ir, target.last().unwrap());
                 match mode {
@@ -87,13 +77,9 @@ impl<'a> JitContext<'a> {
         let iseq = self.iseq();
         let pc = iseq.get_bb_pc(bbid);
         let loop_head = iseq.bb_info.is_loop_begin(bbid);
-        // The elided objects the entries carry (`doc/escape_analysis.md`
-        // §3): kept where every entry brings the same one (and, at a loop
-        // head with a recorded back edge, the back edge too), materialized
-        // on the other entries' bridges.
-        let recorded =
-            loop_head.and_then(|_| self.loop_backedge(bbid).map(|be| be.virtuals().to_vec()));
-        let mut pre_bridges = self.settle_entries(&mut entries, recorded.as_deref());
+        // No elided object crosses a block boundary but into a method's
+        // first block (`settle_entries`).
+        let pre_bridges = self.settle_entries(bbid, &mut entries);
 
         let res = if let Some((loop_start, loop_end)) = loop_head {
             #[cfg(feature = "jit-debug")]
@@ -104,36 +90,9 @@ impl<'a> JitContext<'a> {
             // back-edge, and `use_float` tolerates a `G` loop-carried slot), so a
             // value the loop carries stays in its pool register across the
             // back-edge instead of round-tripping its stack home each iteration.
-            let mut incoming = AbstractState::join_entries(&entries);
-            // A back edge recorded for a head that carried an elided
-            // object the entries no longer bring (issue #1914): settled
-            // before anything joins with it, the fixpoint's first walk
-            // included.
-            self.settle_recorded_backedge(bbid, incoming.virtuals());
+            let incoming = AbstractState::join_entries(&entries);
             if !no_calc_backedge {
                 self.analyse_loop_head(&incoming, &entries, bbid, loop_start, loop_end)?;
-            }
-            // An elided object the entries carry but the fixpoint's back
-            // edge does not: the body materializes it (a read the compiler
-            // cannot fold), and the walks after the first analysed the
-            // body from a head with it materialized (`analyse_loop`). The
-            // entries materialize it, once, instead.
-            if let Some(be) = self.loop_backedge(bbid)
-                && !incoming
-                    .virtuals()
-                    .iter()
-                    .all(|v| be.virtuals().contains(v))
-            {
-                let keep: Vec<_> = incoming
-                    .virtuals()
-                    .iter()
-                    .filter(|v| be.virtuals().contains(v))
-                    .copied()
-                    .collect();
-                for (entry, ir) in entries.iter_mut().zip(pre_bridges.iter_mut()) {
-                    self.materialize_except(&mut entry.state, ir, &keep);
-                }
-                incoming = AbstractState::join_entries(&entries);
             }
             let target_incoming = incoming.clone();
 
@@ -163,22 +122,6 @@ impl<'a> JitContext<'a> {
             if let Some((liveness, backedge)) = self.loop_info(bbid) {
                 let backedge_for_floats = backedge.as_ref().map(|b| b.slot_state().clone());
                 if let Some(backedge) = backedge {
-                    // The body creates no object in a local the head
-                    // carries one in (creating is defining, and
-                    // `loop_keeps_virtual` carries only a local the loop
-                    // never defines), so the back edge brings nothing the
-                    // head lacks; one recorded from an earlier head that
-                    // carried more was settled above
-                    // (`settle_recorded_backedge`).
-                    debug_assert!(
-                        backedge
-                            .virtuals()
-                            .iter()
-                            .all(|v| target.virtuals().contains(v)),
-                        "the back edge carries an elided object the loop head lacks: {:?} / {:?}",
-                        target.virtuals(),
-                        backedge.virtuals()
-                    );
                     target.join(backedge);
                     // Loop-entry hoisting of the class-version guard. The
                     // fixpoint analysed the body from a head without the
@@ -447,8 +390,8 @@ impl<'a> JitContext<'a> {
         &mut self,
         target: &AbstractState,
         entries: BranchEntries,
-        // Per entry, the materialization of the elided objects the merge
-        // does not carry (`settle_entries`), which the bridge starts with.
+        // Per entry, the materialization of any elided object it brings
+        // (`settle_entries`), which the bridge starts with.
         pre_bridges: PreBridges,
         bbid: BasicBlockId,
         pc: BytecodePtr,

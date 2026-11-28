@@ -1,15 +1,14 @@
-# Escape analysis: eliding Array, Hash and Range literals, `*rest` and `**kwrest`
+# Escape analysis: eliding Array and Range literals and `*rest`
 
 `[a, b].max`, `[:get, :head].include?(verb)`, `[x, y].first`,
-`{a: 1, b: 2}[k]`, `(lo..hi).include?(v)`, `case v when 1..5`: an Array,
-Hash or Range literal that is built only to be the receiver of one call,
-and is dead right after it. The JIT does not
-allocate such a literal when it is compiled. It records it in the abstract
-state as an **elided object** and decides at its use whether the object is
-needed at all. The same object can be handed, still elided, into a
-specialized callee's parameter — as the literal argument of `size([a, b])`,
-as the `*rest` parameter the callee binds `f(a, b)` into (§6), or as the
-`**opts` parameter the callee binds `f(x: 1, y: 2)` into (§7).
+`(lo..hi).include?(v)`, `case v when 1..5`: an Array or Range literal
+that is built only to be the receiver of one call, and is dead right
+after it. The JIT does not allocate such a literal when it is compiled.
+It records it in the abstract state as an **elided object** and decides
+at its use whether the object is needed at all. The same object can be
+handed, still elided, into a specialized callee's parameter — as the
+literal argument of `size([a, b])`, or as the `*rest` parameter the
+callee binds `f(a, b)` into (§6).
 
 This replaced `try_fuse_array_minmax`, a peephole that recognized exactly
 `array` + `min`/`max` on the next instruction. The pattern-specific part is
@@ -20,11 +19,23 @@ Source: `codegen/jitgen/compile/escape.rs`; the state half in
 `state/slot.rs` (`SlotState::virtuals`, `LinkMode::from_caller`) and
 `state.rs`; the side-exit half in `WriteBack::virtual_obj`
 (`codegen/jitgen.rs`, and `a64_gen_virtual_materialize` on aarch64); the
-summaries in `builtins/array.rs`, `builtins/hash.rs` and
-`builtins/range.rs` (`init_recv_escape`, `init_recv_escape_ruby`) and
-`executor/inline.rs` (`RecvEscape`, `ElementsOp`); the Range runtime
-helpers in `codegen/runtime.rs` (`create_range`, `range_cover`,
-`range_fold`).
+summaries in `builtins/array.rs` and `builtins/range.rs`
+(`init_recv_escape`, `init_recv_escape_ruby`) and `executor/inline.rs`
+(`RecvEscape`, `ElementsOp`); the Range runtime helpers in
+`codegen/runtime.rs` (`create_range`, `range_cover`, `range_fold`).
+
+**The scope is deliberately narrow.** Until 2026-11 the analysis also
+kept objects in local variables (with a per-local scratch window
+reserved by the bytecode compiler), carried them through forward merges
+and loop heads, handed a returned object back to the caller's slots,
+folded `x[i]` on an elided Array, folded lookups on Hash literals and
+elided `**kwrest` parameters. Measured with each stage switched off, none
+of them moved any of the 22 ruby-bench benchmarks (cachegrind
+instruction counts), while together they were about 1,700 lines across
+the bytecode compiler, the merge / loop machinery and both backends, so
+they were removed. What is left is the part that pays: a literal
+consumed where it is built, `*rest` and `...` handed into callees, and
+Range literals.
 
 ## 1. The elided object
 
@@ -33,10 +44,9 @@ Three instructions and a method entry can produce one:
 | Where | `VirtualSrc` | Condition |
 |---|---|---|
 | `%d = array[%s..%s+n]` | `Slots { src, len, callid }` | no splat; `%d` and the elements are temporaries, the elements dead once the literal is built (at or above the stack top) |
-| `%d = literal[...]` | `Literal(template)` | the template is a plain `Array` whose elements are all immediates, a plain `Hash` whose keys and values are all immediates, or a `Range` whose endpoints are immediates |
-| `%d = %s..%e` / `%s...%e` | `Range { start, end, exclude_end }` | `%d` is a temporary; each endpoint is a compile-time Fixnum or `nil` (`RangeEnd::Const`) or a slot proven to hold a Fixnum (`RangeEnd::Slot`), so building the Range later can neither dispatch `<=>` nor fail (§8) |
+| `%d = literal[...]` | `Literal(template)` | `%d` is a temporary; the template is a plain `Array` whose elements are all immediates, or a `Range` whose endpoints are immediates |
+| `%d = %s..%e` / `%s...%e` | `Range { start, end, exclude_end }` | `%d` is a temporary; each endpoint is a compile-time Fixnum or `nil` (`RangeEnd::Const`) or a slot proven to hold a Fixnum (`RangeEnd::Slot`), so building the Range later can neither dispatch `<=>` nor fail (§7) |
 | a specialized callee's parameter | `CallerSlots { src, len, base }`, or the caller's `Literal` | the caller handed the object over (§6) |
-| a specialized callee's `**kwrest` parameter | `CallerKw { callid, base }` | the caller handed its leftover keyword arguments over (§7) |
 
 The slot `%d` becomes `LinkMode::V` and the object lives only in
 `SlotState::virtuals`. A `Slots` object's element slots, and a `Range`
@@ -51,25 +61,24 @@ The object ends in one of four ways.
 - **Handed over** to a specialized callee as a parameter (§6), where it
   ends in one of these ways again.
 - **Dropped**: its slot is overwritten, or falls above the stack top, without
-  being read; or it is a parameter nothing reads any more. Nothing ever saw
-  it.
+  being read; or it is a parameter nothing reads any more; or it is the
+  discarded result of a specialized callee (§8). Nothing ever saw it.
 - **Materialized**: allocated after all, by exactly the code the literal
   would have run (`NewArray` / `DeepCopyLit`, `CreateArrayFrom` over the
-  caller's window, `RestKw` over the caller's keyword slots, or
-  `CreateRange` from the endpoints), at the point where something could
-  first observe it.
+  caller's window, or `CreateRange` from the endpoints), at the point
+  where something could first observe it.
 
 ## 2. Consuming uses
 
 A use that may consume the object is a method call with it as the
 receiver, and nowhere else in the call's operands
-(`may_consume_virtual`); for a Hash or an Array also the `%d = %base[%idx]`
-index instruction (`consume_virtual_index`), which is `Hash#[]` / `Array#[]`
-resolved the same way; for a Range also the `===` comparison with it on the left
+(`may_consume_virtual`); for a `Literal` also the `%d = %base[%idx]`
+index instruction (`consume_virtual_index`), which is `Array#[]` resolved
+the same way; for a Range also the `===` comparison with it on the left
 (`consume_virtual_teq`: the `case … when lo..hi` opcode and the explicit
-`(lo..hi) === v`), which is `Range#===` resolved the same way. The call resolves the method on the object's class
-(`VirtualSrc::class_id`) under the class-version guard and reads the
-callee's `RecvEscape`:
+`(lo..hi) === v`), which is `Range#===` resolved the same way. The call
+resolves the method on the object's class (`VirtualSrc::class_id`) under
+the class-version guard and reads the callee's `RecvEscape`:
 
 - `elements: Some(op)` — an allocation-free lowering over the object's
   elements, for a `Slots` or `CallerSlots` object and an argument-less,
@@ -80,39 +89,22 @@ callee's `RecvEscape`:
   (`[a, b].max`, CRuby's `opt_newarray_send`; `CallSiteInfo::newarray_recv`,
   `MinMaxOp`) — which is the operand a failed comparison names (#2007);
   `Size`, `Empty` are answered at compile time; `First`, `Last` are a copy
-  of one element slot (`LoadCallerSlot` for a handed-over object);
-  `ArrayIndex` (`%d = %base[%idx]`) is that same copy for a compile-time
-  Integer index (counting from the end when negative, `nil` out of
-  range), and for any other index proven or cached Fixnum an in-place
-  read of the element slots with the bounds check (`ElidedArrayIndex`;
-  the Fixnum guard deopts with the object still registered). A Range or
-  non-Integer index materializes. The object stays elided afterwards
-  (the read observes an element, not the Array), which is what lets a
-  loop body read a local's Array by index without building it (§10). Over
-  the pairs of an elided Hash (a template's, or a `CallerKw` object's
-  names and caller slots), `Size` / `Empty` are constants, and
-  `HashIndex` (`[]`), `HashFetch` (`fetch`) and `HashHasKey` (`include?`
-  and its aliases) are folded when the key is a compile-time packed
-  immediate — a symbol or a fixnum, for which `eql?` is bit equality and
-  no `hash` is dispatched — and, for `[]` / `fetch` with one argument,
-  present (a miss would dispatch `default` or raise). `fetch(k, d)` on a
-  miss is `d`'s own slot. A found value is the template's constant or a
-  `LoadCallerSlot` of the caller's keyword slot (`plan_hash_op`,
-  `emit_hash_fold`). Over the endpoints of an elided Range (`Const` or
-  `Slot`), `RangeCover` (`include?`, `member?`, `cover?`, `===`) is two
-  tagged compares inline for a Fixnum argument — the tag bit is the same
-  on both sides, so Fixnums order as tagged words, and a `nil` endpoint
-  bounds nothing — with `runtime::range_cover` behind it for any other
-  argument; `RangeSize`, `RangeCount`, `RangeSum`, `Min`, `Max`, `First`,
-  `Last` are folded at compile time for constant endpoints
-  (`runtime::range_fold`) and go through a helper otherwise; `RangeBegin`,
-  `RangeEndpoint`, `RangeExcludeEnd` are the endpoint itself
-  (`plan_range_op`, `emit_range_plan`). Where the in-place answer does
-  not apply — a non-numeric argument, a `nil` endpoint the method rejects,
-  a redefined `Integer#<=>` — the helper builds the Range and dispatches
-  the resolved method on it, exactly the call that would have been made.
-  A parameter stays elided after such a use if it is still live (the next
-  `args.size` or `opts[:y]` is free too); a temporary is done.
+  of one element slot (`LoadCallerSlot` for a handed-over object). Over
+  the endpoints of an elided Range (`Const` or `Slot`), `RangeCover`
+  (`include?`, `member?`, `cover?`, `===`) is two tagged compares inline
+  for a Fixnum argument — the tag bit is the same on both sides, so
+  Fixnums order as tagged words, and a `nil` endpoint bounds nothing —
+  with `runtime::range_cover` behind it for any other argument;
+  `RangeSize`, `RangeCount`, `RangeSum`, `Min`, `Max`, `First`, `Last`
+  are folded at compile time for constant endpoints
+  (`runtime::range_fold`) and go through a helper otherwise;
+  `RangeBegin`, `RangeEndpoint`, `RangeExcludeEnd` are the endpoint
+  itself (`plan_range_op`, `emit_range_plan`). Where the in-place answer
+  does not apply — a non-numeric argument, a `nil` endpoint the method
+  rejects, a redefined `Integer#<=>` — the helper builds the Range and
+  dispatches the resolved method on it, exactly the call that would have
+  been made. A parameter stays elided after such a use if it is still
+  live (the next `args.size` is free too); a temporary is done.
   None of these applies when a positional argument of the call is itself
   an elided object (`(1..10).cover?(1..5)`, `Range#cover?` being a Ruby
   method that takes it, §6): each object is judged on its own
@@ -128,6 +120,7 @@ callee's `RecvEscape`:
   to the template (`LinkMode::C`). Arguments and a block literal are fine:
   only the receiver's identity is at stake. The receiver slot must be dead
   after the call, so the template never becomes visible to later code.
+  `Array#[]` is one of these, so `[:a, :b, :c][i]` indexes the template.
 
 Anything else materializes the object and compiles the call as before.
 
@@ -145,6 +138,21 @@ stays registered until the block's arguments are filled: a frameless
 block's redo exit hands the original yield back to the interpreter, which
 reads the Array from its slot, so that exit materializes it.
 
+So is a multiple assignment from the object (`consume_virtual_expand`):
+`a, b = [x, y]` expands it straight into its targets — a template's
+constants, copies of the element slots, `nil` past the end — with the
+object gone afterwards. The targets are the temporaries right above the
+object, overlapping the element slots, so the copies run far end first
+(a `memmove`) when the targets lie above the elements.
+
+A `Mov` from a parameter's object into a temporary (`args.include?(a + 1)`
+evaluates its receiver into a temporary before the argument) moves the
+object when the parameter is dead afterwards, and otherwise gives the
+temporary a second view of it when the first reader of the temporary is
+a call that only reads its receiver's elements (`alias_consumed_by_call`;
+`consume_virtual_mov`). The two views are never told apart: such a
+method neither mutates nor lets out its receiver.
+
 The class-version guard is emitted while the object is still registered,
 so a redefinition (`class Array; def max = self; end`) deopts with the
 object materialized and the interpreter calls the new method on a fresh
@@ -154,18 +162,12 @@ Adding a consumer is a summary entry. An entry is a promise about every
 argument form of the method; `take` qualifies (`take(n)` larger than the
 size returns a `dup`), `each` does not (it returns `self`), `index` does
 not (blockless, argument-less it returns an Enumerator over `self`). The
-Hash table is in two halves: the builtins in `builtins/hash.rs`
-(`init_recv_escape`, with `[]`, `fetch`, `include?`, `size`, `empty?` as
-elements lowerings and `keys`, `values`, `merge`, `==`, `inspect`, … as
-transparent) and the methods `builtins/hash.rb` defines in Ruby (`dig`,
-`slice`, `except`, `any?`, `count`, …), registered after that file is
-loaded (`init_recv_escape_ruby`, from `Executor::new`). The Range table
-(`builtins/range.rs`, `init_recv_escape_ruby`) is registered the same way,
-on the resolved methods, since `builtins/range.rb` defines most of them
-(`===`, `include?`, `cover?`, `size`, `sum`, `min`, `max`, …) over the
-builtins; a Range is immutable, so every method of its own that returns
-neither `self` nor an object holding it (`each`, `step`, `%` do) is
-transparent.
+Range table (`builtins/range.rs`, `init_recv_escape_ruby`) is registered
+on the resolved methods after `builtins/range.rb` is loaded (from
+`Executor::new`), since that file defines most of them (`===`,
+`include?`, `cover?`, `size`, `sum`, `min`, `max`, …) over the builtins;
+a Range is immutable, so every method of its own that returns neither
+`self` nor an object holding it (`each`, `step`, `%` do) is transparent.
 
 ## 3. When an object is materialized
 
@@ -177,15 +179,25 @@ by the instruction is
   - the instruction reads it (a `Mov`, an argument, a `ret`, an index base);
   - the instruction could overwrite an element slot (its stack top reaches
     the elements: bytecode temporaries are only written by pushes), or
-    writes a local that is an elided Range's endpoint (`written_slot`);
-  - the instruction ends the basic block (a parameter's object may be
-    carried into a forward merge instead, below);
-  - the instruction can run Ruby code or reach a call — only `Mov`,
-    `Literal`, `FrozenLiteral`, `Array` and the `InlineCache` word are
-    survivable (`virtual_survives`).
+    writes a local that is an elided Range's endpoint;
+  - the instruction ends the basic block;
+  - the object is in a temporary and the instruction can run Ruby code
+    or reach a call — only `Mov`, `Literal`, `FrozenLiteral`, `Array`,
+    the `InlineCache` word and instructions writing nothing but a plain
+    destination are survivable (`virtual_survives`, `defined_slot`).
 
 `settle_virtuals_at_bb_end` does the same after an instruction that ends
 its block by falling through.
+
+**No object crosses a block boundary.** Every block ends with its live
+objects materialized and its dead ones dropped, so a branch entry never
+carries one and joins, loop heads and branch bridges reconcile nothing.
+The one entry that does bring objects is a method's start, into its
+first block, with the parameters its caller handed over (§6);
+`settle_entries` keeps those, and a method whose first block is a loop
+head is handed nothing (`caller_slots_ok`). At any other merge
+`settle_entries` materializes whatever an entry still holds, on that
+entry's bridge, as a safety net; it finds nothing there in practice.
 
 An intra-block dispatch (a class dispatch, a polymorphic call, a generic
 binary operator: `declare_merge`) is a merge of its own, and its arms may
@@ -193,10 +205,7 @@ emit the `CondBr` that follows it (`CondBrSink`), which makes the
 instruction the block's last. So `declare_merge` materializes an elided
 object among the operands (no arm takes one over), and, under a sink,
 settles every live object of the frame as the block's end would
-(`settle_virtuals_before_branch`): a parameter's object would otherwise
-reach the branch target through an arm's side-branch state while the
-fall-through materializes it, and the join of the two would not keep
-both.
+(`settle_virtuals_before_branch`).
 
 A producer lowered with a `CondBr` as its sink without a dispatch — a
 fused comparison, a predicate call — may leave its answer in the
@@ -206,97 +215,24 @@ allocation call that clobbers them (issue #1837: `[[1], c ? [7] : [6]]`
 branched on whatever the allocator left), so it is done before the
 producer instead (`settle_virtuals_for_sink`): every object the
 producer does not read is dropped if dead after the branch and
-materialized unless a merge carries it, and the `CondBr` finds only
-carried objects, for which it emits nothing. `materialize_virtual`
-asserts (debug) that no condition is pending.
+materialized otherwise. `materialize_virtual` asserts (debug) that no
+condition is pending.
 
 A parameter holding a handed-over object (§6) follows the same rules but
-two: it survives its frame's calls, and it survives a forward block
-boundary. Its elements are in the caller's frame (or are a template),
-which no callee can reach, and the callee gate guarantees that nothing in
-the body can observe the parameter slot behind the compiler's back. It is
-dropped once nothing can read it any more (`local_live_after`: the rest
-of its block and every block reachable from there).
-
-**Merges.** A block whose successors are all forward merges — none is a
-loop head, and the block is not a dispatch arm (`merge_carries_virtual`)
-— leaves a live parameter's object elided in the state its branch entry
-carries. When the merge is compiled (`incoming_context`), the entries are
-reconciled first (`settle_entries`): an object every entry brings
-identically (same slot, same `VirtualSrc`) stays elided through the
-join, and any other is materialized on its entry's bridge, in a per-entry
-`AsmIr` the bridge is prepended with (`gen_bridges_for_branches`). The
-join itself then only ever meets equal tables (it asserts so, debug), and
-the merged state inherits them. This is what lets an optional parameter's
-prologue (`def f(a, b = 0) = a.max + b`, `def g(x: 1, **opts) = opts[:y]`),
-a guard clause (`return 0 if a.empty?`) or a `?:` before the use keep the
-object elided. A temporary's object never crosses a block boundary: it is
-materialized or dropped where its block ends, as before.
-
-**Loop heads.** A loop head is a merge whose back edge is a fixpoint over
-the body, so an object reaches it only when the tables (§11) say the loop
-can keep it (`loop_keeps_virtual`): no block of the loop writes the local
-(`bb_def` over the loop's blocks; nor a local among the object's element
-slots — the others are the scratch window, which only a literal into the
-local writes), and no capture point in the loop reaches it. The forward
-entries and the back edges then branch with the object in place, the
-entries are reconciled as at any merge (`settle_entries` also drops
-whatever a back edge already recorded for the head does not carry), and
-the fixpoint walks the body from a head *with* the object
-(`analyse_backedge_fixpoint`). The body may still read the object in a
-way the compiler cannot fold (an Array index, §10), materializing it; the
-back edge then arrives without it, every later walk of the fixpoint
-starts from a head with it materialized (`analyse_loop`), and the loop's
-forward entries materialize it once, on their bridges, as every entry did
-before. The real back edge materializes what the head does not carry
-(`backedge_branches`) and, since creating an object is defining its
-local, never brings one the head lacks. So `r = (lo..hi); while ...;
-r.include?(i)` folds the test every iteration and allocates nothing;
-`def f(*a); while ...; a.first; end` keeps its rest Array elided through
-the loop.
-
-A recorded back edge describes the head the walk that recorded it
-entered, and a nest is walked as a whole (`analyse_backedge_fixpoint`),
-so an inner head's record can be older than the state reaching it. In
-
-```ruby
-r = []
-while i < n
-  j = 0
-  while j < 3; j += 1; end   # carries r, never touches it
-  r << i                     # builds r
-  i += 1
-end
-```
-
-the outer fixpoint's first walk reaches the inner head with `r` elided
-and records the inner back edge that way; the outer back edge arrives
-with `r` built, so the second walk reaches the inner head with `r` built
-and a record that still has it elided. The join has no arm for that (`V`
-against a slot with a value discards the value), so the record is
-settled first (`settle_recorded_backedge`): an object the record carries
-and the state reaching the head does not is materialized *in the
-record*, which is what the loop's real back edge brings, since the loop
-never defines the local. The walk's own back edge then differs from the
-record (`equiv` compares the tables beside the modes) and replaces it.
-Without this the local had no value at the inner head: a debug build
-asserted, and a release build recompiled the method on every call or
-aborted on the first read of the local after the inner loop (issue
-#1914).
+one: it survives its frame's calls. Its elements are in the caller's
+frame (or are a template), which no callee can reach, and the callee gate
+guarantees that nothing in the body can observe the parameter slot
+behind the compiler's back. It is dropped once nothing can read it any
+more (`local_live_after`, §10).
 
 The consequences are what keep the mechanism small:
 
-- **A merge only ever sees equal elided objects.** A temporary's object
-  never reaches one, and a parameter's reaches it on every path or on
-  none, so joins and the branch bridges reconcile nothing; a loop-head
-  fixpoint sees only an object its loop can neither write nor capture.
+- **A merge never joins an elided object.**
 - **A suspended frame owes only objects whose elements are safe.** A
   temporary's object never lives across a call; a handed-over object's
-  elements are in the caller's frame, and a local's (§10) in the frame's
-  own scratch slots, so the chain-deopt replay stub
+  elements are in the caller's frame, so the chain-deopt replay stub
   (`gen_chain_replay_stub`) materializes `CallerSlots` (through the
-  frame's saved bp or its window offset), `Literal`, and `Slots` /
-  `Range` entries (through the frame's lfp).
+  frame's saved bp or its window offset) and `Literal` entries.
 - **Liveness comes from the stack top.** The bytecode's own per-instruction
   stack top says when a temporary's object is dead and when its elements
   can be clobbered; a parameter's reads are counted off the basic-block
@@ -321,11 +257,15 @@ and are scanned like any frame slot. A handed-over object's elements are
 in the caller's frame, which the caller spilled before the call
 (`write_back_range`) and which is on the control-frame chain.
 
-## 5. What is not covered (yet)
+## 5. What is not covered
 
-- **Locals** hold an object under the rules of §10: not in a body that
-  rescues, not while the frame may be captured, and an alias (`y = x`
-  with `x` read again) builds it.
+- **Locals.** `x = [a, b]; … x.max` builds the Array: only a temporary
+  (or a parameter handed one, §6) holds an elided object. The stage that
+  kept objects in locals was removed in 2026-11 (see the introduction).
+- **Block boundaries.** An object is never carried into a merge or a
+  loop head (§3), so a parameter's object live past a branch, a guard
+  clause or an optional parameter's prologue is built at the end of the
+  block.
 - **Elements overwritten before the use.** `[a, b].include?(c + 1)`
   evaluates `c + 1` into the first element's slot, so the object is
   materialized there. A local or literal argument (`include?(x)`) is passed
@@ -335,31 +275,16 @@ in the caller's frame, which the caller spilled before the call
   positional position (or alone) reaches the callee elided; a literal of
   immediates (`Literal`) has no element slots and is not affected.
 - **`Slots` objects and transparent callees.** Without a template there is
-  no Array to hand a transparent callee; only the `elements` lowerings apply.
-- **Loops that read the object unfoldably.** An object carried through a
-  loop head (§3) is materialized on the loop's entries as soon as the
-  body reads it in a way that is not folded — an Array slice (`a[i, n]`,
-  `a[lo..hi]`), a transparent-only callee on a `Slots` object
-  (`a.include?(x)`), or a `Range` use that is not one of §8's — so the
-  per-iteration fold is only as wide as the consuming uses are.
-- **Return values that escape the callee's frame first.** A plain `return`
-  of an elided object from a specialized callee hands it over elided (§9);
-  a `return` from inside a block, from a callee with a handler, with a
-  block or a binding in flight, or of a `**kwrest`, builds it at the `ret`.
-- **Hash lookups by a non-constant key, or by a missing one.** `h[k]`
-  with `k` a variable needs `k.hash` and `eql?`, and `h[:zz]` on a
-  template without `:zz` needs `default`; both run on the template (a
-  `Literal`) or materialize (a `CallerKw`). A Hash literal with a dynamic
-  value (`{a: x}`) is not elided at all: its value is evaluated into the
-  slot a later literal key argument lands on, so the lookup would
-  materialize it anyway.
+  no Array to hand a transparent callee; only the `elements` lowerings
+  apply. `[a, b][i]` and `args[i]` build the Array.
+- **Return values.** A specialized callee's returned object is built at
+  its `ret`, unless the call site discards the result (§8).
+- **Hash literals and `**kwrest`.** Both are built as they are written.
 - **Range endpoints of unknown class.** `(a..b.size).sum` builds the Range:
   the end is a call's result, not proven Fixnum at the `Range`
-  instruction. A Float, Bignum or String endpoint builds it too, and so does
-  a Range into a local. The endpoint temporary of `(a..f(b)).include?(x)`
-  is clobbered by the argument push, as an Array's elements are.
-- **Other classes.** Objects whose `initialize` the JIT inlines are the
-  natural next `VirtualSrc` kind.
+  instruction. A Float, Bignum or String endpoint builds it too. The
+  endpoint temporary of `(a..f(b)).include?(x)` is clobbered by the
+  argument push, as an Array's elements are.
 
 ## 6. Into callees: `VirtualSrc::CallerSlots`
 
@@ -446,62 +371,7 @@ suspended in a call (through `[rsi]` / `[x24]` for the saved bp, `rdx` /
 replaced the former deferred-rest annotation (D1): the kw half (K1) keeps
 its annotation (`DeferredForward { kw }`), the rest half is this.
 
-## 7. Hash literals and `**kwrest`: `VirtualSrc::CallerKw`
-
-A Hash is an elided object in two forms.
-
-**A literal of immediates** (`{a: 1, b: 2}`, `{200 => :ok}`) is a
-`Literal(template)` like an Array's, and ends the same ways: consumed by a
-folded lookup (`[]`, `fetch`, `include?`, `size`, `empty?` with a constant
-key, §2), handed to a transparent callee as the template, dropped, or
-copied by `DeepCopyLit`. A specialized callee receives it in a parameter
-as it is. There is no `Slots` form: a Hash literal with a non-immediate
-value is built as before (§5).
-
-**A `**kwrest` parameter.** The kwrest of a specialized callee —
-`def f(a, **opts)` called as `f(x, y: 1, z: 2)` — would be a fresh Hash of
-the caller's keyword arguments that the callee's own parameters do not
-name. Instead it starts as `VirtualSrc::CallerKw { callid, base }`: the
-caller's call site, and the base through which the caller's frame is
-reached (`SavedFp` only; a frameless callee is never specialized with a
-kwrest). Its pairs are a compile-time table, `AbstractFrame::caller_kw`
-(`JitContext::caller_kw_table`): the call site's keyword names, minus the
-callee's `kw_names`, each with the caller slot its value was evaluated
-into (`kw_pos + offset`). Keys are symbols, so every lookup by a constant
-symbol is folded to a `LoadCallerSlot` of that slot, or to a miss.
-
-**The hand-over** (`specialized_iseq`, `set_arguments`'s kwrest fill): the
-caller elides the kwrest when the call is specialized on its arguments,
-the callee's body passes §6's gate, the call site has no `**splat`, the
-callee is not a forwarding trampoline (its kw half keeps `DeferredForward
-{ kw }`), and the bind is a simple call. Then the caller spills the
-leftover keyword slots (`use_as_value` + `write_back`) so the callee and
-any side exit find them in memory, stores `nil` into the kwrest slot of
-the callee frame, and `from_caller` registers the `CallerKw` object with
-the parameter in `LinkMode::V`. The callee skips its `CheckKwRest`
-(nothing to check: the object has no duplicate keys by construction — a
-duplicate at the call site is already resolved by the caller's layout).
-A call site to a `**kwrest` method is now a reason to specialize at all
-(`specializable`), as a `*rest` method is.
-
-**Materialization** is `AsmInst::RestKw { rest_kw, table, base }`
-(`AsmIr::kw_rest_from`), the same `correct_rest_kw` runtime call the
-callee's prologue uses, pointed at the caller's frame through `base`
-(`emit_rest_kw` on both arches: `[rbp]` / `[x29]` minus
-`RBP_LOCAL_FRAME` for `SavedFp`). A side exit while the object is pending
-writes it back as `WriteBack::forward_kwrest` (`wb_forward_kwrest`), the
-entry that already rebuilt a deferred forwarding kwrest, so the deopt
-exits and the chain-deopt stub need no new case; `WriteBack::virtual_obj`
-never carries a `CallerKw`.
-
-**What it buys.** `def f(**opts)`-style helpers that only read their
-options (`opts[:x]`, `opts.fetch(:x, 0)`, `opts.key?(:x)`, `opts.empty?`,
-`opts.size`) run without the kwrest Hash; `{a: 1, b: 2}[k]`-style literal
-tables and `{...}.include?(k)` without the literal's copy. An optional
-keyword parameter next to the kwrest (`def f(x: 1, **opts)`) still
-allocates: its prologue branch ends the basic block before the use (§5).
-
-## 8. Range literals: `VirtualSrc::Range`
+## 7. Range literals: `VirtualSrc::Range`
 
 `(lo..hi).include?(v)`, `(0...n).sum`, `case v when lo..hi` — the
 `Range` instruction builds a Range from two slots (`gen_range`), which
@@ -530,7 +400,7 @@ temporary, so no suspended frame owes one and the chain replay asserts the
 kind away.
 
 A `Range` literal with constant endpoints (`1..5`) is a template
-(`VirtualSrc::Literal`), as an Array or Hash of immediates is, and its
+(`VirtualSrc::Literal`), as an Array of immediates is, and its
 element ops are the same lowerings over `Const` endpoints: `(1..3).sum` is
 folded at compile time, `when 1..5` is the inline compare against two
 immediates. A Range is always frozen, so the bytecode loads such a literal
@@ -544,232 +414,33 @@ of an always-frozen class unchanged), as the instruction would have. The fold an
 redefinition; the helpers re-check `cmp_redefined` at run time and
 dispatch the real method then.
 
+## 8. A discarded result
 
-## 9. Return values: an elided object handed back to the call site
+`def set(x, y) = @p = [x, y]` called as a statement, a setter body's
+last expression, `pair(x, y)` whose value nobody reads: a specialized
+callee returns an object it never let out to a call site with no
+destination. The `Ret` of a specialized callee is one edge of the
+caller's continuation merge (`record_return_edge`,
+`build_return_segments`); when the call site discards the result
+(`return_discarded`), `may_consume_virtual`'s `Ret` arm lets the object
+through, the edge keeps it, and its segment drops it: it loads `nil`
+into the return register (which must carry a non-zero value, zero being
+the error return) and the allocation never happens.
 
-`def pair(a, b) = [a, b]` followed by `pair(x, y).max`, `a, b = pair(x, y)`,
-`def rest(*a) = a` / `rest(x, y).min`, `def rng(a, b) = (a..b)` /
-`rng(x, x + 10).include?(5)`: the callee's last act is to return an
-object it never let out. The `Ret` of a specialized callee is one edge of
-the caller's continuation merge (`record_return_edge`,
-`build_return_segments`); an elided object still in the returned slot
-there is left elided on the edge (`may_consume_virtual`'s `Ret` arm, when
-`return_virtual_in_caller` accepts it) instead of being built, and the
-decision is made once every return path is known.
+**The gate** (`return_discarded_of`): the callee is a method (no
+`outer`; a block's return resumes a `yield`), has no exception handler
+and never captures its frame without a block
+(`possibly_capture_without_block`); the call site passes no block and
+has no destination. Any other `Ret` reads the object, so it is built
+before the `ret`, as for any escape.
 
-**The gate** (`return_virtual_in_caller_of`): the callee is a method (no
-`outer`), has no exception handler and never captures its frame without
-a block (`possibly_capture_without_block`); the call site passes no
-block, has a destination above the caller's locals, and the caller's
-frame is proven on the stack (`no_capture_guard`); and the object maps
-into the caller: a `Literal` as it is, an Array (`Slots`, or a
-`CallerSlots` handed *in*) as `CallerSlots { src: dst, len, base: Own }`,
-a `Range` with its slot endpoints relocated to `dst, dst + 1` — all
-provided the slots fit in the caller's frame (`dst + n <= total_reg_num`).
-A `CallerKw` is not handed back (its table belongs to the callee).
+## 9. The def-use and liveness tables (`jitgen/slot_analysis.rs`)
 
-**The decision** (`return_virtual_ok`, in `build_return_segments`): every
-edge carries an object, they all map to the same caller-side
-`VirtualSrc`, and the callee has no boxed return (a non-local `return`
-from a block, a `break`). `JitStackFrame::return_virtual` records it,
-next to `float_return`, and travels with the compile result
-(`SpecializedCompileResult::return_virtual`, memoized).
-
-**The copies** (`emit_return_virtual_copies`): on each edge, after the
-chain bridge, the elements are stored into the caller's slots
-`dst..dst+len` through `AsmInst::StoreCallerSlot` (the twin of
-`LoadCallerSlot`: `SavedFp` from a framed callee, `Window(delta)` from a
-frameless one — `DynVarOffset::Hint` chain addressing is not usable from
-a frameless callee, whose frame totals include the window). A `Slots`
-object's elements are loaded from the callee's state (a `V` element —
-the object's own slot doubling as its first element, see below — from
-the stack); a `CallerSlots` handed in from the same caller is moved
-slot by slot, far end first where the windows overlap. No value is
-loaded into the return register: the caller does not read it. An edge
-whose object did not pass (another path returned a bare value) is
-materialized on its own segment, as before.
-
-**The call site** (`def_specialized_result` → `def_virtual_return`): the
-destination becomes the object's slot (`def_virtual`, `V`), the slots
-above it `S` (proven `Fixnum` for a Range's endpoints, `Value`
-otherwise). The destination itself is **element 0**: for a self-call the
-result slot is the first argument slot and the frame ends right after the
-arguments, so there is no room above; the element's value sits on the
-stack under a `V` link, which the write-backs no longer `nil`-fill
-(`SlotState::wb_void` skips the own slot of an elided object), the
-element lowerings read from memory (`copy_element`,
-`write_back_elements`), and `discard_dead_elements` leaves alone when the
-object is gone, since the slot then holds whatever replaced it. The
-caller's `InlineCache` pseudo-instruction after the call writes nothing,
-so it no longer counts as overwriting element 1 (`settle_virtuals` asks
-for the slot an instruction actually writes).
-
-**Destructuring** (`consume_virtual_expand`): `a, b = f(x, y)` expands
-the object straight into its targets — a template's constants, copies of
-the element slots, `nil` past the end — with the object gone afterwards.
-The targets are the temporaries right above the result, overlapping the
-element slots, so the copies run far end first (a `memmove`) when the
-targets lie above the elements.
-
-**A discarded result** (`return_discarded`): a call site with no
-destination (`pair(x, y)` as a statement, a setter body's last
-expression) has nothing to resume with, so the same gate minus the
-destination (`handover_site_of`) lets the `Ret` keep the object, and the
-segment drops it: it loads `nil` into the return register (which must
-carry a non-zero value, zero being the error return) and the allocation
-never happens. The decision is per edge — a path returning a bare value
-loads it as before, and `return_virtual` stays `None`.
-
-**Not carried**: a `return` reached through a block (`new_method_return`
-boxes it), the hand-over of an object the caller then returns again to a
-non-specialized frame (materialized at that `Ret`, as any escape: the
-unit's callers are unknown code that needs a real `Value` in the return
-register), and a Range whose consuming use evaluates an argument into its
-slot after the return (`rng(x, x + 10).include?(x + 3)`, the §5
-clobbering).
-
-## 10. Locals: an object kept in a local variable, across calls
-
-`x = [a, b]; … x.max`, `r = (lo..hi); … r.include?(v)`, `opts = {a: 1};
-… opts[:a]`: the literal is assigned to a local, used later — after
-other statements, after calls — and never let out of the frame. The
-object is elided into the local and stays elided until something could
-observe it; the rules of §3 apply, with a local's lifetime (it survives
-the frame's calls, is dropped when nothing can observe it any more —
-§12 says how long that is — and crosses a forward merge) and the escape
-points below.
-
-**Scratch windows.** A temporary's elements stay in the temporaries the
-literal was built from, which the next push overwrites — so a local's
-object cannot keep its elements there across the statements that follow.
-The bytecode compiler reserves, for every local an Array literal (no
-splat, at most 8 elements) or a Range literal is assigned to, a *scratch
-window* as wide as the widest such literal: hidden temporaries above
-every temporary the bytecode uses (`BytecodeGen::local_scratch`,
-`ISeqInfo::local_scratch`, counted in `temp_num` and so nil-filled at
-entry like every register, at most 16 slots per iseq). The interpreter
-never reads them. When the JIT elides `x = [a, b]`, it copies the
-elements into `x`'s window and homes them there (`copy_to_scratch`); the
-object is `Slots { src: window, len }`, and every consuming lowering,
-side-exit write back and GC safepoint reads the window exactly as it
-would read a temporary's pinned elements. A Range's slot endpoints move
-into the window the same way (`RangeEnd::Slot(window + i)`), so a later
-write to the local the endpoint came from (`a = f(a)`, which
-`written_slot` would not see in a call) cannot change the Range. A
-literal of immediates needs no window.
-
-**The local gate** (`local_elision_ok`): the frame is proven on the stack
-and uncaptured (`no_capture_guard`) and rescues nothing (a handler could
-read any local). A frameless callee (`frameless_call.rs`) passes it: its
-window is its whole frame as its own prologue would have laid it out,
-scratch windows included, and its body addresses them through the
-shifted LFP like any slot of its own; a redo exit hands the whole call
-back to the caller, whose state never saw the callee's object, and a
-materializing exit builds the object from the window into the frame it
-makes (`get_write_back_with_void`: the `nil` fill first, the build
-last), as a framed side exit does. So `x = [a, b]; x.size` as the whole
-of a tiny method, inlined frameless, allocates nothing, and the object
-returned from such a callee is copied out of the window through
-`Window(delta)` (§9). Once a capture drops the invariant, no further object
-goes into a local until a capture guard re-proves it.
-
-**Escape points.** `settle_virtuals` materializes a local's object
-before
-
-- any instruction that reads the local without consuming it: a store
-  into an ivar, gvar, cvar or constant, an index store, an argument to a
-  call that is not specialized with the object handed over, a `ret` of
-  the root unit, a `Mov` that aliases it (`y = x` with `x` read again);
-- a call that could read the frame's locals behind the compiler's back
-  (`capture_point`): one resolved to a callee that captures its caller's
-  frame (`binding`, `eval`, `local_variables`) or resolved to nothing
-  the compiler can name (a generic `send`, which could be any of these)
-  materializes every object; one passing a block literal materializes
-  the object of every local too. The block's body reads and writes the
-  frame's locals through the outer chain (a store replaces the object
-  behind the compiler's back), a `binding` or `eval` it reaches sees the
-  whole frame, and so does the callee, by asking the block it was handed
-  for its binding (§12). The same check covers a parameter's handed-over
-  object;
-- a block boundary into a loop head whose loop writes the local or holds
-  a capture point (a forward merge, or a loop that does neither, carries
-  it, §3).
-
-Everything else — the frame's own calls to known callees, operators,
-instance-variable loads, loads of other locals — leaves the object in
-place: its elements are in the window, which nothing but the next
-literal into the same local writes. That write is the one way a window
-is refilled, and an object that moved out of the local into a temporary
-(`t = x` with `x` dead) still has its elements there, so
-`settle_virtuals` treats the window of a `Mov` / `Array` / `Range`
-destination as written and materializes any *other* object whose
-elements lie in it.
-
-**Moves** (`consume_virtual_mov`): `y = x` with `x` dead after the copy
-hands the object to `y` instead of building it — into a temporary as it
-is, into a local by copying its own-frame elements into `y`'s window
-(`mov_target_ok`: the window must be wide enough; a template or a
-handed-over object needs none; a `**kwrest` object is tied to its
-parameter's table and is built instead). The bytecode compiler gives a
-local assigned from another local a window as wide as that local's, so
-the move has somewhere to go.
-
-**A temporary's view** (`alias_consumed_by_call`): `x.include?(a + 1)`
-evaluates its receiver into a temporary *before* its argument, and so
-does `x[i % 3]`, so the `Mov` copies a still-live local. When the first
-reader of that temporary in the block is a call that only reads the
-elements of its receiver (a method with a `RecvEscape::elements`
-summary, block-less, with plain arguments; the index instruction counts
-as `[]`) and the instructions between write nothing but a plain
-destination, the temporary takes a second view of the same
-object — the same `VirtualSrc`, sharing the window — which the call
-consumes while the local keeps its own. The two views are never told
-apart: such a method neither mutates nor lets out its receiver, so
-even a lowering that builds the temporary's copy after all answers the
-same. An object in a temporary likewise outlives the instructions that
-write a plain destination (`defined_slot`: the operator computing the
-argument), not only the `Mov` / literal family; a call is still a
-boundary for it. Liveness is kill-aware
-(`local_live_after`, `defined_slot`): a write to the local before
-anything that counts as a read (§12) ends its life on that path, so
-`x = [a, b]; n = x.max; x = 1` does not keep the previous object alive.
-An instruction that redefines the local without reading it (`x = [c, d]`,
-`x = f(y)` over an elided `x`) ends the object the same way
-(`settle_virtuals`, `redefined`) instead of building it first; one that
-may send a message keeps the object until its own definition of the
-slot (§12).
-
-**Across calls.** The local's slot is `V` (the GC write back and any
-side exit `nil`-fill or build it), the window is homed, and the frame is
-on the chain. A chain deopt that converts the frame while it is
-suspended in a call builds the object from the window through the
-frame's lfp (`gen_chain_replay_stub`, `a64_gen_chain_replay_stub`:
-`Slots` and `Range` entries next to `CallerSlots` and `Literal`); a
-side exit in the frame itself does what it did for a temporary. An
-in-line build of a window-based `Slots` object uses `CreateArrayFrom`
-rather than the call site's `NewArray`, whose cold path reads the
-literal's original argument temporaries, long since overwritten. A
-specialized callee's `return x` hands the local's object back as §9
-describes, its elements copied out of the window.
-
-**Not carried**: through a loop head whose body writes or captures the
-local, or reads the object unfoldably (§3); an alias that keeps both
-names live beyond a temporary's view; a Range whose endpoints are not proven Fixnum or
-`nil` where it is built (as for a temporary's Range); an object
-returned into a local of the caller (`x = pair(a, b)` needs the slots
-above the destination, §9); a transparent callee on a literal of
-immediates that stays live (`opts.key?(:a)` twice: the first call
-builds the Hash); an Array slice on a local's object (`x[1, 2]`,
-`x[1..]`: only `[]` by an Integer is folded, `consume_virtual_index`).
-
-## 11. The def-use and liveness tables (`jitgen/slot_analysis.rs`)
-
-The questions §3 and §10 ask of the bytecode — is this local read again
-after this instruction, may a block of the frame touch it, is the next
-instruction the one call a temporary's view may be consumed by — were
-answered by forward scans that re-decode the bytecode on every call
-(`local_live_after`, `touched_by_blocks`, `alias_consumed_by_call`).
-`slot_analysis.rs` answers them from two tables instead.
+The questions §3 and §10 ask of the bytecode — is this parameter read
+again after this instruction, may a block of the frame touch it, is the
+next instruction the one call a temporary's view may be consumed by —
+are answered from two tables rather than forward scans that re-decode
+the bytecode on every call.
 
 **Layer A, `SlotAnalysis`** — what the bytecode alone decides. Per
 instruction, the slots it reads (`TraceIr::read_slots`) and the one it
@@ -785,14 +456,14 @@ It is built once per iseq, the first time a compilation needs it, and
 kept in `ISeqInfo::slot_analysis` for good: the bytecode is never
 rewritten after it is installed (the inline caches patch operand words,
 never the shape of an instruction), so nothing invalidates it. An iseq
-with an exception handler is marked `all_live`, as the scans treat it (a
-handler block could read anything); its tables are still built, with
-the handler-only instructions (the rescue-clause matches, which the JIT
-never visits and `TraceIr::from_pc` refuses) as empty summaries, for
-the questions that stay inside a basic block. The tables are kept
-small, since they live as long as the iseq: a 16-byte summary per
-instruction, the reads of every instruction in one shared vector, the
-per-block sets in one bit matrix.
+with an exception handler is marked `all_live` (a handler block could
+read anything); its tables are still built, with the handler-only
+instructions (the rescue-clause matches, which the JIT never visits and
+`TraceIr::from_pc` refuses) as empty summaries, for the questions that
+stay inside a basic block. The tables are kept small, since they live
+as long as the iseq: a 16-byte summary per instruction, the reads of
+every instruction in one shared vector, the per-block sets in one bit
+matrix.
 
 **Layer B, `UnitLiveness`** — what the inline caches decide, which may
 differ from one compilation to the next. Whether a call is a capture
@@ -805,41 +476,33 @@ once, forms the set of locals the blocks may touch (Layer A's set, or
 every slot when a block is opaque or holds an unresolved call), adds a
 capture point's reads (every slot for `Frame`, the touched set for
 `Block`) to the use sets, and runs a backward liveness dataflow over
-`BasicBlockInfo::succ` for the blocks' live-out sets. The
-compilation sees one state of the caches throughout (it runs no Ruby
-code), so the table is built when first asked for and shared with the
-analysis clones (`JitContext::unit_liveness`).
+`BasicBlockInfo::succ` for the blocks' live-out sets. The compilation
+sees one state of the caches throughout (it runs no Ruby code), so the
+table is built when first asked for and shared with the analysis clones
+(`JitContext::unit_liveness`). Its query, `table_observable_after`,
+serves the loop-entry seeding in `merge.rs`.
 
-A query is then a scan of the rest of the instruction's basic block
-over Layer A's summaries, with Layer B's capture verdicts, and the
-block's live-out set past it (`table_observable_after`, which counts
-every capture point as a read of every local). The life of an elided object in a local is the *frame
-liveness* of §12 instead (`table_frame_live_after`), which depends on no
-inline cache and so lives in Layer A. The one instruction a
-temporary's view may be consumed by is `SlotAnalysis::alias_stop`; the
-call-site and receiver-class conditions of `alias_consumed_by_call` are
-checked on it as before.
+The life of a parameter's object is the *frame liveness* of §10
+(`table_frame_live_after`), which depends on no inline cache and so
+lives in Layer A. The one instruction a temporary's view may be
+consumed by is `SlotAnalysis::alias_stop`; the call-site and
+receiver-class conditions of `alias_consumed_by_call` are checked on it.
 
-`local_live_after` and `alias_consumed_by_call` are table lookups; the forward scans they replaced were checked against
-the tables, call for call, on the whole test suite, ruby/spec core and
-optcarrot before being removed.
+## 10. How long a parameter's object lives: the frame liveness
 
-## 12. How long a local's object lives: the frame liveness
-
-A local's elided object has to exist whenever something could observe
-it, and what can observe a local is not only the compiled code. A side
-exit hands the frame to the interpreter, which honours none of the
-compilation's inline caches: the call the compiler resolved to a callee
-that captures nothing is, there, a call to whatever the receiver
+A parameter's elided object has to exist whenever something could
+observe it, and what can observe a local is not only the compiled code.
+A side exit hands the frame to the interpreter, which honours none of
+the compilation's inline caches: the call the compiler resolved to a
+callee that captures nothing is, there, a call to whatever the receiver
 answers — `binding` or `eval` under another name included (issue #1910):
 
 ```ruby
 class A; def get = nil; end
 class B; alias_method :get, :binding; public :get; end
 
-def f(i, o)
-  x = [i, i + 1]
-  s = x[0] + x[1]            # the last read the compiled code can see
+def f(o, *x)
+  s = x.first + x.last       # the last read the compiled code can see
   b = o.get                  # an `A` so far: resolved, captures nothing
   [s, b && b.local_variable_get(:x)]
 end
@@ -847,10 +510,10 @@ end
 
 Compiled for `A`, the call is not a capture point, and a liveness that
 counts only what the compiled code reads says `x` is dead after
-`x[1]`. Dropping the object there is wrong: called with a `B`, the class
-guard of `o.get` exits to the interpreter with `x` written back as
+`x.last`. Dropping the object there is wrong: called with a `B`, the
+class guard of `o.get` exits to the interpreter with `x` written back as
 `nil`, and the Binding the interpreter makes shows `nil` where CRuby
-shows `[i, i + 1]`. The compiled code never calls a capturing callee
+shows the rest Array. The compiled code never calls a capturing callee
 itself (`capture_point` builds every object first and the call is left
 to the interpreter), so the capture is always behind a side exit, where
 the write-back can still build an object that is tracked — but not one
@@ -869,104 +532,52 @@ does not: control flow, moves, literals of immediates and Arrays, and
 the loads and stores of locals, instance and class variables. The table
 is exhaustive over `TraceIr`, so a new instruction has to say which it
 is. It depends on no inline cache — that is the point — and so it is a
-Layer A fact (§11): one bit per instruction and one more live-out
-matrix, built the first time a compilation of the iseq asks. A frame with a lambda literal answers "live"
-throughout, as one that rescues does.
+Layer A fact (§9): one bit per instruction and one more live-out
+matrix, built the first time a compilation of the iseq asks. A frame
+with a lambda literal answers "live" throughout, as one that rescues
+does.
 
 `local_live_after` is this liveness, and it is the only question
-`settle_virtuals` asks about a local's object: the object lives until
-nothing can read the local before it is written again, with every
-sending instruction counted as a read.
+`settle_virtuals` asks about a parameter's object: the object lives
+until nothing can read the parameter before it is written again, with
+every sending instruction counted as a read.
 
 **A read that builds nothing.** A sending instruction is not an escape
-point. The object stays elided across it, exactly as it stays across a
-call it is live after (§10): its elements are in the window, and the
-side exits of the instruction build it. What changes is only when the
-object stops being tracked:
+point. The object stays elided across it, as it stays across the
+frame's calls (§3), and the side exits of the instruction build it. What
+changes is only when the object stops being tracked:
 
 - an object nothing can observe *after* a sending instruction is kept
   *through* it (`settle_virtuals`, `kept`) and dropped by the next
   instruction, or by the block's end (`settle_virtuals_at_bb_end`). So
   the last call of a method keeps the object for its own side exit and
   costs nothing;
-- a sending instruction that redefines the local (`x = f(y)`) keeps the
-  old object until its own definition of the slot removes it;
-- where the instruction would overwrite the object's elements (`x =
-  a..b` over an elided `x`, which refills the window) the object cannot
-  be kept that way and is built;
+- a sending instruction that redefines the parameter (`x = f(y)`) keeps
+  the old object until its own definition of the slot removes it;
 - a comparison or call whose answer goes straight to a branch
   (`CondBrSink`) settles the block's end ahead of itself (§3). A dead
-  local's object is left alone there (`DeadLocal::Keep`) and dropped
-  where the branch is settled, which emits nothing; in front of a
-  dispatch that branches in every arm it is built (`DeadLocal::Build`),
+  parameter's object is left alone there (`DeadLocal::Keep`) and
+  dropped where the branch is settled, which emits nothing; in front of
+  a dispatch that branches in every arm it is built (`DeadLocal::Build`),
   since no arm takes an elided object over.
 
-**The blocks of the frame.** A block reads the frame's locals through
-its outer chain, and so does a `binding` or `eval` called inside it. The
-compilation's view (`touched`, §11) counts the locals the block names
-and widens to every local when a call in the block is unresolved or
-capturing. That view is not enough for an elided object, on two counts.
-The interpreter's view of the block's body is wider for the same reason
-as above: any instruction in it that sends a message may reach
-`binding`. And the body is not the only way in: the callee can keep the
-block it was handed and ask for its binding, which is the caller's
-frame with every local in it, whatever the body holds (issue #2058):
-
-```ruby
-def foo(&b) = b.binding.local_variable_get(:x)
-
-def f(i)
-  x = [i, i + 1]
-  s = x[0] + x[1]
-  [s, foo { }]               # CRuby: [s, [i, i + 1]]
-end
-```
-
-Nothing exits to the interpreter here, so the object has to be real by
-the call. A call passing a block literal (`Capture::Block`) therefore
-builds every local's object (`settle_virtuals`), a dead one included,
-and a loop holding such a call carries none across its head
-(`UnitLiveness::captured_in`). This is the one read of §12 that
-allocates.
-
-**What it costs.** Nothing in straight-line code: the object is tracked
-a little longer and never built. An allocation appears where the longer
-life meets a boundary an elided object cannot cross:
-
-| shape | allocations per 100k runs, before → after |
-|---|---|
-| `x = [a, b]; s = x[0] + x[1]; o.foo; s` | 1 → 1 |
-| the same in a block body (`n.times { … }`) | 1 → 1 |
-| the same in a `while` loop | 1 → 100,001 |
-| literal in a `while` loop, a call after the loop | 1 → 100,001 |
-| literal, then `1.times { o.foo }` | 1 → 100,001 |
-| literal, then `a.each { \|v\| s += v }` | 1 → 100,001 |
-| literal, then a call passing `{ nil }` | 1 → 100,001 |
-| a call passing `{ nil }`, then the literal | 1 → 1 |
-| `if c; x = [a, b]; …; end; o.foo` | 1 → 50,001 |
-
-A `while` loop is the costly one: its condition is a comparison, which
-sends a message, so the object of the previous iteration is live at the
-loop head, where the entry brings no object and the back edge has to
-build its own (§3). A block-based loop pays nothing, since each
-iteration is a frame of its own. Over 81 benchmarks (ruby-bench,
-`benchmark/`, optcarrot) the allocation counts are unchanged except for
-three Rails applications — lobsters +0.3 to +0.4%, activerecord +0.08%,
-and shipit +0.2% over its usual count, which is less than that count
-moves from run to run without the change — and all of that is objects
-handed over in a parameter (`*rest`, `**kwrest`), not literals in
-locals. The hard read at a call passing a block adds nothing to it: the
-three applications give the same counts with and without it, and no
-other benchmark's count moved beyond what it varies by on its own.
+**Capture points.** A call that could read the frame's locals behind
+the compiler's back (`capture_point`) builds the objects first: one
+resolved to a callee that captures its caller's frame (`binding`,
+`eval`, `local_variables`) or to nothing the compiler can name (a
+generic `send`) builds every object; one passing a block literal builds
+every parameter's object, a dead one included. The block's body reads
+the frame's locals through the outer chain, a `binding` or `eval` it
+reaches sees the whole frame, and so does the callee, by asking the
+block it was handed for its binding, whatever the body holds (issue
+#2058). (The callee gate of §6 already keeps block literals out of a
+body that is handed objects, so this is a safety net there.)
 
 **What it does not cover.** The frame liveness makes the object survive
 until a *side exit* can build it. A capture that reaches the frame with
-no side exit in between still finds the object elided:
-
-- `binding` or `eval` reached *in place* from compiled code: through a
-  native method that calls back (`send(:binding)`, `[o].include?("x")`
-  with `==` aliased to `eval`), through an operator lowered to a generic
-  helper, or through `yield` to `&:name` (issue #2069). Here the object
-  is live and tracked; it is the capture that would have to convert the
-  frame.
-
+no side exit in between still finds the object elided: `binding` or
+`eval` reached *in place* from compiled code, through a native method
+that calls back (`send(:binding)`, `[o].include?("x")` with `==`
+aliased to `eval`), through an operator lowered to a generic helper, or
+through `yield` to `&:name` (issue #2069). Here the object is live and
+tracked; it is the capture that would have to convert the frame.

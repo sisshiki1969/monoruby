@@ -2030,9 +2030,6 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
-            // A block's plain return never hands an object over
-            // (`return_virtual_in_caller`).
-            return_virtual: _,
             reads_header: _,
         } = {
             self.current_frame_mut().landing_sink = true;
@@ -2079,7 +2076,6 @@ impl<'a> JitContext<'a> {
             callid,
             callee_fid,
             true,
-            false,
             false,
             false,
             &arg_hints,
@@ -2851,19 +2847,9 @@ impl<'a> JitContext<'a> {
             self.settle_virtual_args(state, ir, callid);
             None
         };
-        // The callee's `**kwrest` goes over elided too
-        // (`VirtualSrc::CallerKw`): a framed callee (a frameless one takes
-        // no `**kwrest`), filled by the simple path from literal keywords
-        // only (a `**hash` splat is dynamic), and not a forwarding
-        // trampoline, whose keywords K1 routes (`forward_kw_deferral`).
-        let kwrest_elided = handover == Some(SlotBase::SavedFp)
-            && self.store[fid].kw_rest().is_some()
-            && self.store.is_simple_call(fid, callid)
-            && self.store[callid].hash_splat_pos().is_empty()
-            && self.store.forwarding_trampoline_rest(fid).is_none();
         let mut args_info = if specializable {
             let (modes, virtuals) =
-                LinkMode::from_caller(&self.store, fid, callid, state, handover, kwrest_elided);
+                LinkMode::from_caller(&self.store, fid, callid, state, handover);
             JitArgumentInfo::new(modes, virtuals)
         } else {
             JitArgumentInfo::default()
@@ -2924,7 +2910,6 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frozen_using_fpr,
             float_return,
-            return_virtual,
             reads_header,
         } = compiled;
         let rest_elided = handover.is_some();
@@ -2995,8 +2980,7 @@ impl<'a> JitContext<'a> {
                 redo,
                 reads_header,
             );
-            let res =
-                def_specialized_result(state, ir, dst, return_state, float_return, return_virtual);
+            let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
             state.capture_guard_after_call(ir, &self.store, dst);
             return Ok(res);
         }
@@ -3019,14 +3003,13 @@ impl<'a> JitContext<'a> {
             evict,
             rest_elided,
             kw_routed && !kw_vetoed,
-            kwrest_elided,
             bmethod_outer,
             using_fpr,
             &arg_hints,
             &float_args,
         );
         self.emit_spliced_landing(ir, state, callid, splice_widen_mark);
-        let res = def_specialized_result(state, ir, dst, return_state, float_return, return_virtual);
+        let res = state.def_rax2acc_return(ir, dst, return_state, float_return);
         state.immediate_evict(ir, &self.store, evict, dst);
         return Ok(res);
     }
@@ -3063,10 +3046,6 @@ pub(super) struct SpecializedCompileResult {
     /// float-return register, not boxed in rax — see
     /// [`JitStackFrame::float_return`]. Binding on this call site.
     pub float_return: bool,
-    /// The compiled body hands its return value over as an elided object
-    /// instead of a value in rax — see [`JitStackFrame::return_virtual`].
-    /// Binding on this call site.
-    pub return_virtual: Option<VirtualSrc>,
     /// A frameless body reads its own LFP header, so its window needs one
     /// written at the call ([`AsmInfo::reads_frame_header`]). Always
     /// `false` for a framed callee, which builds its header itself.
@@ -3084,7 +3063,6 @@ impl SpecializedCompileResult {
             spec_id: self.spec_id,
             using_fpr: self.using_fpr,
             float_return: self.float_return,
-            return_virtual: self.return_virtual,
         }
     }
 
@@ -3098,7 +3076,6 @@ impl SpecializedCompileResult {
             spec_id,
             using_fpr,
             float_return,
-            return_virtual,
         } = memo;
         Self {
             entry,
@@ -3110,30 +3087,9 @@ impl SpecializedCompileResult {
             spec_id,
             using_fpr,
             float_return,
-            return_virtual,
             // The memo never holds a frameless callee.
             reads_header: false,
         }
-    }
-}
-
-///
-/// Define the call's destination from a specialized callee's result: the
-/// elided object its return segments handed over
-/// (`doc/escape_analysis.md` §9), or else the value in rax (or the
-/// float-return register).
-///
-fn def_specialized_result(
-    state: &mut AbstractState,
-    ir: &mut AsmIr,
-    dst: Option<SlotId>,
-    return_state: Option<ReturnState>,
-    float_return: bool,
-    return_virtual: Option<VirtualSrc>,
-) -> CompileResult {
-    match (return_virtual, dst) {
-        (Some(src), Some(dst)) => state.def_virtual_return(dst, return_state, src),
-        _ => state.def_rax2acc_return(ir, dst, return_state, float_return),
     }
 }
 
@@ -3414,7 +3370,6 @@ impl<'a> JitContext<'a> {
         let frame_kw_vetoed = frame.kw_vetoed;
         let frame_generic_yield = frame.generic_yield;
         let frame_float_return = frame.float_return;
-        let frame_return_virtual = frame.return_virtual;
         let frame_has_boxed_return = frame.has_boxed_return;
         let frame_reads_header = frameless && frame.asm_info.reads_frame_header();
         // `has_exception_handler` taints the return state so the caller
@@ -3515,7 +3470,6 @@ impl<'a> JitContext<'a> {
             spec_id,
             using_fpr: frame_using_fpr,
             float_return: frame_float_return,
-            return_virtual: frame_return_virtual,
             reads_header: frame_reads_header,
         })
     }
@@ -3727,7 +3681,6 @@ impl AbstractState {
             false,
             false,
             false,
-            false,
             &arg_hints,
             &[],
         );
@@ -3865,9 +3818,6 @@ impl AbstractState {
         // straight from this frame, and nothing vetoed it: no `**kwrest`
         // Hash is built.
         defer_kw: bool,
-        // The callee takes its `**kwrest` over as an elided object
-        // (`VirtualSrc::CallerKw`): no Hash is built, the kw window stays.
-        kwrest_elided: bool,
         bmethod_outer: Option<Option<Lfp>>,
         // The caller-computed `get_using_fpr` snapshot, taken there so it
         // can also be recorded for the resolve pass (stage 1' — the
@@ -3898,7 +3848,6 @@ impl AbstractState {
             false,
             rest_elided,
             defer_kw,
-            kwrest_elided,
             arg_hints,
             float_args,
         );
@@ -4191,7 +4140,6 @@ impl AbstractState {
         yield_site: bool,
         rest_elided: bool,
         defer_kw: bool,
-        kwrest_elided: bool,
         arg_hints: &[(GP, SlotId)],
         // The parameters handed over in a register
         // (`JitContext::plan_float_args`), by callee parameter slot.
@@ -4381,19 +4329,7 @@ impl AbstractState {
             // fill kw rest param.
             if let Some(kw_rest) = callee.kw_rest() {
                 let ofs = stack_offset - (LFP_SELF + kw_rest.0 as i32 * 8);
-                if kwrest_elided {
-                    // The callee holds the Hash as an elided object over
-                    // our kw window (`VirtualSrc::CallerKw`): the leftover
-                    // keywords' slots are spilled for it to read through
-                    // its saved frame pointer (and for a side exit's
-                    // rebuild), and the slot gets the GC-safe `nil` an
-                    // elided rest gets.
-                    for (slot, _) in &rest_kw {
-                        self.use_as_value(*slot);
-                        self.write_back(ir, *slot, Keep::All);
-                    }
-                    ir.u64torsp_offset(NIL_VALUE, ofs);
-                } else if defer_kw && !rest_kw.is_empty() {
+                if defer_kw && !rest_kw.is_empty() {
                     // K1: the specialized trampoline body source-routed
                     // these literal keywords straight from our slots;
                     // store the same GC-safe `nil` the elided rest
@@ -4535,8 +4471,7 @@ impl AbstractState {
             // `f`'s caller passed no keyword it leaves to it (the frame's
             // `caller_kw` table). Otherwise — `f` has more than one basic
             // block, so no K1 deferral, and was called with keywords —
-            // the slot holds them (elided as `VirtualSrc::CallerKw`, or
-            // already built), and the eager fill below forwards them.
+            // the slot holds them, and the eager fill below forwards them.
             let kwrest_empty = self.deferred_forward_info().is_some()
                 || kwrest_guard.is_some_and(|k| {
                     self.caller_kw_table()
@@ -4565,15 +4500,10 @@ impl AbstractState {
                     if self.deferred_forward_info().is_some() {
                         ir.set_kw_vetoed();
                     }
-                    self.materialize_virtual_args(store, ir, callsite);
                     // The eager fill reads the `**kwrest` slot as a real
-                    // `Hash` (or `nil` for none): an elided one is built
-                    // now, or its keywords would be lost.
-                    if let Some(k) = kwrest_guard
-                        && self.virtual_at(k).is_some()
-                    {
-                        self.materialize_virtual_at(store, ir, k, UsingFpr::new());
-                    }
+                    // `Hash` (or `nil` for none); no local holds an elided
+                    // object, so it is one already.
+                    self.materialize_virtual_args(ir, callsite);
                     None
                 }
             };
@@ -4681,12 +4611,10 @@ impl AbstractState {
             if self.deferred_forward_info().is_some() {
                 ir.set_kw_vetoed();
             }
-            self.materialize_virtual_args(store, ir, callsite);
-            for &k in callsite.hash_splat_pos() {
-                if self.virtual_at(k).is_some() {
-                    self.materialize_virtual_at(store, ir, k, UsingFpr::new());
-                }
-            }
+            // A `**h` operand is never elided: only a positional argument
+            // can be handed over, and every other read builds the object
+            // first (`JitContext::settle_virtuals`).
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });
@@ -4715,7 +4643,7 @@ impl AbstractState {
             // keyword syntax at the call site no ruby2_keywords promotion
             // can apply. A non-forwarding splat operand is an ordinary
             // evaluated slot, so no source routing applies either.
-            self.materialize_virtual_args(store, ir, callsite);
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwarded {
@@ -4738,7 +4666,7 @@ impl AbstractState {
             if callsite.forwarding && self.deferred_forward_info().is_some() {
                 ir.set_kw_vetoed();
             }
-            self.materialize_virtual_args(store, ir, callsite);
+            self.materialize_virtual_args(ir, callsite);
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArguments { callid, callee_fid });
