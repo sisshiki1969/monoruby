@@ -525,8 +525,8 @@ means:
 
 | Scope | `Executor` | Answers | Used for |
 |---|---|---|---|
-| **Call site** | `site_refinements` | the running frame's own set; `EMPTY` for a native frame and for a frame of the Ruby-written core | call sites and operators (`find_method_at_site`, `invoke_method_op`), interpolation, `case` / `when` and `rescue`'s `===`, `defined?(recv.m)` |
-| **Ruby level** | `ruby_level_refinements` | the nearest *user* Ruby frame's set, walking out through native frames and frames of the Ruby-written core — CRuby's `rb_vm_cref()`, the core being C there | `public_send` and `&:sym` (`CALL_PUBLIC`), `&obj` → `to_proc`, the second try of `rb_funcallv_public`, the C API's `rb_respond_to`, the scope a `def` / `refine` snapshots |
+| **Call site** | `site_refinements` | the running frame's own set; `EMPTY` for a native frame and for a frame of the Ruby-written core | call sites and operators (`find_method_at_site`, `invoke_method_op`), interpolation, `case` / `when` and `rescue`'s `===`, `defined?(recv.m)`, `&obj` → `to_proc` (`BlockCode`, at the call as CRuby's `vm_to_proc`) |
+| **Ruby level** | `ruby_level_refinements` | the nearest *user* Ruby frame's set, walking out through native frames and frames of the Ruby-written core — CRuby's `rb_vm_cref()`, the core being C there | `public_send` and `&:sym` (`CALL_PUBLIC`), the second try of `rb_funcallv_public`, the C API's `rb_respond_to`, the scope a `def` / `refine` snapshots |
 | **Funcall** | — (`RefinementSetId::EMPTY`) | no refinement | everything else a builtin calls: `find_method`, `invoke_method_inner`, `invoke_method_if_exists` — `rb_funcall` / `rb_check_funcall` |
 
 The default is the blind one. `<=>` under `sort`, `coerce` under `1 + x`,

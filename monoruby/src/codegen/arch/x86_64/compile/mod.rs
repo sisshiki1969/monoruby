@@ -2046,20 +2046,71 @@ impl Codegen {
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`: the
     /// block a `&expr` value passes from a body whose refinements are
-    /// `set`. Runs Ruby (and can fail) only once `Symbol#to_proc` is
-    /// redefined.
+    /// `set`. With `general` (`AsmInst::BlockCode`), the block goes to
+    /// `dst` instead: `nil` and a Proc pass inline, and the call, which may
+    /// fail or run Ruby, is out of line, followed by the error check and
+    /// the basic-op check against `version`.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
         set: RefinementSetId,
         pc: BytecodePtr,
         using_fpr: UsingFpr,
+        general: Option<(SlotId, DestLabel, u32, DestLabel)>,
     ) {
+        let Some((dst, deopt, version, error)) = general else {
+            monoasm!( &mut self.jit,
+                movq rdx, [rbp - (jrbp_local(src))];
+            );
+            self.block_code_call(set, pc, using_fpr);
+            return;
+        };
+        let packed = self.jit.label();
+        let call = self.jit.label();
+        let exit = self.jit.label();
+        let bop_flag = self.bop_redefined_flags.clone();
+        monoasm!( &mut self.jit,
+            movq rax, [rbp - (jrbp_local(src))];
+            testq rax, 0b111;
+            jnz  packed;
+            cmpb [rax + (RVALUE_OFFSET_TY)], (ObjTy::PROC.get());
+            jne  call;
+        exit:
+        );
+        if dst != src {
+            monoasm!( &mut self.jit,
+                movq [rbp - (jrbp_local(dst))], rax;
+            );
+        }
+        self.select_page(1);
+        monoasm!( &mut self.jit,
+        packed:
+            cmpq rax, (NIL_VALUE);
+            jeq  exit;
+        call:
+            movq rdx, rax;
+        );
+        self.block_code_call(set, pc, using_fpr);
+        // The Ruby `to_proc` ran may have redefined a basic operator
+        // (#2198).
+        monoasm!( &mut self.jit,
+            testq rax, rax;
+            jz   error;
+            movq [rbp - (jrbp_local(dst))], rax;
+            cmpl [rip + bop_flag], (version as i32);
+            jeq  exit;
+            movq rdi, (Value::symbol_from_str("_bop_guard").id());
+            jmp  deopt;
+        );
+        self.select_page(0);
+    }
+
+    /// rax <- `runtime::jit_block_code(vm, globals, rdx, set, pc)`.
+    fn block_code_call(&mut self, set: RefinementSetId, pc: BytecodePtr, using_fpr: UsingFpr) {
         self.fpr_save(using_fpr);
         monoasm!( &mut self.jit,
             movq rdi, rbx;
             movq rsi, r12;
-            movq rdx, [rbp - (jrbp_local(src))];
             movq rcx, (set.get() as u64);
             movq r8, (pc.as_ptr() as u64);
             // In a helper that may run Ruby: `Executor::jit_helper_cfp`.

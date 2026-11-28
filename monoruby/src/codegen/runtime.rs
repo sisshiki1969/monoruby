@@ -843,8 +843,10 @@ pub(super) extern "C" fn yield_symbol_proc1(
 /// (`Globals::refined_symbol_proc`), which carries the scope's refinements
 /// to whoever yields to it, and any other Symbol passes as it is. Once
 /// `Symbol#to_proc` is redefined, a Symbol passes what its `to_proc`
-/// answers, which must be a Proc (#2180). Every other value passes as it
-/// is. `None` when `to_proc` raised or answered something else.
+/// answers, which must be a Proc (#2180). `nil` and a Proc pass as they
+/// are, and anything else passes what its `to_proc` answers, here at the
+/// call site as in CRuby, whether or not the callee uses the block
+/// (#2277). `None` when `to_proc` raised or answered something else.
 ///
 pub(super) extern "C" fn vm_block_code(
     vm: &mut Executor,
@@ -881,15 +883,16 @@ fn block_code(
     pc: BytecodePtr,
     class_version: u32,
 ) -> Option<Value> {
-    let Some(symbol) = val.try_symbol() else {
+    if let Some(symbol) = val.try_symbol() {
+        if globals.store.symbol_to_proc_is_builtin(class_version) {
+            return Some(if set.is_empty() {
+                val
+            } else {
+                globals.refined_symbol_proc(symbol, set, pc)
+            });
+        }
+    } else if val.is_nil() || val.is_proc().is_some() {
         return Some(val);
-    };
-    if globals.store.symbol_to_proc_is_builtin(class_version) {
-        return Some(if set.is_empty() {
-            val
-        } else {
-            globals.refined_symbol_proc(symbol, set, pc)
-        });
     }
     match vm.block_arg_to_proc_in(globals, val, set) {
         Ok(proc) => Some(proc.into()),

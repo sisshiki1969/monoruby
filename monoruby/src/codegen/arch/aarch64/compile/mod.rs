@@ -3851,19 +3851,82 @@ impl Codegen {
     }
 
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
-    /// Mirrors x86 `emit_block_code`; runs Ruby (and can fail) only once
-    /// `Symbol#to_proc` is redefined.
+    /// Mirrors x86 `emit_block_code`: with `general`, the block goes to
+    /// `dst`, `nil` and a Proc pass inline, and the call, which may fail or
+    /// run Ruby, is followed by the error check and the basic-op check
+    /// against `version`.
     pub(in crate::codegen::jitgen) fn emit_block_code(
         &mut self,
         src: SlotId,
         set: RefinementSetId,
         pc: BytecodePtr,
         using_fpr: UsingFpr,
+        general: Option<(SlotId, DestLabel, u32, DestLabel)>,
     ) {
         let lfp = GP::R14.a64().0;
         let off = src.0 as u32 * 8 + LFP_SELF as u32;
+        let Some((dst, deopt, version, error)) = general else {
+            self.a64_frame_load(2, lfp, off); // val
+            self.a64_block_code_call(set, pc, using_fpr);
+            return;
+        };
+        let dst_off = dst.0 as u32 * 8 + LFP_SELF as u32;
+        let packed = self.jit.label();
+        let call = self.jit.label();
+        let exit = self.jit.label();
+        self.a64_frame_load(0, lfp, off); // val (rax)
+        monoasm_arm64!(&mut self.jit,
+            mov x9, #7;
+            and x9, x0, x9;
+            cbnz x9, packed;                 // an immediate
+            ldrb w9, [x0, #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::PROC.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            b call;
+            packed:
+            cmp x0, #(NIL_VALUE as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &exit);
+        monoasm_arm64!(&mut self.jit,
+            call:
+            mov x2, x0;
+        );
+        self.a64_block_code_call(set, pc, using_fpr);
+        // The Ruby `to_proc` ran may have redefined a basic operator
+        // (#2198).
+        let flag_addr = self
+            .jit
+            .get_label_address(&self.bop_redefined_flags)
+            .as_ptr() as u64;
+        monoasm_arm64!(&mut self.jit,
+            cbz x0, error;
+        );
+        self.a64_frame_store(0, lfp, dst_off);
+        monoasm_arm64!(&mut self.jit,
+            mov x9, (flag_addr);
+            ldr w9, [x9];
+            mov x10, (version as u64);
+            cmp x9, x10;
+        );
+        let done = self.jit.label();
+        self.jit.bcond_label(monoasm::Cond::Eq, &done);
+        monoasm_arm64!(&mut self.jit,
+            b deopt;
+            exit:
+        );
+        if dst != src {
+            self.a64_frame_store(0, lfp, dst_off);
+        }
+        monoasm_arm64!(&mut self.jit,
+            done:
+        );
+    }
+
+    /// x0 <- `runtime::jit_block_code(vm, globals, x2, set, pc)`.
+    fn a64_block_code_call(&mut self, set: RefinementSetId, pc: BytecodePtr, using_fpr: UsingFpr) {
         self.emit_fpr_save(using_fpr, false);
-        self.a64_frame_load(2, lfp, off); // val
         let f = runtime::jit_block_code as *const () as u64;
         let set = set.get() as u64;
         let pc = pc.as_ptr() as u64;

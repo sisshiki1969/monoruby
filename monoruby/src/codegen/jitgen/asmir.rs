@@ -1444,12 +1444,14 @@ impl AsmIr {
 
     /// rax <- the block the `&expr` value in `src` passes from a scope
     /// whose refinement set is `set` (`runtime::jit_block_code`).
+    /// `general`: see [`AsmInst::BlockCode`].
     pub(super) fn block_code(
         &mut self,
         state: &AbstractFrame,
         src: SlotId,
         set: RefinementSetId,
         pc: BytecodePtr,
+        general: Option<(SlotId, AsmDeopt, AsmError)>,
     ) {
         let using_fpr = state.using_fpr_offset();
         self.push(AsmInst::BlockCode {
@@ -1457,6 +1459,7 @@ impl AsmIr {
             set,
             pc,
             using_fpr,
+            general,
         });
     }
 
@@ -3722,11 +3725,20 @@ pub(super) enum AsmInst {
         bop: (SlotId, AsmDeopt),
     },
     /// rax <- `runtime::jit_block_code(vm, globals, [src], set, pc)`.
+    ///
+    /// `general` is for a value of any class, and stores the result in its
+    /// slot rather than rax: `nil` and a Proc pass inline and only anything
+    /// else calls, out of line, which may fail (to the error exit) or run
+    /// Ruby (`#to_proc`). That call is followed by the basic-op check,
+    /// whose exit is taken when the Ruby redefined a basic operator.
+    /// Without it, the value is a Symbol that the call converts without
+    /// running Ruby.
     BlockCode {
         src: SlotId,
         set: RefinementSetId,
         pc: BytecodePtr,
         using_fpr: UsingFpr,
+        general: Option<(SlotId, AsmDeopt, AsmError)>,
     },
     ConcatStr {
         arg: SlotId,
