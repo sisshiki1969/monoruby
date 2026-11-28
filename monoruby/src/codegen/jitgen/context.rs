@@ -4676,11 +4676,10 @@ impl<'a> JitContext<'a> {
         {
             return false;
         }
-        let Some(callid) = self.stack_frame[pos].callid else {
-            return false;
-        };
-        let cs = &self.store[callid];
-        cs.block_fid.is_none() && cs.block_arg.is_none() && cs.dst.is_none()
+        self.stack_frame[pos].callid.is_some_and(|callid| {
+            let cs = &self.store[callid];
+            cs.block_fid.is_none() && cs.block_arg.is_none() && cs.dst.is_none()
+        })
     }
 
     ///

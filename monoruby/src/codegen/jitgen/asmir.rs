@@ -1728,6 +1728,21 @@ impl AsmIr {
         });
     }
 
+    ///
+    /// Build the Array literal *callid* from its *len* elements in the
+    /// slots from *src*: inline when they fit the inline buffer.
+    ///
+    pub(super) fn new_array_of_slots(
+        &mut self,
+        using_fpr: UsingFpr,
+        callid: CallSiteId,
+        src: SlotId,
+        len: u16,
+    ) {
+        let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
+        self.new_array(using_fpr, callid, inline);
+    }
+
     pub(super) fn array_min_max(
         &mut self,
         using_fpr: UsingFpr,

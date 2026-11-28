@@ -4500,15 +4500,10 @@ impl AbstractState {
                     if self.deferred_forward_info().is_some() {
                         ir.set_kw_vetoed();
                     }
-                    self.materialize_virtual_args(ir, callsite);
                     // The eager fill reads the `**kwrest` slot as a real
-                    // `Hash` (or `nil` for none): an elided one is built
-                    // now, or its keywords would be lost.
-                    if let Some(k) = kwrest_guard
-                        && self.virtual_at(k).is_some()
-                    {
-                        self.materialize_virtual_at(ir, k, UsingFpr::new());
-                    }
+                    // `Hash` (or `nil` for none); no local holds an elided
+                    // object, so it is one already.
+                    self.materialize_virtual_args(ir, callsite);
                     None
                 }
             };
@@ -4616,12 +4611,10 @@ impl AbstractState {
             if self.deferred_forward_info().is_some() {
                 ir.set_kw_vetoed();
             }
+            // A `**h` operand is never elided: only a positional argument
+            // can be handed over, and every other read builds the object
+            // first (`JitContext::settle_virtuals`).
             self.materialize_virtual_args(ir, callsite);
-            for &k in callsite.hash_splat_pos() {
-                if self.virtual_at(k).is_some() {
-                    self.materialize_virtual_at(ir, k, UsingFpr::new());
-                }
-            }
             self.write_back_recv_and_callargs(ir, callsite);
             let error = ir.new_error(self);
             ir.push(AsmInst::SetArgumentsForwardedHelper { callid, callee_fid });

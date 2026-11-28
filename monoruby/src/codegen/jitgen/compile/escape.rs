@@ -633,11 +633,9 @@ impl<'a> JitContext<'a> {
             // The rest `Array` of `def f(...)`: `g(x.., ...)` with the
             // trailing `...` splat being this object, in a framed callee
             // (the only kind with a `*rest`).
-            VirtualSrc::CallerSlots {
-                base: SlotBase::SavedFp,
-                ..
-            } => Self::forwarded_rest_slot(cs) == Some(slot),
-            VirtualSrc::CallerSlots { .. } => false,
+            VirtualSrc::CallerSlots { base, .. } => {
+                matches!(base, SlotBase::SavedFp) && Self::forwarded_rest_slot(cs) == Some(slot)
+            }
             // An elided Range's endpoints are this frame's slots, which
             // the callee cannot be handed.
             VirtualSrc::Range { .. } => false,
@@ -782,8 +780,7 @@ impl<'a> JitContext<'a> {
             VirtualSrc::Slots { src, len, callid } => {
                 state.write_back_range(ir, src, len);
                 let using_fpr = state.get_using_fpr(ir);
-                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
-                ir.new_array(using_fpr, callid, inline);
+                ir.new_array_of_slots(using_fpr, callid, src, len);
                 state.def_reg2acc_class(ir, GP::Rax, dst, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) if val.class().is_always_frozen() => {
@@ -968,11 +965,8 @@ impl<'a> JitContext<'a> {
         // expands into the temporaries right above the object): copy from
         // the far end first, as a `memmove` does, so no element is
         // overwritten before it is read.
-        let own = match virt {
-            VirtualSrc::Slots { src, .. } => Some(src),
-            _ => None,
-        };
-        let order: Vec<u16> = if own.is_some_and(|elems| dst > elems) {
+        let backward = matches!(virt, VirtualSrc::Slots { src: elems, .. } if dst > elems);
+        let order: Vec<u16> = if backward {
             (0..len).rev().collect()
         } else {
             (0..len).collect()
@@ -1474,8 +1468,7 @@ impl AbstractFrame {
         match src {
             VirtualSrc::Slots { src, len, callid } => {
                 self.write_back_range(ir, src, len);
-                let inline = (len as usize <= ARRAY_INLINE_CAPA).then_some((src, len));
-                ir.new_array(using_fpr, callid, inline);
+                ir.new_array_of_slots(using_fpr, callid, src, len);
                 self.def_reg2acc_class(ir, GP::Rax, slot, ARRAY_CLASS);
             }
             VirtualSrc::Literal(val) => {
