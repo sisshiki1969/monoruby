@@ -6161,17 +6161,30 @@ impl Executor {
 
     /// `obj.to_proc` for a `&obj` block argument, under the refinement set
     /// *set* of the scope that wrote the `&`. Matches CRuby's `&obj`
-    /// coercion: a non-Proc `#to_proc` result and a missing `#to_proc` both
-    /// raise TypeError.
+    /// coercion (`vm_to_proc`): a `#to_proc` of any visibility is called,
+    /// and without one the conversion protocol asks `method_missing`
+    /// ([`check_funcall`], where a `nil` answer means "no conversion"). A
+    /// non-Proc result and a missing `#to_proc` both raise TypeError.
     pub(crate) fn block_arg_to_proc_in(
         &mut self,
         globals: &mut Globals,
         obj: Value,
         set: RefinementSetId,
     ) -> Result<Proc> {
-        if let Some(result) =
-            self.invoke_method_if_exists_in(globals, IdentId::TO_PROC, obj, &[], None, None, set)?
-        {
+        let result = match self.invoke_method_if_exists_in(
+            globals,
+            IdentId::TO_PROC,
+            obj,
+            &[],
+            None,
+            None,
+            set,
+        )? {
+            Some(result) => Some(result),
+            None => crate::coerce::check_funcall(self, globals, obj, IdentId::TO_PROC)?
+                .filter(|v| !v.is_nil()),
+        };
+        if let Some(result) = result {
             if let Some(proc) = result.is_proc() {
                 return Ok(proc);
             }
@@ -6185,12 +6198,12 @@ impl Executor {
                 IdentId::TO_PROC,
             ));
         }
-        // No `#to_proc`: `no implicit conversion of X into Proc`.
-        Err(MonorubyErr::no_implicit_conversion(
-            &globals.store,
-            obj,
-            PROC_CLASS,
-        ))
+        // No `#to_proc`: `no implicit conversion of X into Proc`, X a
+        // class name even for `true` / `false`.
+        Err(MonorubyErr::typeerr(format!(
+            "no implicit conversion of {} into Proc",
+            obj.get_real_class_name(&globals.store)
+        )))
     }
 
     /// The block of the frame `lfp`, a method some levels out from the

@@ -393,8 +393,19 @@ impl Codegen {
                 set,
                 pc,
                 using_fpr,
+                general,
             } => {
-                self.emit_block_code(src, set, pc, using_fpr);
+                let general = general.map(|(dst, deopt, error)| {
+                    let deopt =
+                        self.deopt_label(labels, deopt, DeoptCause::Static("basic op redefined"));
+                    (
+                        dst,
+                        deopt,
+                        self.bop_redefine_version(),
+                        labels[error].clone(),
+                    )
+                });
+                self.emit_block_code(src, set, pc, using_fpr, general);
             }
             AsmInst::DeepCopyLit(v, using_fpr) => {
                 self.emit_deep_copy_lit(v, using_fpr);

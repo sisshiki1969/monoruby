@@ -31,6 +31,7 @@ mod bang_operator;
 mod begin_end;
 mod bigdecimal;
 mod bigint_const_ops;
+mod block_arg_to_proc;
 mod block_forward_proxy;
 mod block_param_assign;
 mod block_root_recv_miss_heal;

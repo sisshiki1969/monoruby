@@ -489,11 +489,9 @@ impl Codegen {
     }
 
     /// op 182 `BlockCode`: dst `[pc+4]` <- the block the `&expr` value in
-    /// src `[pc+2]` passes. A non-Symbol passes as it is with no call; a
-    /// Symbol asks `runtime::vm_block_code`, which answers it unchanged
-    /// unless this frame's scope activated refinements or `Symbol#to_proc`
-    /// was redefined. Only the latter runs Ruby and can fail.
-    /// (x86 `BcOp::BlockCode`.)
+    /// src `[pc+2]` passes. `nil` and a Proc pass as they are with no call;
+    /// anything else asks `runtime::vm_block_code`, which may run Ruby
+    /// (`to_proc`) and fail. (x86 `BcOp::BlockCode`.)
     pub(in crate::codegen) fn a64_op_block_code(&mut self) -> CodePtr {
         let p = self.jit.get_current_address();
         let raise = self.entry_raise.clone();
@@ -507,15 +505,21 @@ impl Codegen {
             ldrh x10, [x(PC.0), #(2)];  // src slot
         );
         self.a64_slot_value(X10); // X10 = slot[src]
+        // `nil` and a Proc pass as they are; anything else calls.
         monoasm_arm64!(&mut self.jit,
             mov x0, x10;
-            mov x9, (0xff);
-            and x9, x10, x9;
-            cmp x9, #(crate::value::TAG_SYMBOL as u32);
+            cmp x10, #(NIL_VALUE as u32);
         );
-        self.jit.bcond_label(monoasm::Cond::Eq, &call);
+        self.jit.bcond_label(monoasm::Cond::Eq, &store);
         monoasm_arm64!(&mut self.jit,
-            b store;
+            mov x9, #7;
+            and x9, x10, x9;
+            cbnz x9, call;              // an immediate other than nil
+            ldrb w9, [x10, #(RVALUE_OFFSET_TY as u32)];
+            cmp x9, #(ObjTy::PROC.get() as u32);
+        );
+        self.jit.bcond_label(monoasm::Cond::Eq, &store);
+        monoasm_arm64!(&mut self.jit,
             call:
             mov x0, x(EXEC.0);
             mov x1, x(GLOBALS.0);

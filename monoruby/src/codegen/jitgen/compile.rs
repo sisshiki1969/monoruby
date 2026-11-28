@@ -1145,17 +1145,22 @@ impl<'a> JitContext<'a> {
                 state.unset_side_effect_guard();
             }
             TraceIr::BlockCode { dst, src } => {
-                // Only a Symbol becomes something else
-                // (`runtime::jit_block_code`): in a scope with refinements
-                // active, or once `Symbol#to_proc` is redefined. The set is
-                // this body's, a compile-time constant (`using` bumps the
-                // class version); that `Symbol#to_proc` is the builtin is
-                // an assumption the class-version guard keeps, recorded so
-                // the salvage asks it again.
+                // `nil` and a Proc pass as they are; anything else but a
+                // Symbol passes what its `to_proc` answers
+                // (`runtime::jit_block_code`). A Symbol becomes something
+                // else in a scope with refinements active, or once
+                // `Symbol#to_proc` is redefined. The set is this body's, a
+                // compile-time constant (`using` bumps the class version);
+                // that `Symbol#to_proc` is the builtin is an assumption the
+                // class-version guard keeps, recorded so the salvage asks
+                // it again.
                 let set = self.refinements();
-                let maybe_symbol = state.class(src).is_none_or(|c| c == SYMBOL_CLASS);
-                let builtin_to_proc = maybe_symbol && self.assume_builtin_symbol_to_proc(state, ir);
-                if !maybe_symbol || (builtin_to_proc && set.is_empty()) {
+                let class = state.class(src);
+                let builtin_to_proc =
+                    class == Some(SYMBOL_CLASS) && self.assume_builtin_symbol_to_proc(state, ir);
+                if matches!(class, Some(NIL_CLASS) | Some(PROC_CLASS))
+                    || (builtin_to_proc && set.is_empty())
+                {
                     if dst != src {
                         if !matches!(state.mode(src), LinkMode::S(_) | LinkMode::C(_)) {
                             state.flush_gp(ir);
@@ -1166,20 +1171,28 @@ impl<'a> JitContext<'a> {
                     // Runs no Ruby and cannot fail.
                     state.flush_gp(ir);
                     state.write_back(ir, src, Keep::All);
-                    ir.block_code(state, src, set, pc);
+                    ir.block_code(state, src, set, pc, None);
                     state.def_rax2acc(ir, dst);
                 } else {
-                    // A Symbol calls the redefined `to_proc`.
+                    // Any value: `nil` and a Proc pass inline, and only
+                    // anything else calls, out of line. Only that call can
+                    // fail or run Ruby (`to_proc`), so the error check and
+                    // the basic-op check (`check_bop_after_helper`) are
+                    // there too. Both paths leave the result in `dst`.
                     state.flush_gp(ir);
                     state.write_back(ir, src, Keep::All);
                     let error = ir.new_error(state);
-                    ir.block_code(state, src, set, pc);
-                    ir.handle_error(error);
+                    let mut after = state.clone();
+                    after.def_S(dst);
+                    after.unset_class_version_guard();
+                    after.unset_const_version_guard();
+                    after.unset_side_effect_guard();
+                    let deopt = ir.bop_deopt_after(&after, self.recv_miss_recompile_target());
+                    ir.block_code(state, src, set, pc, Some((dst, deopt, error)));
                     state.unset_class_version_guard();
                     state.unset_const_version_guard();
                     state.unset_side_effect_guard();
-                    state.def_rax2acc(ir, dst);
-                    self.check_bop_after_helper(state, ir);
+                    state.def_S(dst);
                 }
             }
             TraceIr::Mov(dst, src) => {

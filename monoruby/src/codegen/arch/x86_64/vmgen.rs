@@ -362,20 +362,27 @@ impl Codegen {
         self.fetch_and_dispatch();
 
         //BcOp::BlockCode
-        // A non-Symbol passes as it is with no call; a Symbol asks
-        // `runtime::vm_block_code`, which answers it unchanged unless this
-        // frame's scope activated refinements or `Symbol#to_proc` was
-        // redefined. Only the latter runs Ruby and can fail.
+        // `nil` and a Proc pass as they are with no call; anything else
+        // asks `runtime::vm_block_code`. A Symbol comes back unchanged
+        // unless this frame's scope activated refinements or
+        // `Symbol#to_proc` was redefined; any other value passes what its
+        // `to_proc` answers, which runs Ruby and can fail.
         let block_code = self.jit.get_current_address();
         let raise = self.entry_raise();
         let store = self.jit.label();
+        let call = self.jit.label();
         let class_version = self.class_version_label();
         self.fetch3();
         self.vm_get_slot_value(GP::Rdi);
         monoasm! { &mut self.jit,
             movq rax, rdi;
-            cmpb rdi, (crate::value::TAG_SYMBOL);
-            jne  store;
+            cmpq rdi, (NIL_VALUE);
+            jeq  store;
+            testq rdi, 0b111;
+            jnz  call;
+            cmpb [rdi + (RVALUE_OFFSET_TY)], (ObjTy::PROC.get());
+            jeq  store;
+        call:
             movq rdx, rdi;
             movq rdi, rbx;
             movq rsi, r12;
