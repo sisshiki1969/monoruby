@@ -168,3 +168,26 @@ fn psych_event_api_like_cruby() {
         "##,
     );
 }
+
+/// An emitter made on one Ruby `Thread` and fed on another, each a kernel
+/// thread of its own (#2268), and `YAML.dump` / `load` on a thread.
+#[test]
+fn psych_emitter_across_threads() {
+    ensure_extension("psych_native");
+    run_test_once(
+        r##"
+        require "yaml"
+        require "stringio"
+        io = StringIO.new("".dup)
+        e = Psych::Emitter.new(io)
+        e.start_stream(Psych::Parser::UTF8)
+        Thread.new {
+          e.start_document([], [], true)
+          e.scalar("a", nil, nil, true, false, Psych::Nodes::Scalar::ANY)
+          e.end_document(true)
+        }.join
+        e.end_stream
+        [io.string, Thread.new { YAML.load(YAML.dump({"a" => [1, 2]})) }.value]
+        "##,
+    );
+}

@@ -19,9 +19,10 @@
 
 use libsqlite3_src as sq;
 use monoruby_ext::*;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------
 // Classes
@@ -33,28 +34,22 @@ use std::ffi::{CStr, CString, c_char, c_int, c_void};
 /// then extends, and their native instance type is in place from the
 /// start.
 ///
-/// Per interpreter, keyed by `Ctx::interpreter_id`: this library's
-/// statics are process-wide while `Init_` runs once in each interpreter
-/// of the process (one per test in monoruby's harness). monoruby runs one
-/// interpreter per OS thread, so a thread-local holding the last one
-/// initialized on this thread is enough, and the id check catches a
-/// thread that builds a second.
+/// Per interpreter ([`PerInterpreter`]): this library's statics are
+/// process-wide while `Init_` runs once in each interpreter of the
+/// process (one per test in monoruby's harness), and the methods are
+/// called from whichever kernel thread runs the Ruby `Thread` (#2268).
+#[derive(Clone, Copy)]
 struct Classes {
     sqlite3: Value,
 }
 
-thread_local! {
-    static CLASSES: RefCell<Option<(usize, Classes)>> = const { RefCell::new(None) };
-}
+static CLASSES: PerInterpreter<Classes> = PerInterpreter::new();
 
-fn sqlite3_module() -> Value {
-    CLASSES.with(|c| {
-        c.borrow()
-            .as_ref()
-            .expect("SQLite3 classes are not initialized")
-            .1
-            .sqlite3
-    })
+fn sqlite3_module(ctx: &Ctx) -> Value {
+    CLASSES
+        .get(ctx)
+        .expect("SQLite3 classes are not initialized")
+        .sqlite3
 }
 
 #[unsafe(no_mangle)]
@@ -64,15 +59,11 @@ pub unsafe extern "C" fn Init_sqlite3_native(ctx: *mut MrContext) -> c_int {
 }
 
 fn init_sqlite3(ctx: &mut Ctx) -> Result<()> {
-    let id = ctx.interpreter_id();
-    if CLASSES.with(|c| c.borrow().as_ref().is_some_and(|(i, _)| *i == id)) {
-        return Ok(());
-    }
     let sqlite3 = ctx.define_module(Value::UNDEF, "SQLite3")?;
     let database = ctx.define_class(sqlite3, "Database", Value::UNDEF, MR_CLASS_NATIVE)?;
     let statement = ctx.define_class(sqlite3, "Statement", Value::UNDEF, MR_CLASS_NATIVE)?;
     let backup = ctx.define_class(sqlite3, "Backup", Value::UNDEF, MR_CLASS_NATIVE)?;
-    CLASSES.with(|c| *c.borrow_mut() = Some((id, Classes { sqlite3 })));
+    CLASSES.set(ctx, Classes { sqlite3 });
 
     // ---- SQLite3 module functions
     let s = MR_METHOD_SINGLETON;
@@ -397,7 +388,7 @@ fn error_class_name(code: c_int) -> &'static str {
 /// A `SQLite3::Exception` with no result code, for the misuse the C
 /// extension reports itself (a closed handle, an unknown bind parameter).
 fn err_sqlite3(ctx: &mut Ctx, msg: &str) -> Error {
-    match ctx.const_get(sqlite3_module(), "Exception") {
+    match ctx.const_get(sqlite3_module(ctx), "Exception") {
         Some(klass) => ctx.raise(klass, msg),
         // Only reachable before `errors.rb` has been required.
         None => ctx.runtime_error(msg),
@@ -415,7 +406,7 @@ fn raise_code(
     msg: &str,
     sql: Option<(*mut sq::sqlite3, &str)>,
 ) -> Error {
-    let sqlite3 = sqlite3_module();
+    let sqlite3 = sqlite3_module(ctx);
     let Some(klass) = ctx
         .const_get(sqlite3, error_class_name(code))
         .or_else(|| ctx.const_get(sqlite3, "Exception"))
@@ -1012,24 +1003,28 @@ thread_local! {
     /// stepping two connections never meet; nesting on one connection —
     /// which SQLite allows, and the C extension permits — still works,
     /// since the inner guard restores the outer on the way out.
+    ///
+    /// Per kernel thread is right under the 1:1 thread model too: SQLite
+    /// calls a function back on the thread that is stepping, so the entry
+    /// a callback looks for is always on its own thread.
     static CALLS: RefCell<HashMap<usize, *mut CallState>> = RefCell::new(HashMap::default());
 }
 
-thread_local! {
-    /// Whether any user function has been defined on this thread.
-    ///
-    /// `stmt_step` is the hot path — one call per row — and installing a
-    /// guard costs an allocation and a map write. Almost no program
-    /// defines a function, so the guard is skipped entirely while this
-    /// is zero, leaving that path exactly as it was.
-    ///
-    /// It only ever grows: closing a connection drops its functions, but
-    /// SQLite frees them from whichever thread runs the close, and this
-    /// counter is per thread. Undercounting would skip a guard a
-    /// callback needs, so the count is deliberately never reduced except
-    /// when a registration fails outright.
-    static FUNC_COUNT: Cell<usize> = const { Cell::new(0) };
-}
+/// Whether any user function has been defined, in any interpreter of
+/// the process.
+///
+/// `stmt_step` is the hot path — one call per row — and installing a
+/// guard costs an allocation and a map write. Almost no program
+/// defines a function, so the guard is skipped entirely while this
+/// is zero, leaving that path exactly as it was.
+///
+/// Process-wide, not per thread: a function defined on one Ruby `Thread`
+/// is called back from a step run on another, each on a kernel thread of
+/// its own (#2268). It only ever grows: closing a connection drops its
+/// functions, but nothing tells this counter which ones. Undercounting
+/// would skip a guard a callback needs, so the count is deliberately
+/// never reduced except when a registration fails outright.
+static FUNC_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Make the context reachable from a callback for the duration of a step,
 /// and take back any exception a callback left behind.
@@ -1048,7 +1043,7 @@ struct CallGuardInner {
 
 /// Whether anything could call back, so a step needs a guard at all.
 fn guard_needed() -> bool {
-    FUNC_COUNT.with(|n| n.get()) != 0
+    FUNC_COUNT.load(Ordering::Relaxed) != 0
 }
 
 impl CallGuard {
@@ -1172,7 +1167,7 @@ fn to_sql(ctx: &mut Ctx, value: Value) -> Result<Option<Sql>> {
 /// Whether `v` is a `SQLite3::Blob` (the gem's String subclass for BLOB
 /// columns).
 fn is_blob(ctx: &Ctx, v: Value) -> bool {
-    match ctx.const_get(sqlite3_module(), "Blob") {
+    match ctx.const_get(sqlite3_module(ctx), "Blob") {
         Some(blob) => ctx.is_kind_of(v, blob),
         None => false,
     }
@@ -1489,7 +1484,7 @@ fn db_define_aggregator(ctx: &mut Ctx, this: Value, args: &[Value], _: Block) ->
     // Rooted for as long as SQLite may instantiate it.
     db_handle(ctx, this)?.funcs.push(klass);
     let entry = Box::into_raw(Box::new(FuncEntry { value: klass }));
-    FUNC_COUNT.with(|n| n.set(n.get() + 1));
+    FUNC_COUNT.fetch_add(1, Ordering::Relaxed);
     // SAFETY: a live connection and a NUL-terminated name; `entry` goes
     // to SQLite, which gives it back to `func_destroy`.
     let rc = unsafe {
@@ -1509,7 +1504,7 @@ fn db_define_aggregator(ctx: &mut Ctx, this: Value, args: &[Value], _: Block) ->
         // `entry` is not ours to free: SQLite runs `xDestroy` on the
         // application data when the registration itself fails, so the
         // box has already been dropped by the time this is reached.
-        FUNC_COUNT.with(|n| n.set(n.get() - 1));
+        FUNC_COUNT.fetch_sub(1, Ordering::Relaxed);
         check(ctx, db, rc)?;
     }
     Ok(this)
@@ -1570,7 +1565,7 @@ fn register_function(
     }
     let entry = Box::into_raw(Box::new(FuncEntry { value: proc_ }));
     // From here on `stmt_step` installs a guard: something can call back.
-    FUNC_COUNT.with(|n| n.set(n.get() + 1));
+    FUNC_COUNT.fetch_add(1, Ordering::Relaxed);
     // SAFETY: a live connection and a NUL-terminated name; `entry` is
     // handed to SQLite, which gives it back to `func_destroy`.
     let rc = unsafe {
@@ -1589,7 +1584,7 @@ fn register_function(
     if rc != sq::SQLITE_OK {
         // As above: a failed registration still runs `xDestroy`, so the
         // box is already gone and freeing it here would double-free.
-        FUNC_COUNT.with(|n| n.set(n.get() - 1));
+        FUNC_COUNT.fetch_sub(1, Ordering::Relaxed);
         check(ctx, db, rc)?;
     }
     Ok(this)

@@ -26,7 +26,6 @@
 
 pub(crate) use libxml2_src as xml;
 pub(crate) use monoruby_ext::*;
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
@@ -212,12 +211,12 @@ pub(crate) struct Classes {
     pub stylesheet: Value,
 }
 
-thread_local! {
-    static CLASSES: RefCell<Option<(usize, Classes)>> = const { RefCell::new(None) };
-}
+/// Not a `thread_local!`: the methods run on whichever kernel thread
+/// runs the Ruby `Thread` that calls them (#2268).
+static CLASSES: PerInterpreter<Classes> = PerInterpreter::new();
 
-pub(crate) fn classes() -> Classes {
-    CLASSES.with(|c| c.borrow().as_ref().expect("Nokogiri is not initialized").1)
+pub(crate) fn classes(ctx: &Ctx) -> Classes {
+    CLASSES.get(ctx).expect("Nokogiri is not initialized")
 }
 
 fn module(ctx: &mut Ctx, parent: Value, name: &str) -> Result<Value> {
@@ -246,10 +245,6 @@ pub unsafe extern "C" fn Init_nokogiri_native(ctx: *mut MrContext) -> c_int {
 /// constants. Run once per interpreter, before the gem's Ruby files
 /// reopen the classes.
 fn nokogiri_init(ctx: &mut Ctx) -> Result<()> {
-    let id = ctx.interpreter_id();
-    if CLASSES.with(|c| c.borrow().as_ref().is_some_and(|(i, _)| *i == id)) {
-        return Ok(());
-    }
     // SAFETY: plain library initialization.
     unsafe { xml::xmlInitParser() };
     let object = ctx.object_class();
@@ -348,7 +343,7 @@ fn nokogiri_init(ctx: &mut Ctx) -> Result<()> {
         xslt: xslt_m,
         stylesheet,
     };
-    CLASSES.with(|cell| *cell.borrow_mut() = Some((id, c)));
+    CLASSES.set(ctx, c);
 
     misc::init(ctx, &c);
     document::init(ctx, &c);
@@ -583,7 +578,7 @@ pub(crate) unsafe fn pin_namespace(ctx: &Ctx, ns: *mut xml::xmlNs, doc: *mut xml
 pub(crate) fn doc_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlDoc> {
     match ctx.native::<XmlDocument>(v) {
         Some(d) => Ok(d.doc),
-        None if ctx.is_kind_of(v, classes().document) => Err(uninitialized(ctx, v)),
+        None if ctx.is_kind_of(v, classes(ctx).document) => Err(uninitialized(ctx, v)),
         None => Err(ctx.argument_error("expected a Nokogiri::XML::Document")),
     }
 }
@@ -655,7 +650,7 @@ pub(crate) fn node_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlNode> {
     if let Some(d) = ctx.native::<XmlDocument>(v) {
         return Ok(d.doc as *mut xml::xmlNode);
     }
-    if ctx.is_kind_of(v, classes().node) {
+    if ctx.is_kind_of(v, classes(ctx).node) {
         return Err(uninitialized(ctx, v));
     }
     Err(ctx.argument_error("node must be a Nokogiri::XML::Node"))
@@ -688,7 +683,7 @@ pub(crate) fn wrap_node_as(
         if !(*node)._private.is_null() && doc_val.is_some() {
             return Ok(Value((*node)._private as u64));
         }
-        let c = classes();
+        let c = classes(ctx);
         let class = class.unwrap_or(match ty {
             xml::XML_ELEMENT_NODE => c.element,
             xml::XML_TEXT_NODE => c.text,
@@ -776,7 +771,7 @@ pub(crate) fn wrap_namespace(
             return Ok(Value((*ns)._private as u64));
         }
         let owned = doc.is_null();
-        let rb = ctx.native_new(classes().namespace, XmlNamespace { ns, owned })?;
+        let rb = ctx.native_new(classes(ctx).namespace, XmlNamespace { ns, owned })?;
         if let Some(dv) = doc_value(doc) {
             ctx.ivar_set(rb, "@document", dv)?;
             if let Some(d) = doc_native(ctx, doc) {
@@ -791,7 +786,7 @@ pub(crate) fn wrap_namespace(
 pub(crate) fn namespace_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlNs> {
     match ctx.native::<XmlNamespace>(v) {
         Some(n) => Ok(n.ns),
-        None if ctx.is_kind_of(v, classes().namespace) => Err(uninitialized(ctx, v)),
+        None if ctx.is_kind_of(v, classes(ctx).namespace) => Err(uninitialized(ctx, v)),
         None => Err(ctx.argument_error("expected a Nokogiri::XML::Namespace")),
     }
 }
@@ -877,7 +872,7 @@ fn opt_str(ctx: &Ctx, b: &Option<Vec<u8>>) -> Value {
 /// `noko_xml_syntax_error__wrap`: a `Nokogiri::XML::SyntaxError` (or
 /// `XPath::SyntaxError`) carrying the error's fields.
 pub(crate) fn syntax_error_value(ctx: &mut Ctx, e: &ErrorRecord) -> Result<Value> {
-    let c = classes();
+    let c = classes(ctx);
     let class = if e.domain == XML_FROM_XPATH {
         c.xpath_syntax_error
     } else {

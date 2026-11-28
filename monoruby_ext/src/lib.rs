@@ -915,3 +915,154 @@ pub unsafe fn init(ctx: *mut MrContext, f: impl FnOnce(&mut Ctx) -> Result<()>) 
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// Per-interpreter state
+// ---------------------------------------------------------------------
+
+/// A value an extension keeps for each interpreter of the process — the
+/// classes its `Init_` defined, say — reachable from any thread that
+/// runs one of the interpreter's Ruby `Thread`s.
+///
+/// A `static` of the extension is shared by every interpreter the process
+/// holds (monoruby's test harness builds one per test), so the value is
+/// filed under [`Ctx::interpreter_id`]. It is not a `thread_local!`
+/// either: each Ruby `Thread` runs on a kernel thread of its own, while
+/// `Init_` ran on one of them only (#2268).
+///
+/// The entries are a list that only grows, newest first, and is read
+/// without a lock: [`Self::get`] is on the paths that wrap an object (a
+/// libxml2 node) and costs a load and a compare when the process holds
+/// one interpreter. [`Self::set`] files a new entry in front of whatever
+/// was filed under the id: an interpreter that is gone leaves its entry
+/// behind (they are never freed), and a later one built at the same
+/// address shadows it when its own `Init_` runs.
+pub struct PerInterpreter<T: Copy + Send + Sync + 'static> {
+    head: std::sync::atomic::AtomicPtr<PerInterpreterEntry<T>>,
+}
+
+struct PerInterpreterEntry<T> {
+    id: usize,
+    value: T,
+    next: *const PerInterpreterEntry<T>,
+}
+
+impl<T: Copy + Send + Sync + 'static> PerInterpreter<T> {
+    pub const fn new() -> Self {
+        PerInterpreter {
+            head: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+        }
+    }
+
+    /// What `ctx`'s interpreter filed last, if it has.
+    pub fn get(&self, ctx: &Ctx) -> Option<T> {
+        let id = ctx.interpreter_id();
+        let mut p =
+            self.head.load(std::sync::atomic::Ordering::Acquire) as *const PerInterpreterEntry<T>;
+        while !p.is_null() {
+            // SAFETY: an entry is published (by the release in `set`) only
+            // once written, and is never freed or changed after.
+            let e = unsafe { &*p };
+            if e.id == id {
+                return Some(e.value);
+            }
+            p = e.next;
+        }
+        None
+    }
+
+    /// File `v` for `ctx`'s interpreter, in front of what was there.
+    pub fn set(&self, ctx: &Ctx, v: T) {
+        use std::sync::atomic::Ordering;
+        let entry = Box::into_raw(Box::new(PerInterpreterEntry {
+            id: ctx.interpreter_id(),
+            value: v,
+            next: std::ptr::null(),
+        }));
+        let mut head = self.head.load(Ordering::Relaxed);
+        loop {
+            // SAFETY: `entry` is ours until the exchange publishes it.
+            unsafe { (*entry).next = head };
+            match self
+                .head
+                .compare_exchange_weak(head, entry, Ordering::Release, Ordering::Relaxed)
+            {
+                Ok(_) => return,
+                Err(h) => head = h,
+            }
+        }
+    }
+}
+
+// SAFETY: the entries hold `T`s that are `Send + Sync` and are never
+// mutated once published; the raw `next` pointers only make the type
+// lose the auto traits.
+unsafe impl<T: Copy + Send + Sync + 'static> Sync for PerInterpreter<T> {}
+// SAFETY: as for `Sync`.
+unsafe impl<T: Copy + Send + Sync + 'static> Send for PerInterpreter<T> {}
+
+impl<T: Copy + Send + Sync + 'static> Default for PerInterpreter<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A process-wide table of native state that Ruby holds by an integer
+/// handle (a stream, an emitter): [`Self::insert`] files an entry in the
+/// first free slot and answers its index, which stays the entry's until
+/// [`Self::remove`].
+///
+/// Not a `thread_local!`: a handle made on one Ruby `Thread` is used on
+/// another, each running on a kernel thread of its own (#2268). An entry
+/// is only ever reached with the table's lock held, so `T: Send` is all
+/// it takes; an entry type that is not `Send` only because of pointers
+/// into itself (a raw C handle, an `Rc` whose clones all live in the
+/// entry) can say so with an `unsafe impl Send`. The closure given to
+/// [`Self::with`] runs with the lock held, so it must not call back into
+/// Ruby.
+pub struct HandleTable<T: Send> {
+    slots: std::sync::Mutex<Vec<Option<T>>>,
+}
+
+impl<T: Send> HandleTable<T> {
+    pub const fn new() -> Self {
+        HandleTable {
+            slots: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn slots(&self) -> std::sync::MutexGuard<'_, Vec<Option<T>>> {
+        // A panic while the lock was held (inside `with`'s closure) left
+        // the table itself consistent.
+        self.slots.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// File `entry`, answering its handle.
+    pub fn insert(&self, entry: T) -> usize {
+        let mut t = self.slots();
+        if let Some(i) = t.iter().position(|e| e.is_none()) {
+            t[i] = Some(entry);
+            i
+        } else {
+            t.push(Some(entry));
+            t.len() - 1
+        }
+    }
+
+    /// Run `f` on the entry of `handle`; `None` when there is none (never
+    /// made, or removed).
+    pub fn with<R>(&self, handle: usize, f: impl FnOnce(&mut T) -> R) -> Option<R> {
+        self.slots().get_mut(handle).and_then(|e| e.as_mut()).map(f)
+    }
+
+    /// Take the entry of `handle` out of the table.
+    pub fn remove(&self, handle: usize) -> Option<T> {
+        self.slots().get_mut(handle).and_then(|e| e.take())
+    }
+}
+
+impl<T: Send> Default for HandleTable<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}

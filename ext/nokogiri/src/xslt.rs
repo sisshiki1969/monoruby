@@ -166,6 +166,9 @@ struct XsltCall {
 }
 
 thread_local! {
+    /// The transform running on this kernel thread. Per thread, unlike
+    /// the classes (#2268): libxslt calls an extension back on the thread
+    /// that is transforming, which is the one that set this.
     static XSLT_CALL: Cell<*mut XsltCall> = const { Cell::new(std::ptr::null_mut()) };
 }
 
@@ -252,7 +255,7 @@ fn transform(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result
     if result.is_null() {
         return Err(ctx.runtime_error("could not apply the stylesheet"));
     }
-    wrap_document(ctx, classes().document, result, &[])
+    wrap_document(ctx, classes(ctx).document, result, &[])
 }
 
 /// XSLT.register(uri, klass) -> XSLT: the instance methods of `klass`
@@ -317,7 +320,7 @@ unsafe extern "C" fn ext_init(
         let mut cx = Ctx::from_raw(call.ctx);
         let ctx = &mut cx;
         let r = (|| -> Result<*mut c_void> {
-            let xslt = classes().xslt;
+            let xslt = classes(ctx).xslt;
             let modules = ctx.ivar_get(xslt, "@modules");
             let key = xml_str(ctx, uri);
             let obj = ctx.funcall(modules, "[]", &[key], None)?;

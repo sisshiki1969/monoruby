@@ -337,7 +337,7 @@ pub(crate) unsafe fn marshal_funcall(
                 xml::xmlXPathWrapNodeSet(xml::xmlXPathNodeSetMerge(std::ptr::null_mut(), set)),
             );
         } else if ty == MrType::Array {
-            let klass = classes().node_set;
+            let klass = classes(ctx).node_set;
             let set = ctx.funcall(klass, "new", &[document, result], None)?;
             let set = super::node_set::set_ptr(ctx, set)?;
             xml::valuePush(
@@ -422,7 +422,7 @@ fn evaluate(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<
         let ex = match errors.first() {
             Some(e) => syntax_error_value(ctx, e)?,
             None => {
-                let klass = classes().xpath_syntax_error;
+                let klass = classes(ctx).xpath_syntax_error;
                 let msg = ctx.str(format!("Invalid expression: {}", expr.to_string_lossy()));
                 ctx.funcall(klass, "new", &[msg], None)?
             }

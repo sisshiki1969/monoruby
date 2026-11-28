@@ -354,7 +354,7 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 ### 6.2 分かったこと
 
-- **拡張の `static` はプロセス共通、`Init_` はインタプリタごと。** テストハーネスは 1 プロセスに多数の `Globals` を作るので、拡張が定義したクラスを `static` に持つと 2 つ目のインタプリタで壊れる。`Ctx::interpreter_id`（globals ポインタ）で key する。sqlite3 は thread-local + id 照合にした。
+- **拡張の `static` はプロセス共通、`Init_` はインタプリタごと。** テストハーネスは 1 プロセスに多数の `Globals` を作るので、拡張が定義したクラスを `static` に持つと 2 つ目のインタプリタで壊れる。`Ctx::interpreter_id`（globals ポインタ）で key する。クラスは `monoruby_ext::PerInterpreter`（プロセス共通の表を id で引く）に置く。thread-local にしてはいけない: 1:1 スレッドモデルでは Ruby の `Thread` がそれぞれ別のカーネルスレッドで動き、`Init_` を走らせたスレッド以外から拡張のメソッドが呼ばれる（#2268）。整数ハンドルで Ruby に渡す native 状態（psych の emitter、zstd の stream / dict）も同じ理由で `monoruby_ext::HandleTable`。C のコールバックに渡す「実行中の呼び出し」の状態（sqlite3 の `CALLS`、nokogiri の `XSLT_CALL`）は呼び出したスレッドの上で呼び返されるので thread-local のままでよい。
 - **`require "x/4.0/x_native"` は `.rb` stand-in に届かなければならない。** ext の探索は bare な `require "x_native.so"` だけに限定した（gem の nested `.so` 名で ext に飛ぶと stand-in が持つ Ruby 側の定義を飛ばす）。
 - **テストから拡張をビルドするときは別の target dir**（`target/ext/`）。外側の `cargo test` が target dir のロックを持ったままテストを走らせるので、同じ dir への nested `cargo build` は待ち続ける。aarch64 の qemu 実行では `--target` を明示する必要がある。
 - **alloc 関数が無い代わりの「遅延 payload」。** nokogiri の `SAX::Parser` / `SAX::PushParser` / `NodeSet` はコア側で alloc 関数を持ち、`new` の時点でペイロードを作っていた。拡張では汎用 alloc がペイロード無しの instance を作るので、最初にペイロードへ触るアクセサ（`handler_ptr` / `install_push_ctxt` / `set_ptr`）が `is_kind_of` で確かめて `native_set` で埋める。`Object#dup` のコピーも同じ経路で埋まる。

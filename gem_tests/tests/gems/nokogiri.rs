@@ -1730,3 +1730,27 @@ fn nokogiri_1_19_reader_xpath_io_changes() {
         "##,
     );
 }
+
+/// The extension from a Ruby `Thread` other than the one that loaded it,
+/// each a kernel thread of its own (#2268): parsing, a document parsed
+/// on the main thread searched on another, and an XSLT extension
+/// function called back there.
+#[test]
+fn nokogiri_from_another_thread() {
+    compare(
+        r##"
+        p Thread.new { Nokogiri::XML("<a>x</a>").root.text }.value
+        doc = Nokogiri::XML("<a><b>1</b><b>2</b></a>")
+        p Thread.new { doc.xpath("//b").map(&:text) }.value
+        p Thread.new { Nokogiri::HTML5("<p>hi").at_css("p").to_html }.value
+        class Up; def up(s) = s.upcase; end
+        Nokogiri::XSLT.register("urn:f", Up)
+        xsl = Nokogiri::XSLT(<<~X)
+          <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:f="urn:f" extension-element-prefixes="f">
+            <xsl:template match="/"><r><xsl:value-of select="f:up(string(a))"/></r></xsl:template>
+          </xsl:stylesheet>
+        X
+        p Thread.new { xsl.transform(Nokogiri::XML("<a>hi</a>")).root.to_s }.value
+        "##,
+    );
+}

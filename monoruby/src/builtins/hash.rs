@@ -2868,15 +2868,28 @@ pub(super) fn tally_up(vm: &mut Executor, globals: &mut Globals, lfp: Lfp, _: By
     const FIXNUM_MAX: i64 = (1 << 62) - 1;
     let key = lfp.arg(1);
     let mut h = lfp.arg(0).as_hash_mut(&globals.store)?;
-    let count = match h.get(key, vm, globals)? {
-        None => Value::integer(1),
-        Some(v) => match v.unpack() {
-            RV::Fixnum(i) if i < FIXNUM_MAX => Value::integer(i + 1),
-            RV::BigInt(b) => Value::bigint(b + 1),
-            _ => return Err(MonorubyErr::wrong_argument_type(&globals.store, v, "Integer")),
+    // One probe, so that the key's `#hash` is sent once (#2265).
+    let count = h.update(
+        key,
+        |v, globals| {
+            Ok(match v {
+                None => Value::integer(1),
+                Some(v) => match v.unpack() {
+                    RV::Fixnum(i) if i < FIXNUM_MAX => Value::integer(i + 1),
+                    RV::BigInt(b) => Value::bigint(b + 1),
+                    _ => {
+                        return Err(MonorubyErr::wrong_argument_type(
+                            &globals.store,
+                            v,
+                            "Integer",
+                        ));
+                    }
+                },
+            })
         },
-    };
-    h.insert(key, count, vm, globals)?;
+        vm,
+        globals,
+    )?;
     Ok(count)
 }
 

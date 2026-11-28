@@ -110,7 +110,7 @@ pub(crate) fn set_ptr(ctx: &mut Ctx, v: Value) -> Result<*mut xml::xmlNodeSet> {
     if let Some(s) = ctx.native::<XmlNodeSet>(v) {
         return Ok(s.set);
     }
-    if ctx.is_kind_of(v, classes().node_set) {
+    if ctx.is_kind_of(v, classes(ctx).node_set) {
         ctx.native_set(v, XmlNodeSet::empty())?;
         return Ok(ctx.native::<XmlNodeSet>(v).unwrap().set);
     }
@@ -147,7 +147,7 @@ pub(crate) fn wrap_node_set(
         XmlNodeSet { set }
     };
     let n = inner.len();
-    let rb = ctx.native_new(classes().node_set, inner)?;
+    let rb = ctx.native_new(classes(ctx).node_set, inner)?;
     // `decorate` and the member wrapping run Ruby: root the new set.
     let len = ctx.temp_len();
     ctx.temp_push(rb);

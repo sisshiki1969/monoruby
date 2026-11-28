@@ -96,28 +96,17 @@ impl Drop for StreamEntry {
     }
 }
 
-thread_local! {
-    static DICTS: std::cell::RefCell<Vec<Option<DictEntry>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-    static STREAMS: std::cell::RefCell<Vec<Option<StreamEntry>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
+// SAFETY: a `DictEntry` / `StreamEntry` is a raw zstd object that no
+// other entry shares; zstd objects may be used from any thread, one at a
+// time, which the table's lock makes so.
+unsafe impl Send for DictEntry {}
+// SAFETY: as for `DictEntry`.
+unsafe impl Send for StreamEntry {}
 
-fn insert<T>(
-    table: &'static std::thread::LocalKey<std::cell::RefCell<Vec<Option<T>>>>,
-    entry: T,
-) -> i64 {
-    table.with(|t| {
-        let mut t = t.borrow_mut();
-        if let Some(i) = t.iter().position(|e| e.is_none()) {
-            t[i] = Some(entry);
-            i as i64
-        } else {
-            t.push(Some(entry));
-            (t.len() - 1) as i64
-        }
-    })
-}
+/// Process-wide, not per thread: a dictionary or a stream made on one
+/// Ruby `Thread` is used on another (#2268).
+static DICTS: HandleTable<DictEntry> = HandleTable::new();
+static STREAMS: HandleTable<StreamEntry> = HandleTable::new();
 
 fn handle_of(ctx: &mut Ctx, v: Value) -> Result<usize> {
     let h = ctx.int(v)?;
@@ -128,18 +117,12 @@ fn handle_of(ctx: &mut Ctx, v: Value) -> Result<usize> {
 }
 
 fn with_dict<T>(ctx: &mut Ctx, handle: usize, f: impl FnOnce(&DictEntry) -> T) -> Result<T> {
-    let r = DICTS.with(|t| {
-        let t = t.borrow();
-        t.get(handle).and_then(|e| e.as_ref()).map(f)
-    });
+    let r = DICTS.with(handle, |e| f(e));
     r.ok_or_else(|| ctx.argument_error("closed dictionary"))
 }
 
 fn with_stream<T>(ctx: &mut Ctx, handle: usize, f: impl FnOnce(&StreamEntry) -> T) -> Result<T> {
-    let r = STREAMS.with(|t| {
-        let t = t.borrow();
-        t.get(handle).and_then(|e| e.as_ref()).map(f)
-    });
+    let r = STREAMS.with(handle, |e| f(e));
     r.ok_or_else(|| ctx.argument_error("closed stream"))
 }
 
@@ -486,7 +469,7 @@ fn cdict_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value>
     if p.is_null() {
         return Err(ctx.runtime_error("ZSTD_createCDict failed"));
     }
-    Ok(Value::int(insert(&DICTS, DictEntry::C(p))))
+    Ok(Value::int(DICTS.insert(DictEntry::C(p)) as i64))
 }
 
 /// String.__zstd_ddict_new(dict) -> Integer
@@ -497,19 +480,15 @@ fn ddict_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value>
     if p.is_null() {
         return Err(ctx.runtime_error("ZSTD_createDDict failed"));
     }
-    Ok(Value::int(insert(&DICTS, DictEntry::D(p))))
+    Ok(Value::int(DICTS.insert(DictEntry::D(p)) as i64))
 }
 
 /// String.__zstd_dict_free(handle) -> nil
 fn dict_free(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
     let h = ctx.int(args[0])?;
     if h >= 0 {
-        DICTS.with(|t| {
-            let mut t = t.borrow_mut();
-            if let Some(slot) = t.get_mut(h as usize) {
-                slot.take();
-            }
-        });
+        // Dropped (and freed) once the table's lock is released.
+        drop(DICTS.remove(h as usize));
     }
     Ok(Value::nil())
 }
@@ -543,7 +522,7 @@ fn cstream_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Valu
     let dict = dict_arg(ctx, args[1])?;
     let mut cctx = CCtx::create(ctx)?;
     cctx.setup(ctx, level, &dict)?;
-    Ok(Value::int(insert(&STREAMS, cctx.into_entry())))
+    Ok(Value::int(STREAMS.insert(cctx.into_entry()) as i64))
 }
 
 /// String.__zstd_cstream_run(handle, input, end_op) -> String
@@ -583,7 +562,7 @@ fn dstream_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Valu
     let dict = dict_arg(ctx, args[0])?;
     let mut dctx = DCtx::create(ctx)?;
     dctx.setup(ctx, &dict)?;
-    Ok(Value::int(insert(&STREAMS, dctx.into_entry())))
+    Ok(Value::int(STREAMS.insert(dctx.into_entry()) as i64))
 }
 
 /// String.__zstd_dstream_run(handle, input) -> String
@@ -606,12 +585,8 @@ fn dstream_run(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Valu
 fn stream_free(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
     let h = ctx.int(args[0])?;
     if h >= 0 {
-        STREAMS.with(|t| {
-            let mut t = t.borrow_mut();
-            if let Some(slot) = t.get_mut(h as usize) {
-                slot.take();
-            }
-        });
+        // Dropped (and freed) once the table's lock is released.
+        drop(STREAMS.remove(h as usize));
     }
     Ok(Value::nil())
 }

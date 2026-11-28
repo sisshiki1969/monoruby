@@ -348,10 +348,15 @@ impl Drop for EmitterEntry {
     }
 }
 
-thread_local! {
-    static EMITTERS: std::cell::RefCell<Vec<Option<EmitterEntry>>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
+// SAFETY: the emitter, its sink and `buf` point only into one another
+// (the sink holds the other clone of `buf`'s `Rc`), so every access to
+// any of them — the reference count included — goes through the entry,
+// which the table's lock hands to one thread at a time.
+unsafe impl Send for EmitterEntry {}
+
+/// Process-wide, not per thread: an emitter made on one Ruby `Thread` is
+/// fed on another (#2268).
+static EMITTERS: HandleTable<EmitterEntry> = HandleTable::new();
 
 /// String.__yaml_emitter_new(canonical, indentation, line_width) -> Integer
 ///
@@ -378,28 +383,15 @@ fn emitter_new(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Valu
         sink,
         buf,
     };
-    let handle = EMITTERS.with(|t| {
-        let mut t = t.borrow_mut();
-        if let Some(i) = t.iter().position(|e| e.is_none()) {
-            t[i] = Some(entry);
-            i
-        } else {
-            t.push(Some(entry));
-            t.len() - 1
-        }
-    });
+    let handle = EMITTERS.insert(entry);
     Ok(Value::int(handle as i64))
 }
 
 /// String.__yaml_emitter_free(handle) -> nil
 fn emitter_free(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value> {
     let handle = ctx.int(args[0])? as usize;
-    EMITTERS.with(|t| {
-        let mut t = t.borrow_mut();
-        if let Some(slot) = t.get_mut(handle) {
-            *slot = None;
-        }
-    });
+    // Dropped (and freed) once the table's lock is released.
+    drop(EMITTERS.remove(handle));
     Ok(Value::nil())
 }
 
@@ -504,20 +496,17 @@ fn yaml_emit(ctx: &mut Ctx, _: Value, args: &[Value], _: Block) -> Result<Value>
         k => return Err(ctx.argument_error(format!("unknown emitter event {k}"))),
     };
     let flush = kind == 1 || kind == 3;
-    let res: std::result::Result<Vec<u8>, String> = EMITTERS.with(|t| {
-        let mut t = t.borrow_mut();
-        let entry = match t.get_mut(handle).and_then(|e| e.as_mut()) {
-            Some(e) => e,
-            None => return Err("emitter is closed".to_string()),
-        };
-        if let Err(e) = entry.emitter.emit(event) {
-            return Err(e.problem().to_string());
-        }
-        if flush && let Err(e) = entry.emitter.flush() {
-            return Err(e.problem().to_string());
-        }
-        Ok(std::mem::take(&mut *entry.buf.borrow_mut()))
-    });
+    let res: std::result::Result<Vec<u8>, String> = EMITTERS
+        .with(handle, |entry| {
+            if let Err(e) = entry.emitter.emit(event) {
+                return Err(e.problem().to_string());
+            }
+            if flush && let Err(e) = entry.emitter.flush() {
+                return Err(e.problem().to_string());
+            }
+            Ok(std::mem::take(&mut *entry.buf.borrow_mut()))
+        })
+        .unwrap_or_else(|| Err("emitter is closed".to_string()));
     match res {
         Ok(out) => Ok(if std::str::from_utf8(&out).is_ok() {
             ctx.str(&out)

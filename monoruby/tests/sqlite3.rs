@@ -977,3 +977,32 @@ fn sqlite3_backup() {
         "##,
     );
 }
+
+/// The binding from a Ruby `Thread` other than the one that loaded it,
+/// each a kernel thread of its own (#2268): the classes `Init_` made,
+/// a function defined on the main thread and called back on another, one
+/// defined and called on the other, and an error raised there.
+#[test]
+fn sqlite3_from_another_thread() {
+    ensure_extension("sqlite3_native");
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "sqlite3"
+        db = SQLite3::Database.new(":memory:")
+        db.create_function("twice", 1) { |f, x| f.result = x * 2 }
+        res = [db.execute("select twice(21)")]
+        res << Thread.new { db.execute("select twice(5)") }.value
+        res << Thread.new {
+          d = SQLite3::Database.new(":memory:")
+          d.create_function("thrice", 1) { |f, x| f.result = x * 3 }
+          r = d.execute("select thrice(5)")
+          d.close
+          r
+        }.value
+        res << Thread.new { begin; db.execute("select nosuch()"); rescue SQLite3::Exception => e; [e.class, e.message]; end }.value
+        res << Thread.new { db.prepare("select ?").execute(7).to_a }.value
+        res
+        "##,
+    );
+}

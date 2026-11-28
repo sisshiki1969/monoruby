@@ -280,7 +280,7 @@ fn read(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result<Valu
         1 => Ok(this),
         0 => Ok(Value::nil()),
         _ => {
-            let klass = classes().xml_syntax_error;
+            let klass = classes(ctx).xml_syntax_error;
             let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
             Err(if ex.truthy() {
                 raise(ctx, ex)
@@ -324,7 +324,7 @@ fn expand(
         let first = ctx.funcall(rb_errors, "first", &[], None)?;
         if !first.is_nil() {
             let msg = ctx.funcall(first, "to_s", &[], None)?;
-            let klass = classes().xml_syntax_error;
+            let klass = classes(ctx).xml_syntax_error;
             let ex = ctx.funcall(klass, "new", &[msg], None)?;
             return Err(raise(ctx, ex));
         }
@@ -536,7 +536,7 @@ fn outer_xml(ctx: &mut Ctx, this: Value, args: &[Value], block: Block) -> Result
     }
     if value.is_null() {
         let rb_errors = push_errors(ctx, this, &errors)?;
-        let klass = classes().xml_syntax_error;
+        let klass = classes(ctx).xml_syntax_error;
         let ex = ctx.funcall(klass, "aggregate", &[rb_errors], None)?;
         if ex.truthy() {
             return Err(raise(ctx, ex));

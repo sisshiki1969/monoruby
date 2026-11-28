@@ -2144,6 +2144,20 @@ impl<'a> HashRefMut<'a> {
             self.set_value_at(i, v);
             return Ok(());
         }
+        self.append_observed(k, hash_value, v, vm, globals)
+    }
+
+    /// The new-key half of [`Self::store_observed`]: file `k` => `v`
+    /// under `hash_value`, which the probe has just missed. Nothing is
+    /// called on the key.
+    fn append_observed(
+        &mut self,
+        k: Value,
+        hash_value: i64,
+        v: Value,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<()> {
         // A new key. The key's methods may have started a traversal that
         // is still open (an external enumerator), or left tombstones.
         if self.as_ref().iter_active() {
@@ -2176,6 +2190,45 @@ impl<'a> HashRefMut<'a> {
             }
         }
         Ok(())
+    }
+
+    /// `st_update` with one probe: the value stored under `k` (or `None`)
+    /// is handed to `f`, and what `f` answers is stored under `k`, where
+    /// the pair stands or as a new one. A key whose `#hash` is Ruby code
+    /// ([`is_observed_key`]) is hashed once, as `rb_hash_stlike_update`
+    /// hashes it; `f` runs no Ruby code, and an error it answers leaves
+    /// the Hash as it was. Answers what was stored.
+    pub(crate) fn update(
+        &mut self,
+        k: Value,
+        f: impl FnOnce(Option<Value>, &Globals) -> Result<Value>,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Value> {
+        if self.observes(k, globals) {
+            let hash_value = k.hash_value(vm, globals)?;
+            if let Some((i, old)) = self.as_ref().pos_with_hash(k, hash_value, vm, globals)? {
+                let v = f(Some(old), globals)?;
+                self.set_value_at(i, v);
+                return Ok(v);
+            }
+            let v = f(None, globals)?;
+            self.append_observed(k, hash_value, v, vm, globals)?;
+            return Ok(v);
+        }
+        // Settled without a call: an existing pair is updated where it
+        // stands, a new one goes through the ordinary store (whose second
+        // probe calls nothing either).
+        if let Some(i) = self.as_ref().pos_unasked(k, vm, globals)?
+            && let Some((_, old)) = self.as_ref().entry_at(i)
+        {
+            let v = f(Some(old), globals)?;
+            self.set_value_at(i, v);
+            return Ok(v);
+        }
+        let v = f(None, globals)?;
+        self.store::<false, false>(k, v, vm, globals)?;
+        Ok(v)
     }
 
     /// Compact any tombstones left by a finished (or broken-out-of)
@@ -3016,6 +3069,19 @@ impl Hashmap {
         self.0.as_hashmap_inner_mut().insert(k, v, vm, globals)?;
         self.0.write_barrier_bulk();
         Ok(())
+    }
+
+    /// [`HashRefMut::update`] with the generational write barrier.
+    pub(crate) fn update(
+        &mut self,
+        k: Value,
+        f: impl FnOnce(Option<Value>, &Globals) -> Result<Value>,
+        vm: &mut Executor,
+        globals: &mut Globals,
+    ) -> Result<Value> {
+        let v = self.0.as_hashmap_inner_mut().update(k, f, vm, globals)?;
+        self.0.write_barrier_bulk();
+        Ok(v)
     }
 
     /// Positional value overwrite with the generational write barrier.

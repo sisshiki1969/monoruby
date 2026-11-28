@@ -220,3 +220,26 @@ fn zstd_streaming() {
         "##,
     );
 }
+
+/// A stream and a dictionary made on one Ruby `Thread` and used on
+/// another, each a kernel thread of its own (#2268).
+#[test]
+fn zstd_handles_across_threads() {
+    ensure_extension("zstd_native");
+    run_test_once(
+        r##"
+        require "rubygems"
+        require "zstd-ruby"
+        s = Zstd::StreamingCompress.new
+        s << "abc"
+        c = Thread.new { s << "def"; s.finish }.value
+        dict = ("the quick brown fox jumps over the lazy dog " * 50).b
+        cd = Zstd::CDict.new(dict)
+        dd = Zstd::DDict.new(dict)
+        c2 = Thread.new { Zstd.compress("the lazy dog" * 10, dict: cd) }.value
+        d = Zstd::StreamingDecompress.new
+        [Zstd.decompress(c), Thread.new { d.decompress(c) }.value,
+         Thread.new { Zstd.decompress(c2, dict: dd) }.value == "the lazy dog" * 10]
+        "##,
+    );
+}
