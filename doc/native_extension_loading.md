@@ -1,49 +1,34 @@
-# ネイティブライブラリの動的ロード — 同梱をやめる方法の検討
+# ネイティブ拡張の動的ロード
 
-monoruby には C 拡張を含め、外部の C / Rust ライブラリを実行時にロードする
-仕組みがない。そのため C 拡張 gem に相当する機能は「gem の Ruby 半分を
-vendoring し、ネイティブ半分を Rust で書き直し、依存する C ライブラリを
-`cc` で同梱する」形で **すべてコアのバイナリとワークスペースの中に** 抱えて
-いる。本稿は、この状態を解消する方法として、(A) CRuby C API 互換層、(B)
-monoruby 独自の動的拡張 ABI、(C) システム共有ライブラリの dlopen、(D) Cargo
-feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バインディング
-を比較し、B を土台に段階的に進める案を推奨する。
+**Kind**: design record。C ライブラリや Rust の依存 crate を抱えるネイティブ
+半分（sqlite3 / zstd / psych / nokogiri / markly / bcrypt / digest）を、
+コアのバイナリではなく実行時に `dlopen` する拡張として持つ仕組みと、
+その設計の理由をまとめる。拡張は monoruby 独自の C ABI（`MrContext` と `MrApi` の表、
+`monoruby_ext_sys`）を通してインタプリタと話す cdylib で、install root の
+`ext/` に置かれる。CRuby 向けの C 拡張をソースのまま動かす CRuby 互換 C API
+（`doc/c_api.md`）は、この ABI の上に積んだ層である。
 
-`doc/c_extention.md`（CRuby C 拡張ロードの設計検討、2026-08）と
-`doc/nokogiri.md` §2（nokogiri での A / B / 純 Rust の比較）の続きにあたる。
-前者の Path B / C の結論は変わらないが、本稿は「新しい拡張を書けるように
-する」より先に「**今抱えているものを外へ出す**」ことを最初の目標に置く。
+§1–§3 は前提と選択肢の比較、§4 は採った設計、§6 は実際の ABI と移設で
+分かったこと、§7 はインストールと配布の形である。`doc/nokogiri.md` §2
+（nokogiri での選択肢の比較）も参照。
 
 ---
 
-## 1. 現状
+## 1. 前提
 
-### 1.1 何をどれだけ抱えているか
+拡張を外へ出す前、C 拡張 gem に相当する機能は「gem の Ruby 半分を
+vendoring し、ネイティブ半分を Rust で書き直し、依存する C ライブラリを
+`cc` で同梱する」形で、すべてコアのバイナリとワークスペースの中にあった
+（同梱 C ソース約 17.5 MB、ネイティブ半分の Rust 約 11k 行）。コアからそれらの
+C crate への依存は一方向（コア → 拡張）だったので、分離は現実的だった。
 
-`target/release`（x86-64 Linux、2026-09-17、master `7692aee`）の実測:
-
-| 項目 | 規模 |
-|---|---|
-| バイナリ | 16.5 MB。`ldd` は libc / libm / libgcc_s のみ（完全静的リンク） |
-| 同梱 C ソース（ワークスペース内） | libxml2 5.3 MB + libxslt 1.4 MB + gumbo 1.3 MB（`libxml2-src/vendor/`）+ SQLite 9.5 MB（`libsqlite3-src/vendor/`）= **17.5 MB** |
-| crate 経由で同梱ビルドされる C | zlib（`libz-sys` `static`）、libzstd 1.5.7（`zstd-sys`）、libffi（`libffi-sys`、macOS/aarch64 のみ system）、libyaml は Rust 移植（`libyaml-safer`） |
-| リンクされる C オブジェクト | libxml2.a 2.7 MB、libsqlite3.a 2.6 MB、libxslt.a 0.7 MB、libgumbo.a 0.6 MB ≒ **6.6 MB**（prism 1.5 MB / onigmo 1.1 MB はコアの一部） |
-| ネイティブ半分の Rust | 約 11k 行 — `sqlite3.rs` 2.2k、`nokogiri/` 5k、`zlib.rs` / `zstd.rs` / `yaml.rs` / `json.rs` / `cipher.rs` / `digest.rs` |
-| Ruby 半分の vendoring | `gem/` 3.3 MB — prism 1.8 MB、nokogiri 0.6 MB、psych 0.2 MB、sqlite3 0.1 MB、msgpack / yajl / strptime / cool.io / zstd-ruby / gosu / ffi_c / bigdecimal |
-
-`monoruby/src` でこれらの C crate に依存しているファイルは 6 つだけ
-（`fiddle.rs`, `nokogiri.rs`, `sqlite3.rs`, `yaml.rs`, `zlib.rs`, `zstd.rs`）で、
-依存は一方向（コア → 拡張）である。これは後述の分離が現実的である根拠になる。
-
-### 1.2 この形になった 3 つの判断
-
-いずれも正しく、本稿でも前提として引き継ぐ。
+### 1.2 前提として引き継ぐ 3 つの判断
 
 1. **CRuby ビルド済みの `.so` は原理的に読めない。** `Value` のビット配置が
    CRuby の `VALUE` と違う（`Qnil` = `0x04` vs `0x08`、Fixnum タグ位置）ので、
-   `.so` に埋め込まれた即値定数がそのままでは意味を持たない
-   （`doc/c_extention.md` §5）。「ロードできる」ためには最低でも monoruby の
-   ヘッダでの再コンパイルが要る。
+   `.so` に埋め込まれた即値定数がそのままでは意味を持たない。「ロードできる」
+   ためには最低でも monoruby のヘッダでの再コンパイルが要る（C API 層は
+   ABI 境界で値を変換する、`doc/c_api.md`）。
 2. **汎用 FFI（Fiddle）経由はホットなライブラリには遅すぎる。** activerecord
    では Fiddle 版 sqlite3 が 1 反復の **35 %** を占め、native builtin 化で 0 に
    なった（2026-09 の activerecord / liquid-il / rack 調査による）。
@@ -54,41 +39,41 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
    （nokogiri のパッチ入り）の挙動そのもの（`doc/nokogiri.md` §1）。
    zlib / zstd / libyaml も「同じ実装だから byte 一致」で検証している。
 
-### 1.3 既にある土台
+### 1.3 土台
 
-- **builtin の ABI は既に `extern "C"`**:
-  `extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr) -> Option<Value>`
-  （`executor.rs:16`）。JIT の inline cache も VM もこの関数ポインタを呼ぶ
-  だけなので、動的ロードした関数を登録する受け口は事実上ある。
-- **`dlopen` / `dlsym` は実装済み**: `Kernel.___dlopen` / `___dlsym`
-  （`builtins/kernel.rs:4333`、`libc` の生 API、`dlerror` の排水込み）。
-- **ネイティブ資源を持つオブジェクトの型がある**: `ObjTy::NATIVE` と
-  `NativeData { mark, dup, as_any }`（`value/rvalue.rs:258`）。
+- **builtin の ABI は `extern "C"`**:
+  `extern "C" fn(&mut Executor, &mut Globals, Lfp, BytecodePtr) -> Option<Value>`。
+  JIT の inline cache も VM もこの関数ポインタを呼ぶだけなので、動的ロード
+  した関数を登録する受け口になる。
+- **`dlopen` / `dlsym`**: `Kernel.___dlopen` / `___dlsym`
+  （`builtins/kernel.rs`、`libc` の生 API、`dlerror` の排水込み）。
+- **ネイティブ資源を持つオブジェクトの型**: `ObjTy::NATIVE` と
+  `NativeData { mark, dup, as_any }`（`value/rvalue.rs`）。
   `define_class_with_instance_ty(NATIVE)` で JIT がペイロードを ivar と
   誤認しない。GC は precise / non-moving なので、外部が持つ `Value` は
   「どこにあるかを教えてもらえれば」そのままマークできる（TruffleRuby の
   handle 二重化は不要）。
-- **ブロッキング呼び出しのオフロード**: `NativeOp::{Ffi, Sqlite, Flock,
-  Fcntl, Open}`（`doc/threads.md` §9）。`Fiddle.___prepare` の
+- **ブロッキング呼び出しのオフロード**: `NativeOp::{Flock, Open, Fcntl,
+  Ffi, Ext}`（`doc/threads.md` §9）と、GVL を手放す区間
+  `scheduler::without_gvl`（同 §12.7）。`Fiddle.___prepare` の
   `PREPARE_BLOCKING` フラグで Ruby 側から申告できる。
 - **per-version の install root**: `~/.monoruby/v<ver>/{lib,stub,builtins}`
   （`build.rs`）。ここに `ext/` を足せば、ABI の版違いは自然に避けられる。
 - **require の解決順**: `stub/` が `$LOAD_PATH` より先に pin されており
-  （`globals/require.rs:263`）、`.rb` 候補が `.so` 候補より先に探索される。
+  （`globals/require.rs`）、`.rb` 候補が `.so` 候補より先に探索される。
   gem 自身の `.so` を stand-in が上書きする仕組みはこれで成立している。
   例外は monoruby 向けにビルドされた `.so`（C API 層経由の `gem install`、
   `doc/c_api.md` §3.11）: stand-in が当たった feature について `$LOAD_PATH`
   上に `ext::is_capi_extension` を満たす同名の `.so` があれば、そちらが
   stand-in に勝つ（`Store::built_extension_on_load_path`）。
-- **例外は戻り値で伝える方針が確定している**: builtin 内の panic は JIT
-  フレーム（unwind 情報なし）越しに巻き戻せないので捕捉しない
-  （`executor.rs:17` 付近のコメント）。`Option<Value>` + `set_error`。
+- **例外は戻り値で伝える**: builtin 内の panic は JIT フレーム（unwind
+  情報なし）越しに巻き戻せないので捕捉しない。`Option<Value>` + `set_error`。
 
 ---
 
 ## 2. 選択肢
 
-### A. CRuby C API 互換層（`doc/c_extention.md` の Path A / C）
+### A. CRuby C API 互換層
 
 `ruby.h` 互換ヘッダと `rb_*` シムを提供し、`gem install` の再コンパイルで
 既存 gem の C 拡張を monoruby 向けに生成して動かす。
@@ -99,7 +84,7 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
   なる。**「抱えている」問題を根本から解く唯一の案**。
 - `gem install` のフロー（`Gem::Ext::ExtConfBuilder` → `mkmf` → `make`）は
   Ruby で書かれているので、`RbConfig::CONFIG` を monoruby 値にすれば流用
-  できる（旧稿 §6–7）。
+  できる（実際にそうした、`doc/c_api.md` §3.10）。
 
 短所:
 - **面積が巨大。** nokogiri 一つで `rb_*` 201 シンボル、`TypedData_Get_Struct`
@@ -110,16 +95,15 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
   `setjmp` で作り、C 呼び出しの境界（builtin trampoline の直下、JIT
   フレームを跨がない場所）で必ず受けてから `set_error` に変換する設計が
   要る。C 側のリソース解放は `rb_ensure` に頼る CRuby 流儀に従わせる。
-- **(当時は)GVL がなく green thread。** `rb_thread_call_without_gvl` を
-  `NativeOp` オフロードに写像する(現在は 1:1 モデルで GVL を外して呼ぶ、
-  `doc/threads.md` §12.7)。`rb_thread_create` 等は対象外にする。
+- **スレッド。** `rb_thread_call_without_gvl` は GVL を外した区間に写像する
+  （`doc/threads.md` §12.7）。
 - **レイアウト前提マクロ。** `RSTRING_PTR` / `RARRAY_PTR` は lazy
   materialize + pin、`RTYPEDDATA` は co-allocation で吸収し、`RARRAY_PTR[i] =`
-  の lvalue 書き込みは諦める（旧稿 §4）。
+  の lvalue 書き込みは諦める。
 - **性能。** C 拡張のメソッドは JIT から不透明。今 `__take` / `___read` 等に
   付いているインライナは効かず、「CRuby と同じ速さ」が上限。
-- 前回検討時から進んだ点: `ObjTy::NATIVE` + `NativeData` がそのまま
-  `TypedData` の受け皿になる（`doc/nokogiri.md` §5 の見立て通り）。
+- `ObjTy::NATIVE` + `NativeData` がそのまま `TypedData` の受け皿になる
+  （`doc/nokogiri.md` §5）。
 
 ### B. monoruby 独自の動的拡張 ABI（C / Rust の cdylib を必要時に dlopen）
 
@@ -155,10 +139,10 @@ feature 分割、(E) 別プロセス、(F) WASM、(G) Fiddle 上の Ruby バイ�
   Rust 拡張は `panic = "abort"` か、境界で `catch_unwind` する。
 - GC: 拡張が保持する `Value` は (a) `NativeData::mark` 相当のコールバック
   （オブジェクトに属するもの）と (b) per-call の pin stack（呼び出し中の
-  一時値、旧稿 §3.6）で見せる。`mr_gc_register_address` 型の永続ルートも
+  一時値）で見せる。`mr_gc_register_address` 型の永続ルートも
   用意する（クラス定数などに使う）。
-- Green thread: ブロッキング呼び出しは拡張側が `mr_call_blocking(fn, arg)`
-  で申告し、`NativeOp` に落とす（今の `NativeOp::Sqlite` と同じ）。
+- スレッド: ブロッキング呼び出しは拡張側が `mr_call_blocking(fn, arg)`
+  で申告し、GVL を外して実行する（`NativeOp::Ext`）。
   コールバック再入（sqlite3 の `create_function`、nokogiri の XPath
   ハンドラ）は `mr_funcall` で行い、その中で raise された例外は
   「stash して C から戻ってから再 raise」の現行規約を ABI として明文化する。
@@ -219,7 +203,7 @@ libxml2 / libsqlite3 / libz / libzstd を同梱せず、OS のものを実行時
 短所: wasmtime 自体が 10 MB 級で「フットプリント削減」と矛盾する。
 C ライブラリは wasi-sdk で別ビルドが要る。性能も落ちる。TruffleRuby が
 Sulong（同種の間接実行）を捨ててネイティブ実行に戻った理由
-（起動時間・warmup・互換性・配布サイズ、旧稿 §3.5）がそのまま当てはまる。
+（起動時間・warmup・互換性・配布サイズ）がそのまま当てはまる。
 見送り。
 
 ### G. Fiddle / ffi 上の Ruby バインディング（コールドなライブラリ向け）
@@ -247,11 +231,10 @@ Sulong（同種の間接実行）を捨ててネイティブ実行に戻った�
 
 ---
 
-## 4. 推奨: B を土台に段階的に、A はその上に
+## 4. 採った設計: B を土台に段階的に、A はその上に
 
-**B を土台にして段階的に進め、A は必要になったらその上に積む。** 旧稿の
-Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出す」に変える。
-理由:
+**B を土台にして段階的に進め、A をその上に積んだ。** 順序は「まず既存の
+同梱物を外へ出す」である。理由:
 
 - B の機構（dlopen / `Init_*` / vtable / pin / ブロッキング申告 / コール
   バック再入）は A を作るときにも**丸ごと下層として必要**で、無駄にならない。
@@ -261,17 +244,18 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
   新しい振る舞いをほとんど含まない。出力比較テスト
   （`tests/{nokogiri,sqlite3,zstd,…}.rs`）がそのまま回帰テストになる。
 
-### 4.1 順序
+### 4.1 段階
+
+実際に踏んだ段階で、各段階の状態は §6 の表にある。
 
 1. **D を先に入れる**（数時間）。`nokogiri` / `sqlite3` / `zstd` / `psych` /
    `zlib` を feature にして、`builtins.rs` の登録が feature で切れる形に
    する。依存が一方向であることをコンパイラに確認させる。
 2. **`mr_*` C ABI を定義し、`monoruby-ext-sys` を切り出す。** 載せるのは
-   今の 5 拡張が実際に使っている面だけ（§4.2）。`MrContext` の先頭に
-   `abi_version: u32`。
+   当時の 5 拡張が実際に使っていた面だけ。実際の ABI は §6.1。
 3. **既存 5 拡張を cdylib crate に分離**し、`build.rs` が
    `~/.monoruby/v<ver>/ext/<name>.so` に置く。`require "nokogiri/nokogiri"`
-   は stub ツリー解決（`require.rs:263`）の手前で `ext/` を探す分岐を足す
+   は stub ツリー解決（`require.rs`）の手前で `ext/` を探す分岐を足す
    だけ。**sqlite3 から始める**: 2.2k 行で自己完結し、`create_function` の
    コールバック再入と `NativeOp` オフロードの両方を含むので ABI の試金石に
    なる。次に zlib / zstd（handle table 型で最も単純）、psych（イベント
@@ -283,22 +267,14 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
    境界で `mr_set_error`、`TypedData_*` → `mr_native_*`、という薄い写像で
    始められる。
 
-### 4.2 ABI に載せるもの（5 拡張の実使用から）
+### 4.2 ABI の範囲
 
-| 区分 | 関数（案） | 今の対応物 |
-|---|---|---|
-| 登録 | `mr_define_class(ctx, name, super, instance_ty)`, `mr_define_module`, `mr_define_method(ctx, class, name, fn, min, max, rest, kw[])`, `mr_define_singleton_method` | `define_class_with_instance_ty`, `define_builtin_func_with_kw` |
-| 値の生成・取り出し | `mr_str_new(ctx, ptr, len)`, `mr_str_ptr_len`, `mr_int`, `mr_float`, `mr_sym`, `mr_ary_new` / `push` / `len` / `aref`, `mr_hash_new` / `aset` / `aref`, `mr_nil` / `true` / `false` | `Value::string_from_*`, `as_bytes`, `Value::integer` … |
-| ネイティブ資源 | `mr_native_new(ctx, class, data, vtable{mark, drop, dup})`, `mr_native_get(obj) -> data` | `ObjTy::NATIVE`, `NativeData` |
-| GC | `mr_gc_mark(ctx, value)`（mark コールバック内でのみ有効）, `mr_gc_pin` / `unpin`（永続ルート） | `Allocator::mark`, `GCRoot` |
-| 呼び出し・例外 | `mr_funcall(ctx, recv, name, argc, argv, block)`, `mr_yield`, `mr_set_error(ctx, class, msg)`, `mr_error_pending(ctx)` | `vm.invoke_method`, `set_error` |
-| スレッド | `mr_call_blocking(ctx, fn, arg)` | `NativeOp::Ffi` / `Sqlite` |
-| 文脈 | `mr_abi_version(ctx)`, `mr_ruby_version(ctx)` | — |
+ABI に載せたのは、移設した拡張が実際に使う面だけである。`Lfp` /
+`BytecodePtr` / `IdentId` / `ClassId` の内部表現は出さない。関数の一覧は
+`monoruby_ext_sys`（`MrApi`、C 向けには `include/monoruby_ext.h`）にあり、
+設計段階の案からの差は §6.1 にある。
 
-`Lfp` / `BytecodePtr` / `IdentId` / `ClassId` の内部表現は出さない
-（名前は `const char*`、クラスは不透明 handle）。
-
-### 4.3 決めておくべき不変条件
+### 4.3 不変条件
 
 1. 拡張は `monoruby` crate をリンクしない（Rust の型を一切晒さない C ABI）。
 2. C / Rust 境界を unwind は跨がない。例外は `mr_set_error` + 戻り値。
@@ -313,20 +289,18 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 
 ---
 
-## 5. 判断が必要な点
+## 5. 決めたこと
 
-- **`ext/` の配布形態**（決着済み、§7）: `cargo install` 時に `build.rs` が
-  install root に置く（今の stub と同じ体験）を採った。ビルド自体は
-  Cargo の artifact dependency に任せ、`build.rs` は受け取ったパスを
-  置くだけにしてある。
-- **`system` を既定にするライブラリ**: zlib / zstd は OS 版で出力が
-  一致するので `system` 既定でよい可能性がある。libxml2 は nokogiri の
-  パッチがあるので `bundled` 既定。
-- **A に進むか**: pg / bcrypt / markly など「Rust で書き直す価値が薄く、
-  数が多い」gem が本当に必要になった時点で判断する。それまでは B + G
-  （ホット: 独自拡張、コールド: Fiddle 上の Ruby）で足りる。
+- **`ext/` の配布形態**: `cargo install` 時に `build.rs` が install root に
+  置く（stub と同じ体験）。ビルド自体は Cargo の artifact dependency に
+  任せ、`build.rs` は受け取ったパスを置くだけにしてある（§7）。
+- **`bundled` / `system`**: 既定はすべて `bundled`。`system` はディストリ側の
+  opt-in（§6.3）。
+- **A**: CRuby 互換 C API 層を積み（`doc/c_api.md`）、標準ライブラリの C 拡張
+  （date / zlib / stringio / socket / openssl / etc / bigdecimal）は CRuby の
+  ものを層の上でビルドして使う。
 
-## 6. 実装状況（2026-09）
+## 6. 実装状況
 
 | 段階 | 状態 | 場所 |
 |---|---|---|
@@ -336,8 +310,8 @@ Path C と同じ結論だが、順序を「まず既存の同梱物を外へ出�
 | 3. zlib / zstd の分離 | 済 | `ext/zlib/`（`zlib_native`、checksum と `__zstream_*`）、`ext/zstd/`（`zstd_native`）。`stdlib/zlib.rb` / `gem/zstd-ruby/zstdruby.rb` が `require "…_native.so"` する。コアから `libz-sys` / `zstd-safe` が消えた。rubygems が `zlib` を要るので、インストール時は `build.rs` が（artifact dependency 経由で）拡張を `<install root>/ext/` に置く（§7）。 |
 | 3. psych の分離 | 済 | `ext/psych/`（`psych_native`、`__yaml_parse` は `Psych::Handler` を `funcall` で駆動）。`gem/psych/psych.rb` が `require "psych_native.so"` する。コアから `libyaml-safer` が消えた。 |
 | 3. nokogiri の分離 | 済 | `ext/nokogiri/`（`nokogiri_native`、12 ファイル ~7k 行）。`gem/nokogiri/nokogiri.rb` が `require "nokogiri_native.so"` する。コアから `src/builtins/nokogiri/` と `libxml2-src` 依存が消え、`ObjTy::NATIVE` を使う builtin はコア側に無くなった（`ext.rs` の `ExtNative` だけ）。`tests/nokogiri.rs` の 23 本（CRuby の gem と出力比較）はスクリプト無変更。 |
-| 3. markly / bcrypt / digest / openssl の分離（2026-10） | 済 | 外部 C ライブラリは持たないが Rust の依存 crate を抱えた 4 つ。`ext/markly`（`markly_native`、comrak）、`ext/bcrypt`（`bcrypt_native`）、`ext/digest`（`digest_native`、md-5 / sha1 / sha2 / hmac / pbkdf2）、`ext/openssl`（`openssl_native`、aes-gcm / aes / cbc。`OpenSSL::Cipher` の AES）。`gem/markly/markly.rb`・`gem/bcrypt_ext.rb`・`stdlib/digest.rb`・`stdlib/openssl.rb` が `require "…_native.so"` する。どれも引数のバイト列・整数・配列を読んで文字列か配列を返すだけなので、ABI の追加は無し。コアの release バイナリは 15.7 MB → 14.3 MB。各 `.so` は std を抱えるので 0.45〜1.6 MB ずつある（使わなければ開かれない）。digest は rubygems が `.gem` のハッシュに使うので zlib と同様に常にインストールされる。json（ホットで ABI の追加も多い）はコアに残した。 |
-| 3. zlib を CRuby の `ext/zlib` に置き換え（2026-11） | 済 | `ext/zlib`（`zlib_native`）は削除した。CRuby 4.0.6 の `zlib.c` を C API 層でビルドした `zlib.so`（`monoruby_capi/ext/zlib/`、`doc/c_api.md` §3.19）が `Zlib` 全体を担い、`stdlib/zlib.rb` は `require "zlib.so"` だけ。libz は `monoruby` の `libz-sys` 依存（`bundled-zlib` 既定）の `DEP_Z_ROOT/lib/libz.a` を `zlib.so` に静的リンクし、`system-zlib` では `-lz`。同時に strscan / stringio も CRuby の C 拡張にした（strscan は呼び出しごとの層の固定費が重く、後に Ruby 実装へ戻した。`doc/c_api.md` §3.21）。 |
+| 3. markly / bcrypt / digest の分離 | 済 | 外部 C ライブラリは持たないが Rust の依存 crate を抱えたもの。`ext/markly`（`markly_native`、comrak）、`ext/bcrypt`（`bcrypt_native`）、`ext/digest`（`digest_native`、md-5 / sha1 / sha2 / hmac / pbkdf2）。`gem/markly/markly.rb`・`gem/bcrypt_ext.rb`・`stdlib/digest.rb` が `require "…_native.so"` する。どれも引数のバイト列・整数・配列を読んで文字列か配列を返すだけなので、ABI の追加は無い。各 `.so` は std を抱えるので 0.45〜1.6 MB ずつある（使わなければ開かれない）。digest は rubygems が `.gem` のハッシュに使うので常にインストールされる。json（ホットで ABI の追加も多い）はコアに残した。`OpenSSL` は CRuby の `ext/openssl` を C API 層でビルドしたもの（`doc/c_api.md`）。 |
+| 3. zlib を CRuby の `ext/zlib` に置き換え | 済 | `ext/zlib`（`zlib_native`）は削除した。CRuby の `zlib.c` を C API 層でビルドした `zlib.so`（`monoruby_capi/ext/zlib/`、`doc/c_api.md` §3.19）が `Zlib` 全体を担い、`stdlib/zlib.rb` は `require "zlib.so"` だけ。libz は `monoruby` の `libz-sys` 依存（`bundled-zlib` 既定）の `DEP_Z_ROOT/lib/libz.a` を `zlib.so` に静的リンクし、`system-zlib` では `-lz`。同時に strscan / stringio も CRuby の C 拡張にした（strscan は呼び出しごとの層の固定費が重く、後に Ruby 実装へ戻した。`doc/c_api.md` §3.21）。 |
 | 4. `bundled` / `system` feature | 済（3 拡張。nokogiri / psych は対象外、§6.3） | `ext/{sqlite3,zstd}`（と当時の `ext/zlib`。今は `zlib.so` が `monoruby` の `libz-sys` 経由で同じ対を持つ）に `default = ["bundled"]` と `system`。Cargo の feature は加算しかしないので、選ぶときは `--no-default-features --features system`。拡張が artifact dependency になったので、選択は `monoruby` 側の feature（`system-zlib` とその `bundled-…` の対）に持ち上げてある。`bin/install` は `MONORUBY_SYSTEM_LIBS="zlib zstd"`（または `all`）を `--no-default-features --features "system-zlib,system-zstd,bundled-sqlite3"` に翻訳する。 |
 | 5. CRuby API 互換層 | 段階 1〜3 済 | `monoruby_capi/`（`ruby.h` 互換ヘッダと `capi.c`）。CRuby 向けの C ソースを monoruby のヘッダで再ビルドし、`$LOAD_PATH` から `require` できる。`tests/capi.rs` が同じ C ソースを CRuby と monoruby で動かして出力一致を見る。段階 2（TypedData / alloc 関数（遅延 payload）、C 関数のブロック化、`rb_call_super`、Struct）、段階 3（`RbConfig` が `<root>/include` と `<root>/capi/libmonoruby_capi.a` を指し、`extconf.rb` + `make` と `gem install` がそのまま通る。gem home は monoruby 専用 `~/.monoruby/gems/<api>`、`tests/mkmf.rs`）も済。`doc/c_api.md`。 |
 
@@ -397,19 +371,17 @@ nokogiri を外した理由は 3 つある。
 出すとすれば、FFI がレイアウトを写すのをやめる（アクセサをすべて C 側の
 glue に移す）か、検出した版に合わせて生成するかが先になる。
 
-## 7. インストールと配布（2026-09）
+## 7. インストールと配布
 
 拡張をコアから外した結果、「インストールされた monoruby」は**バイナリ**と
 **それが読む木**（vendored stdlib、`builtins/`、stub、そして `ext/`）の
-二つになった。`cargo install` はバイナリしか置かないので、この二つを
-揃えるのが最後の穴だった。`bin/ruby-bench` が `cargo install` だけを
-呼んでいた時期に、77 本中 14 本が `libpsych_native.so` /
-`libzlib_native.so` の `LoadError` で落ちたのがその症状で、インタプリタの
-退行ではなくインストールの形の問題だった。
+二つになった。`cargo install` はバイナリしか置かないので、木（とくに
+`ext/` の `.so`）を揃える仕組みが別に要る。揃わないと、インタプリタは
+正しくても `require "psych"` などが `LoadError` になる。
 
 ### 7.1 `cargo install` だけで揃う（artifact dependency）
 
-5 つの拡張を `monoruby` の **build-dependency**（`artifact = "cdylib"`,
+拡張を `monoruby` の **build-dependency**（`artifact = "cdylib"`,
 `lib = false`, `target = "target"`）にした。Cargo が各 cdylib を
 ターゲット向けにビルドし、`build.rs` に `CARGO_CDYLIB_FILE_<NAME>` で
 パスを渡す。`build.rs` はそれを install root の `ext/` へ（一時名 →
@@ -494,16 +466,15 @@ install root の絶対パスはバイナリに焼き込まれている
   `ruby_probe` の結果を書く前に `create_dir_all` する。
   （`tests/relocatable_install.rs::a_fresh_home_gets_its_probe_cache_written`）
 
-`tests/relocatable_install.rs` が両方を押さえている: 5 つの `.so` が
+`tests/relocatable_install.rs` が両方を押さえている: 拡張の `.so` が
 install root にあること、木ごと移した先で `$LOAD_PATH` が自分の木から
 来て焼き込まれた root からは来ないこと、そこで psych / zlib が読めること、
 `MONORUBY_INSTALL_ROOT` が今も勝つこと。
 
 ## 8. 参考
 
-- `doc/c_extention.md` — CRuby C API 互換層の設計検討（Path A / B / C、
-  TruffleRuby の事例、レイアウト不一致の吸収、`gem install` のフロー）
+- `doc/c_api.md` — CRuby 互換 C API 層
 - `doc/nokogiri.md` §2, §5 — nokogiri での選択肢比較と `NativeData` の位置づけ
-- `doc/threads.md` §9–10 — native offload（`NativeOp`）と残る制約
+- `doc/threads.md` §9、§12.7 — native offload（`NativeOp`）と GVL を手放す区間
 - 2026-09 の activerecord / liquid-il / rack 調査 — Fiddle 経由 sqlite3 の
   35 % と native 化後の数字

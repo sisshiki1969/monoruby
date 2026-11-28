@@ -78,9 +78,10 @@ inline / identity / 索引の表現を `hashindex_pure` に渡す、`Array#[]` �
 `builtins/*.rb` の `Array#each` / `Hash#each` / `Array#initialize` などが
 Ruby なのは、JIT がインライン展開するのが `FuncKind::ISeq` の呼び出し先だけ
 だからで、ホットなサイトではメソッド本体とブロックが `yield` の位置に展開
-される。代償として、CRuby の C 実装なら無傷な `Integer#<` や `Array#size` の
-再定義が組み込みの内部に及ぶ（意図したトレードオフ、
-[`../bop_redefinition.md`](../bop_redefinition.md)）。
+される。代償として、CRuby の C 実装なら無傷な `Array#size` のような
+メソッドの再定義が組み込みの内部に及ぶ（意図したトレードオフ）。演算子の
+再定義は内部ビルトインのフレームに届かないようにしてある
+（[`../bop_redefinition.md`](../bop_redefinition.md) §6）。
 
 ### 計測の規律
 

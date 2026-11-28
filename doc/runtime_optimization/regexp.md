@@ -187,8 +187,8 @@ bytecodegen はリテラルを `Executor` の届かないところでコンパ�
 [`../stack_frame.md`](../stack_frame.md)）。
 
 native な builtin フレームは svar スコープを作らない。`Executor::current_mfp`
-は**動的な** CFP 連鎖を `is_native()` と `is_svar_transparent()` のフレーム
-越しに歩く。`is_svar_transparent` は monoruby 自身の `builtins/*.rb` から
+は**動的な** CFP 連鎖を `is_native()` と `is_internal_builtin()` のフレーム
+越しに歩く。`is_internal_builtin` は monoruby 自身の `builtins/*.rb` から
 コンパイルされた全 iseq に立つので、`"wawa".to_enum(:scan, /./).map { $& }`
 は monoruby の `Enumerable#map` が Ruby フレームでも `scan` の match を見る。
 
@@ -268,8 +268,6 @@ matches:  SmallVec<[Span; 2]>   // 24
 - `RegexpInner::match_pred`: 真偽だけの照合で、**`$~` に触れず `MatchData`
   も作らない**。`Regexp#match?`、`String#match?`、`Array#grep` /
   `Enumerable#grep`（grep は `$~` を乱してはいけない、CRuby 準拠）。
-- `captures_from_pos_no_save`: 特殊変数の副作用無しの生の照合。`gsub` +
-  ブロックの先行探索と `replace_all_block_inner` の走査。
 - `strscan_match`: `onig_match` / `onig_search` を再利用 region に、`$~`
   無し（§3.6）。
 - `String#match` / `Regexp#match` は**保存したばかりの `$~` を返り値として
@@ -335,13 +333,9 @@ mark が erubi で 291 → 5）。
 ### 3.3 バイト ↔ 文字オフセット変換
 
 **文字添字 → バイト添字のキャッシュは無い。** 変換は毎回線形走査
-（`byte_to_char_index` は `char_indices().enumerate()`、`char_to_byte_pos` は
-`char_indices().nth(cp)`、`Regexp#match` の native 経路は
+（`byte_to_char_index` は `char_indices().enumerate()`、`Regexp#match` の native 経路は
 `iter_char_bytes().take(cp).map(len).sum()`）。ASCII のみのショートカットが
-緩和のすべてで、背景と計画は
-[`../encoding_char_iteration_design.md`](../encoding_char_iteration_design.md)
-（`CharByteIter`、「Onigmo coupling」の制限、多エンコーディングの Onigmo
-走査は別件という注記）。
+緩和のすべてである。
 
 ### 3.4 部分文字列の共有と一巡の splice
 
@@ -387,14 +381,14 @@ mark が erubi で 291 → 5）。
 | `String#[]` / `slice`（Regexp） | 名前付きは `get_group_members` でグループ番号を解決し、最右の参加グループ。`$~` を設定 |
 | `String#index` | **String の needle はエンジンに入らない** — バイト／文字境界の部分文字列探索で `$~` を触らず（issue #721）、壊れた UTF-8 も許容。Regexp 経路はミス時に `$~` を消し、末尾のゼロ幅一致を専用に扱う |
 | `String#rindex` | 前方走査ループ。最終的な `$~` は返す位置での追加 1 プローブで再確立 |
-| `String#sub` / `sub!` | Hash / 置換 String / ブロックの 3 腕が `with_coerced_regexp`（Regexp・String（エスケープ）・`to_str`）に集まる。結果は `apply_template_encoding` で再タグ |
+| `String#sub` / `sub!` | Hash / 置換 String / ブロックの 3 腕が `with_coerced_regexp`（Regexp・String（エスケープ）・`to_str`）に集まる。結果はレシーバのエンコーディングに再タグ |
 | `String#gsub` / `gsub!` | ブロック形は `replace_all_block` が **frozen スナップショットを取る前に生きたレシーバで最初の一致を先行探索**する: 「一致無し」の一般的なケースがスナップショット + splice でなくコピー 1 回で済み、本走査は 0 でなく最初の一致位置から始まる（`gsub_block_without_a_match_probes_first` テスト）。ブロック結果のエンコーディング互換は文字列化前に検査 |
 | `String#scan` | 先に frozen スナップショット。yield する各断片は CoW `string_substring`。CRuby のゼロ幅一致を落とさないよう `captures_iter` でなく手動走査。ループ後 `$~` を**最後の**一致に戻す（終端の不一致で消えるため） |
 | `String#split` | 区切り `SepKind::{Awk, Chars, Str, Re}`: **空ソースの Regexp は文字分割、単一スペースのソースはリテラル文字列分割に降格し、どちらもエンジンに入らない**。非 UTF-8 + 空区切りの専用文字経路、`limit == 1` の短絡、CRuby の `split_string` を写した空フィールドの遅延カウンタ |
 | `String#start_with?` | Regexp はエンジン（`m.start() == 0` でアンカー）。**String は生の `starts_with` バイト検査** + `enc_char_boundary` で、エンジンも確保も無し |
 | `String#end_with?` | Regexp は `TypeError`（CRuby どおり）。String は `ends_with` + 境界検査 |
 | `String#include?` | 2 つの `regex_view` に `str::contains` |
-| `String#tr` / `tr_s` / `delete` / `count` / `squeeze` | 3 段: (1) ASCII のみのレシーバ **かつ** ASCII のみの指定なら `[u64; 2]` の 128 ビットマップ（削除／否定）か平坦な `[u8; 128]` 変換表で全部バイト単位、(2) 非 ASCII レシーバに ASCII 指定は `tr_translate_bytes`、(3) 汎用の `chars()` 走査。`Charset` は `ascii_bitmap: [u64; 2]` + `non_ascii: BTreeSet<char>` + `negated` で、`contains_ascii_byte` はシフト / AND / XOR 各 1 回 |
+| `String#tr` / `tr_s` / `delete` / `count` / `squeeze` | 3 段: (1) ASCII のみのレシーバ **かつ** ASCII のみの指定なら `[u64; 2]` の 128 ビットマップ（削除／否定）か平坦な `[u8; 128]` 変換表で全部バイト単位、(2) 文字が自身のバイトであるレシーバは文字単位・コードポイント比較の走査（`tr_translate_cp`）、(3) 汎用の `chars()` 走査。`Charset` は `ascii_bitmap: [u64; 2]` + `non_ascii: BTreeSet<char>` + `negated` で、`contains_ascii_byte` はシフト / AND / XOR 各 1 回 |
 
 ### 3.6 StringScanner — 唯一の手調整されたエンジン経路
 
@@ -439,8 +433,8 @@ Rust 側の `String#__strscan_match`:
   sequence`、String 側の `check_pattern_encoding_compat` 等。
 - 代理写像は多バイトのバイト指向エンコーディングに対する CRuby のエンコー
   ディング別文字走査の**バイト単位の近似**である。
-- 結果のエンコーディング: `apply_template_encoding` が `sub` / `gsub` の出力を
-  レシーバのエンコーディングに再タグし（置換機構は既定で UTF-8 を組む）、
+- 結果のエンコーディング: `sub` / `gsub` の出力はレシーバのエンコーディングに
+  再タグされ（置換機構は既定で UTF-8 を組む）、
   `Regexp#source` は `fixed_encoding?` に従い、補間 regexp は修飾子で固定
   されない限り補間内容から取る。
 
@@ -454,7 +448,7 @@ Rust 側の `String#__strscan_match`:
 | 非補間リテラル | 1 回コンパイル、frozen、共有 | 同じだがさらに早く、*bytecodegen* 時にコンパイルして `FrozenLiteral` で出す。コンパイルエラーは実行時 `RegexpError` でなく**ロード時の構文エラー** |
 | エンコーディング別の再コンパイル | `rb_reg_prepare_re` が regexp オブジェクト上にキャッシュ | **プロセス全体**の 2 つのキャッシュ（`REGEX_CACHE` / `NATIVE_CACHE`）、どちらも `RwLock<HashMap>` で**上限無し**。`Arc<Regex>` でスレッド間共有 |
 | エンジンが見るエンコーディング | 被照合の実エンコーディングで Onigmo が動く | 既定で UTF-8 / ASCII。`Regexp#match` + 非 SevenBit + 対応コーデックだけ native 経路。多バイト `NamedByte`（Big5 / GB18030 / EUC-KR/TW）は意図的に除外。他はバイト ↔ `U+00XX` の代理空間 |
-| `$~` の格納 | MFP の `vm_svar` | 同じ設計を意図的に写す: LEP の `LFP_SVAR`、遅延確保の `[$~, $_]`、ブロック / lambda が `outer` を辿る。追加で `is_svar_transparent`（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い） |
+| `$~` の格納 | MFP の `vm_svar` | 同じ設計を意図的に写す: LEP の `LFP_SVAR`、遅延確保の `[$~, $_]`、ブロック / lambda が `outer` を辿る。追加で `is_internal_builtin`（monoruby の Ruby 実装コアメソッド用。CRuby はそれらを C で書くので相当物が無い） |
 | `Regexp#match?` の `MatchData` 回避 | あり（`rb_reg_match_p`） | あり（`match_pred`）。CRuby より広く `Array#grep` / `Enumerable#grep` も使う |
 | `MatchData` オブジェクトの再利用 | `rb_reg_search0` が backref スロットの busy でない `MatchData` を再利用 | **常に新規確保**。40 バイトのペイロード、`SmallVec<[Span; 2]>` の inline 容量、コピー無しの CoW haystack スナップショットで緩和 |
 | `onig_region` の再利用 | 照合ごとに再利用 | `captures_from_pos` は照合ごとに `OnigRegion` を確保・解放。再利用は StringScanner のプリミティブ（スレッドローカル `Region`）**のみ**（`onig_region_clear` + memset で約 3.3 %） |
@@ -500,7 +494,6 @@ Rust 側の `String#__strscan_match`:
 | `builtins/fiber.rs` / `builtins/thread.rs` の svar テスト | `root_svar` の分離 |
 | [`../stack_frame.md`](../stack_frame.md) | `LFP_SVAR` スロットと LEP の所有規則 |
 | [`../gc.md`](../gc.md) | `sp_match_regex` / `sp_match_haystack` の root |
-| [`../encoding_char_iteration_design.md`](../encoding_char_iteration_design.md) | バイト ↔ 文字オフセット、`CharByteIter` |
 | [`../bop_redefinition.md`](../bop_redefinition.md) | `Regexp#===` が表に無い理由の背景 |
 | [`../lir.md`](../lir.md) / [`../arch_difference.md`](../arch_difference.md) | `ConcatRegexp` マクロ命令 |
 | [`../threads.md`](../threads.md) / [`../refinements.md`](../refinements.md) | 実行コンテキストごとの `$~` / `$_`、LEP 走査の再利用 |

@@ -2,8 +2,7 @@
 
 Array は Ruby プログラムの「ただの並び」であると同時に、`each` / `map` /
 `[]` / `<<` が最内ループに現れる型でもある。optcarrot では `Array#<<` と
-`Array#[]=` のスライス形が最上位のホットスポットだった
-（[`../optcarrot_opt_profile.md`](../optcarrot_opt_profile.md) §3）。
+`Array#[]=` のスライス形が最上位のホットスポットだった。
 
 この文書は、Array がメモリ上でどう置かれ、VM と JIT が `[]` / `[]=` / `<<` /
 リテラル生成 / 多重代入をどう処理し、どの組み込みメソッドが Ruby で書かれて
@@ -270,8 +269,7 @@ aarch64 は `cmov` を `csel` で置き換えた同型で、cold ブロックは
 `array_shl` は `guard_frozen` を明示的に出す。`emit_array_shl` のインライン
 格納は `Array::push` を迂回し、`push` 自体は frozen を見ないので、frozen な
 レシーバは JIT を抜けてインタプリタに `FrozenError` を出させる必要がある —
-これはインライン化と同時に直した実バグである
-（[`../optcarrot_opt_profile.md`](../optcarrot_opt_profile.md) §3.2）。
+インライン格納が frozen チェックを飛ばさないための措置である。
 
 `emit_array_shl`（`x86_64/compile/builtin.rs`）: `capa <= 5` ⇔ 未あふれ
 なので、どちらの常駐でも「2 ロード + 1 ストア」の高速経路になる。
@@ -355,8 +353,7 @@ aarch64 は `cmov` を `csel` で置き換えた同型で、cold ブロックは
 evict する。**直接発火経路には class-version ガードが無く、健全性は記録した
 依存だけに拠る**。`Hash#[]=` が意図的に表に無いのはこのためで、通常の
 class-version ガード付き経路に残す（`index_hash_assign_redefinition` テスト）。
-効果は [`../bop_redefinition.md`](../bop_redefinition.md)（`Array#[]` 再定義
-時 0.30 → 0.030 → 0.009 s）。
+仕組みは [`../bop_redefinition.md`](../bop_redefinition.md) §4。
 
 ### 3.8 `Array.new` と `Class#new`
 
@@ -383,9 +380,9 @@ CRuby と一致させ、`yield` はユーザーの `Array.new { }` サイトの�
 
 rest 引数 `Array` の遅延実体化（D1）は
 [`../arg_forwarding_jit.md`](../arg_forwarding_jit.md) §3.4 にある。
-`WriteBack::forward_rest` が `(dst, src, len)` を持ち、deopt 時に
-`runtime::create_array` で作る。リテラルの write back が `forward_rest` より
-先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
+`WriteBack::virtual_obj` が `(dst, VirtualSrc::Slots { src, len, .. })` を持ち、
+deopt 時に `runtime::create_array` で作る。リテラルの write back が
+`virtual_obj` より先なのは、実体化が確保を伴い、その時点でフレームが GC 整合でなければならない
 からである（[`../jit_invariants.md`](../jit_invariants.md)）。
 
 ---
@@ -434,12 +431,10 @@ nil で埋めない）。
 経路を迂回してしまうため）。`sample` / `shuffle` / `shuffle!` は `random:`
 の解決と `RAND_UPTO` を共有するため Rust のまま。
 
-このトレードオフは [`../bop_redefinition.md`](../bop_redefinition.md) に記録
-されている: `Integer#<` を再定義すると monoruby では `Array#map`（の
-`while i < size`）が壊れるが、C 実装の CRuby は影響を受けない。
-`Array#size` を再定義すると `Kernel#p` の内部が `ArgumentError` になるのも
-同種で、BOP フックの欠落ではなく「組み込みが Ruby で書かれていることの露出」
-である。上の primitive が塞ぐのは `builtins/array.rb` がレシーバ自身を読む
+組み込みを Ruby で書くと、CRuby では C なので届かない再定義が届きうる。
+演算子の再定義は内部ビルトインのフレームに届かない
+（[`../bop_redefinition.md`](../bop_redefinition.md) §6）が、`size` / `[]` の
+ような通常のメソッドはそうではない。上の primitive が塞ぐのは `builtins/array.rb` がレシーバ自身を読む
 箇所で、`enumerable.rb` などが作業用の素の `Array` に対して呼ぶ `size` /
 `[]` は `Array` 自体の再定義を受けたままである。
 
@@ -548,9 +543,7 @@ nil で埋めない）。
 | `codegen/arch/x86_64/compile/index.rs` のテスト | 添字境界（±100000、伸長、`a[-3]=` のエラー） |
 | `codegen/jitgen/compile/index.rs` のテスト | `index_redefinition_evicts` / `index_polymorphic_array_and_method` / `index_array_subclass_override` / `index_private_receiver` / `index_hash_assign_redefinition` |
 | `builtins/array.rs` の `array_literal_minmax_fusion` | `[a, b].min` 融合 |
-| [`../optcarrot_opt_profile.md`](../optcarrot_opt_profile.md) | `<<` / `rotate!` / `expand_array` / スライス代入の計測と経緯 |
-| [`../bop_redefinition.md`](../bop_redefinition.md) | BOP の差分掃討（48 ケース）、Ruby 実装組み込みの露出 |
+| [`../bop_redefinition.md`](../bop_redefinition.md) | 演算子の再定義の検知と無効化、Ruby で書いたビルトインと再定義 |
 | [`../lir.md`](../lir.md) | `GuardArrayTy` / `GuardFrozen` / `ArrayLenFixnum` の LIR |
 | [`../arg_forwarding_jit.md`](../arg_forwarding_jit.md) | rest Array の遅延実体化（D1） |
 | [`../gc.md`](../gc.md) | バリア、temp スタックの root、`flat_map` の事例 |
-| [`../progress_2025-2026.md`](../progress_2025-2026.md) | `Array#[]` / `#[]=` のインライン化（#269）などの変更履歴 |

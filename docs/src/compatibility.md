@@ -109,7 +109,7 @@ A few behaviours differ by design rather than by omission:
   needed; the backtrace string is not built until something asks for it. See
   [Exception handling](design/exception_handling.md).
 - **The garbage collector is non-moving**, single-threaded and
-  stop-the-world (generational since June 2026). Compiled code relies on
+  stop-the-world, and generational. Compiled code relies on
   objects not moving. See [GC — mechanism and
   implementation](design/gc.md).
 - **Threads are real kernel threads behind a GVL.** Each Ruby `Thread` is an
@@ -118,14 +118,11 @@ A few behaviours differ by design rather than by omission:
   syscalls. See [Thread / Fiber / non-blocking IO /
   preemption](design/threads.md).
 
-C extensions are no longer on this list. Since October 2026 monoruby ships a
-CRuby-compatible C API layer: an extension written for CRuby is rebuilt
+C extensions are not on this list: monoruby ships a CRuby-compatible C API
+layer. an extension written for CRuby is rebuilt
 against monoruby's headers (API- rather than ABI-compatible) and loaded by a
 plain `require`, `extconf.rb` + `make` and `gem install` work against it, and
 CRuby's own `ext/date`, `ext/stringio`, `ext/zlib`, `ext/socket`,
-`ext/openssl` and `ext/bigdecimal` are built from unmodified upstream source.
-That is what moved the `library` group from 57.6% to 98.5%. The layer is
-documented in [CRuby-compatible C API layer](design/c_api.md) and [Native
-extension loading](design/native_extension_loading.md); the older [C
-extension support](design/c_extention.md) design study predates it and
-describes the problem, not the shipped solution.
+`ext/openssl`, `ext/etc` and `ext/bigdecimal` are built from upstream source.
+The layer is documented in [CRuby-compatible C API layer](design/c_api.md) and
+[Native extension loading](design/native_extension_loading.md).

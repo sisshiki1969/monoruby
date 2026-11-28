@@ -1,440 +1,139 @@
-# ruby/spec ハング対策: `skip.txt` → `tags/` 移行
+# ruby/spec のハング対策: example 単位のタグ
 
-> **更新(2026-09-21): `language/pattern_matching_tags.txt` を削除、タグは 5 ファイル 9 件に。**
-> 全タグを棚卸しした。現 master(0faa867)の release ビルド + ruby/spec
-> (af6351a)で、タグを無効にして 6 ファイルを `timeout` 付きで実行:
->
-> - `pattern_matching_tags.txt` の 3 例(`refinements are used for
->   #deconstruct` / `#deconstruct_keys` / `#=== in constant pattern`)は
->   refinements の実装(`doc/refinements.md`)後、`deconstruct` 系が通常の
->   メソッド呼び出しとして lower されるため **pass** する。`fails:` は
->   pass する example を集計から落とすので、剪定した(ファイルごと削除)。
-> - `fork_tags.txt`(5 タグ、実例 8)/ `wait_tags.txt`(1): ローカルでは
->   pass し、両ファイルを 10 回連続で回してもハングしない。しかし #1386
->   以降の master に fork / wait / signal を触るコミットは無く、これらは
->   GitHub runner 上でだけ起きるハング(下記)なので、ローカルで通ることは
->   外す根拠にならない。**残す**。
-> - `import_methods_tags.txt`(1)/ `predefined_tags.txt`(1)/
->   `regexp/modifiers_tags.txt`(1): いずれも今も fail。前者は下記
->   「実装前提の非互換」、`resolve_feature_path` の `.so` 例は monoruby の
->   `etc` が `stdlib/etc.rb` なので `[:rb, …]` を返し `:so` と恒久に一致しない
->   (`RbConfig::CONFIG["EXTSTATIC"]` を `"static"` にすれば spec 側が skip
->   するが、実態と違う値を報告することになる)、`/o` は
->   `regex_flags_from_closing` が `o` を落とす本物の未実装
->   (`doc/runtime_optimization/regexp.md` §5)。**残す**。
->   （追記: `predefined_tags.txt` は、`etc` を CRuby の `ext/etc` に
->   置き換えて `resolve_feature_path("etc")` が `[:so, …]` を返すように
->   なったので削除した。`doc/c_api.md` §3.25。）
->
-> 副産物: `pattern_matching_spec` の `Hash pattern raises
-> NoMatchingPatternKeyError if the key does not match` がタグ無しで error
-> している(`NoMatchingPatternKeyError` が上がらない)。タグとは無関係の
-> 実装差なので統計に出たままで正しい。
-
-> **更新(2026-09-17): `core/process/wait_tags.txt` を追加(#1386)。**
-> rubyspec-stats の 2026-09-17 の run(nightly = 900252fd)で core が空になった。
-> `spec/default.mspec` の example トレースが指す最後の example は
-> `Process.wait doesn't block if no child is available when WNOHANG is used`
-> (wait_spec.rb): `Process.fork` した子が `Signal.trap("TERM") { exit! }` して
-> `sleep`、親が pipe で同期してから `Process.kill("TERM")` → `Process.wait`
-> するもので、07:06:02 に入ったまま 07:25:42 の `timeout -k 5 1200` の TERM で
-> 抜けた(その TERM で次の example のトレースが 1 行出てから KILL、exit 137)。
-> 前日の run(a1aa2ec1e6)では同じ example が 20 ms で通っている。
->
-> ローカルでは再現しない: release ビルドの master(bf089972)で core 全体を
-> 15 回(各 25 秒、23163 examples)、`taskset -c 0` の 1 CPU で core/process を
-> 4 回、さらに CI と同じ 900252fd をビルドして core 全体と wait_spec を走らせたが
-> いずれも完走した。stdin を閉じる / `/dev/null` にする、mspec の
-> `--timeout` 監視スレッドや fd 待ちスレッド・busy スレッドを立てた状態で
-> fork する、といった条件でも通る。900252fd と a1aa2ec1e6 の間の 7 コミット
-> (#1370-#1376)に fork / wait / signal を触るものは無い。
->
-> つまり GitHub runner 上でだけ起きる `fork` した子 + `Process.wait` のハング
-> で、`fork_tags.txt`(fork_spec の 5 例、同じ「fork した子を wait する」型)と
-> 同じ族。原因が掴めるまで同じ扱いにし、この 1 例を `critical(hangs)` で外す。
-> 監視スレッド・ready キュー・fd 待ちを fork 直後の子で dispatch する経路
-> (`scheduler::fork_child_reset_threads`)は Dead マークで弾かれていることを
-> ローカルで確認済み。
->
-> タグが効いているかをローカルで確かめるときの注意: mspec は spec ファイルの
-> **実パス**に `[%r(spec/), 'spec/tags/']` を当ててタグファイルを探す
-> (action.yml のコメント参照)。`spec/ruby` を ruby/spec の checkout への
-> symlink にした workspace では `<checkout>/tags/core/process/wait_tags.txt`
-> に置かないと "0 tagged" のまま黙って全例が走る。CI の action は
-> `spec/tags/ruby/` と `spec/ruby/tags/` の両方にコピーしているので、
-> 手元でも同じ 2 か所に置けば `mspec ci` が `1 tagged` と報告する。
-
-> **更新(2026-08-09): 最後のタグを削除、タグはゼロに。** #1065 で
-> `Process.kill` がプロセスグループ宛て負シグナル(`-TERM` / 負の番号)を
-> 実装し、`core/process/kill_tags.txt` の3件は pass するようになった。
-> あわせて #1065 が持ち込んだ「trap ハンドラのメインスレッド配送」の
-> 副作用 — 非メインスレッドが `Process.kill` で自プロセスへシグナルを
-> 送った後、プロセスが *終了時に* スピンしてハングする(kill_spec 実行が
-> サマリ出力後に固まる)— も修正済み(非メインの kill 内自己ドレインの
-> スキップ + 遅延シグナルのポールフラグ再アーム)。タグ無しで kill_spec を
-> 反復実行(4回+)し、19 examples / 0F / 0E かつ終了ハング無しを確認して
-> タグファイルを削除した。`spec/tags/` は現在 language/ 配下のみ。
-
-monoruby が ruby/spec スイートのハングをどう回避しているか、そして粗い
-ファイル単位スキップリストを「本当に救えない5ファイル」まで絞り込んだ監査の
-記録。`#899` 以降の単一スレッド化ランタイムを前提とする（最新反映時点）。
-
-> **更新（2026-07-31）: 陳腐化タグの剪定。** 本ドキュメント以降、グリーン
-> スレッド／プリエンプション（#962）と library ハング修正（#988）により、
-> かつてハングしていた example の多くが完走・pass するようになった。再検証の
-> 結果、`fails:` タグは*pass する example を集計から除外し pass 率を過小評価*
-> するため、以下の陳腐化タグを削除した:
->
-> - `core/kernel/require_tags.txt`（`(concurrently)` 3件 → pass）
-> - `library/expect/expect_tags.txt`（`IO#expect` 4件 → pass、6例全完走）
-> - `library/socket/socket/{tcp,udp}_server_loop_tags.txt`（各1件 → pass）
->
-> 各ファイルを「タグ無し・`mspec run --excl-tag fails`」で4回反復＋バッチ／
-> カテゴリ実行し、ハング／フレークが無いことを確認済み。**残すのは
-> `core/process/kill_tags.txt` のみ**（プロセスグループ宛て負シグナルの3件は
-> 現在もハングし、除外するとファイルが完走することを確認）。空で未参照だった
-> `spec/skip.txt` も削除。なお自動タガー（下記モニタ）は*追加専用*なので、
-> 万一 Linux CI で再ハングすれば次回モニタ実行が自動で再タグ付けする。
-
-> **更新（重要・経緯）: tags が fast-path で効かなかった原因はタグの *置き場所*
-> のずれで、CI 側の1行修正で解消。tags を復活し `skip.txt` は5ファイルへ戻した。**
->
-> 一度は「rubyspec-stats の fast-path が tags を適用しない」と判断し、ハングする
-> 6ファイルを `skip.txt` へ戻した（#903）。しかし真因は別だった:
->
-> - fast-path は既に `mspec ci` を使っており、`mspec ci` は `fails`/`critical`/
->   `unstable`/`incomplete`/`unsupported` タグを既定で除外する（＝タグ適用モード
->   自体は有効）。
-> - mspec は各 spec のタグファイルパスを spec パスから `tags_patterns` で導出する。
->   config 無し（`-B` 無し）だと **組み込み既定** `[[%r(spec/), 'spec/tags/'],
->   [/_spec.rb$/, '_tags.txt']]` が使われる。rubyspec-stats は ruby/spec を
->   `spec/ruby/` に clone するので、`spec/ruby/core/io/select_spec.rb` の導出先は
->   **`spec/tags/ruby/core/io/select_tags.txt`**（`ruby/` セグメント入り）になる。
-> - ところが CI は monoruby の tags を `spec/tags/`（＝`spec/tags/core/...`）へ
->   コピーしていた。**`ruby/` 1セグメント分ずれて**タグが見つからず、除外されず、
->   ハングしていた。
->
-> 修正（rubyspec-stats/.github/workflows/ci.yml、コピー先を `spec/tags/ruby/` に）:
->
-> ```sh
-> mkdir -p spec/tags/ruby
-> [ -d monoruby-repo/spec/tags ] && cp -R monoruby-repo/spec/tags/. spec/tags/ruby/ || true
-> ```
->
-> これで `mspec ci` が `spec/tags/ruby/<cat>/<name>_tags.txt` を読み、ハングする
-> example だけが除外され、fast-path が 90 秒予算内で完走する（fallback 不要）。
-> したがって tags を復活し（`argf/read`, `argf/readlines`, `io/copy_stream`,
-> `io/select`, `socket tcp_/udp_server_loop`）、`skip.txt` からは対応6行を外して
-> 5ファイル（救えない CRASH/プロセス死のみ）へ戻した。ファイル単位 skip では
-> 落ちていた *ハングしない* example（`io/copy_stream` の63件など）が統計へ復帰する。
-> **この CI 側修正と本コミットは同時にデプロイすること**（CI 未修正のまま skip を
-> 外すと fast-path が再びハングする）。
+monoruby が ruby/spec スイートのハングをどう避けているかをまとめる。
 
 ## 背景
 
-外部の **rubyspec-stats** CI が ruby/spec を monoruby に対して定期実行し、
-passing/total の推移を追跡している。*ハングする*（返ってこない）spec は
-カテゴリ実行全体を止めてしまうため除外が必要。除外手段は2つある。
+外部の **rubyspec-stats** CI と、このリポジトリの spec-core / spec-library
+ワークフローが ruby/spec を monoruby で定期実行し、passing/total の推移を
+追跡している。*ハングする*（返ってこない）spec はカテゴリ実行全体を止めて
+しまうので、除外が必要になる。
 
-- **`spec/skip.txt`** — **ファイル単位**の粗い除外リスト
-  （`spec/ruby/core/thread/backtrace_spec.rb` のようなパス）。ファイルごと
-  除外すると*全 example* が分子・分母の両方から落ち、真の合格率を過小評価する。
-- **`spec/tags/`** — mspec ネイティブの **example 単位**タグ機構。spec ファイル
-  `<cat>/<name>_spec.rb` に対し、mspec は `tags/<cat>/<name>_tags.txt` を
-  自動読み込みする。`fails:<full description>` の1行で、その example 1件だけを
-  `mspec ci` が除外し、ファイル内の残りは実行・カウントされる。
+除外は mspec の **example 単位**のタグ（`spec/tags/`）で行う。spec ファイル
+`<cat>/<name>_spec.rb` に対し、mspec は `tags/<cat>/<name>_tags.txt` を
+読み込み、`fails:<full description>` の 1 行でその example 1 件だけを
+`mspec ci`（または `--excl-tag fails`）が除外する。ファイルの残りは実行され、
+集計に入る。ファイル単位の除外リスト（`spec/skip.txt`）は使わない。ファイルごと
+除外すると全 example が分子・分母の両方から落ち、合格率を過小評価するためである。
 
-本移行の目的: *少数*の特定 example だけでハングするファイルについて、
-ファイル単位スキップを example 単位の `fails:` タグへ置き換え、生き残る
-example を統計へ復帰させること。
+方針は 2 つある。
 
-### タグファイル形式
+- **タグはハング専用。** ハングしないセマンティクスの差は統計に出す。
+- **陳腐化したタグは剪定する。** `fails:` タグは pass する example も集計から
+  落とすので、残しておくと合格率を過小評価する。
 
-1行1タグ: `<class>:<full description>`。
+## タグファイル形式
 
-- `<class>` — `fails:` を使う（`mspec ci` が自動除外）。
-- `<full description>` — ネストした `describe`/`context` 文字列と `it` 文字列を
-  半角スペースで連結したもの。例:
+1 行 1 タグ: `<class>:<full description>`。
+
+- `<class>` — `fails:` を使う（`mspec ci` が自動で除外する）。ハングは
+  `critical(hangs):` でもよい。
+- `<full description>` — ネストした `describe` / `context` の文字列と `it` の
+  文字列を半角スペースで連結したもの。例:
 
   ```
   # spec/tags/core/io/select_tags.txt
   fails:IO.select returns supplied objects when they are ready for I/O
-  fails:IO.select returns the pipe read end in read set if the pipe write end is closed concurrently
   ```
 
-### mspec のタグパス解決
+## mspec のタグパス解決
 
-`spec/default.mspec` の `tags_patterns` により、spec リポジトリのルート基準で
-`core/thread/backtrace_spec.rb` → `tags/core/thread/backtrace_tags.txt` と
-変換される。rubyspec-stats CI は monoruby の `spec/tags/` を spec チェックアウト
-側へ配置して mspec に読ませる。ローカル検証では symlink で同じ配線を再現する。
+mspec は spec ファイルの**実パス**に `tags_patterns` を当ててタグファイルの
+パスを導出する。config が設定しなければ組み込み既定の
+`[[%r(spec/), 'spec/tags/'], [/_spec.rb$/, '_tags.txt']]` が使われる。
 
-```sh
-ln -sfn /path/to/monoruby/spec/tags /path/to/spec/tags
-```
+- **rubyspec-stats** は ruby/spec を `spec/ruby/` に clone するので、
+  `spec/ruby/core/io/select_spec.rb` の導出先は
+  `spec/tags/ruby/core/io/select_tags.txt`（`ruby/` セグメント入り）になる。
+  setup action（`rubyspec: "true"`）は monoruby の `spec/tags/` を
+  `spec/tags/ruby/` と `spec/ruby/tags/` の両方にコピーする。
+- **spec-core / spec-library** ワークフローは ruby/spec を `../spec` に
+  clone し、`spec/tags/` を `../spec/tags/` にコピーする。
 
-なお、monoruby リポジトリ側の `spec/default.mspec` は別物で、setup action
-（`rubyspec: "true"`）が rubyspec-stats のワークスペース直下 `spec/` に
-コピーする設定ファイル。`tags_patterns` は設定しない（mspec 組み込みの
-`spec/tags/ruby/...` 解決のまま）。中身は example トレースのみ: 各 example の
-description を実行直前に stderr へ出す。mspec 自身の `--timeout` は対象
-プロセス内の監視スレッドなので、メインスレッドがカーネル内（`waitpid` 等）で
-ブロックすると monoruby では発火せず、外側の `timeout(1)` に kill されて
-結果ファイルが空になる。トレースがあれば CI ログの最後の description が
-ハングした example であり、そのままタグに書ける。
+ローカルで `spec/ruby` を ruby/spec の checkout への symlink にした
+workspace では、タグを `<checkout>/tags/...` に置かないと "0 tagged" のまま
+黙って全例が走る。CI と同じ 2 か所に置けば `mspec ci` が `N tagged` と報告する。
 
-## bisect 手法（ローカル）
+このリポジトリの `spec/default.mspec` は setup action がワークスペース直下の
+`spec/` にコピーする設定ファイルで、`tags_patterns` は設定しない。中身は
+example トレースで、各 example の description を実行直前に stderr へ出す。
+mspec 自身の `--timeout` は対象プロセス内の監視スレッドなので、メイン
+スレッドがカーネル内（`waitpid` 等）でブロックすると発火せず、外側の
+`timeout(1)` に kill されて結果ファイルが空になる。トレースがあれば CI ログの
+最後の description がハングした example であり、そのままタグに書ける。
 
-CI には "Bisect monoruby core hang" ワークフローがあるが、監査全体は
-現 master バイナリ・sibling の `spec/`・`mspec/` チェックアウト・timeout が
-あればローカルで再現できる。
+## ハングする example の特定（ローカル）
 
-**重要:** bisect は必ず*現 master* バイナリで行うこと。インストール済みの
-リリースは関連修正より古い場合がある。例えば `#899`（「ruby/spec のハングを
-止めるため単一スレッドの最小面へ削減」）は多くのハングを解消したため、古い
-バイナリはハングを見落とすと同時に、無いはずのハングを作り出す。
-
-```sh
-cargo install --path monoruby --force        # 現 master バイナリ
-```
-
-ファイルごとに specdoc フォーマッタ + timeout で実行する。specdoc は各 example
-の説明を*実行前に*出力するので、**timeout 直前の最後の `- …` 行がハングしている
-example** になる。
+現 master のバイナリ、sibling の `spec/`・`mspec/` checkout、`timeout` が
+あれば再現できる。インストール済みの古いバイナリでは、関連する修正の有無で
+結果が変わるので、必ず現 master をインストールしてから行う。
 
 ```sh
+bin/install                                   # 現 master バイナリ
 timeout 45 mspec run -t monoruby -fs <cat>/<name>_spec.rb
 ```
 
-exit code による分類:
+specdoc フォーマッタは各 example の説明を*実行前に*出力するので、timeout
+直前の最後の `- …` 行がハングしている example である。exit code の意味:
 
 | exit | 意味 |
 | ---- | ---- |
 | `0` / `1` | 完走（1 = failures/errors あり。それでも実行は完了） |
 | `124` | **ハング** — `timeout` 発火。最後の `- …` 行が犯人 |
-| `134` (SIGABRT) | monoruby が abort（`extern "C"` 境界での Rust panic） |
+| `134` (SIGABRT) | monoruby が abort（`extern "C"` 境界での Rust panic など） |
 | `143` (SIGTERM) | プロセスがシグナルで死亡（シグナル配送系 spec） |
 
-**複数**の example がハングするファイルは反復する: 見つけた example の
-`fails:` タグを追加し、タグを有効にして再実行
-（`mspec run -fs --excl-tag fails …` または `mspec ci …`）して次を炙り出し、
-ファイルが完走するまで繰り返す。
+複数の example がハングするファイルでは、見つけた example にタグを付け、
+タグを有効にして（`mspec run -fs --excl-tag fails …` または `mspec ci …`）
+再実行し、ファイルが完走するまで繰り返す。
 
-> バッファリングの罠: mspec を `timeout` 下で `grep`/`tail` にパイプすると、
-> SIGTERM でバッファ済み stdout が失われることがある。ファイルへリダイレクト
-> してから読み直すこと。
+> バッファリングの罠: mspec を `timeout` 下で `grep` / `tail` にパイプすると、
+> SIGTERM でバッファ済みの stdout が失われることがある。ファイルへ
+> リダイレクトしてから読み直すこと。
 
-## 監査結果（元の `skip.txt` 40ファイル）
+GitHub runner の上でだけ起きるハングもある（fork した子を `Process.wait`
+する spec で過去に観測した）。ローカルで通ることはタグを外す根拠にならず、
+外すときは CI で確かめる。
 
-| 分類 | 件数 | 処置 |
-| ---- | ---- | ---- |
-| **HANG**（少数 example） | 6 | 5件を `fails:` タグへ移行、1件は skip 維持 |
-| **COMPLETED**（もうハングしない） | 30 | skip から除去、タグ不要 |
-| **CRASH — SIGABRT** | 1 | skip 維持（monoruby バグ） |
-| **CRASH — SIGTERM** | 3 | skip 維持（シグナル配送） |
+## タイムアウトの自動検知とタグ付け（spec-core モニタ）
 
-大きな COMPLETED バケットが最大の発見: **`skip.txt` は陳腐化していた** —
-`#899` 以降、リストの4分の3はもうハングしない（代わりに即エラー/失敗で完走）
-ため、盲目的に skip 維持することが合格率を過小評価していた。
+`.github/workflows/spec-core.yml` と `.github/scripts/bisect-spec-timeouts.sh`
+がハングする example の特定を自動化している。
 
-### タグへ移行（6ファイル）
-
-| spec ファイル | タグ付けした example |
-| ------------- | -------------------- |
-| `core/argf/read_spec.rb` | `ARGF.read reads the contents of a special device file`（`/dev/zero` を `read(100)` — 長さ制限を無視して無限読み込み） |
-| `core/argf/readlines_spec.rb` | `ARGF.readlines returns an empty Array when end of stream reached` |
-| `core/io/copy_stream_spec.rb` | `IO.copy_stream with a destination that does partial reads calls #write repeatedly on the destination Object` |
-| `core/io/select_spec.rb` | `IO.select returns supplied objects when they are ready for I/O` **と** `IO.select returns the pipe read end in read set if the pipe write end is closed concurrently` |
-| `library/socket/socket/tcp_server_loop_spec.rb` | `Socket.tcp_server_loop when a connection is available yields a Socket and an Addrinfo` |
-| `library/socket/socket/udp_server_loop_spec.rb` | `Socket.udp_server_loop when a connection is available yields the message and a Socket::UDPSource` |
-
-各ファイルは `mspec ci`（`fails:` タグを除外）で完走し、残りのハングが無いことを
-検証済み。
-
-### `skip.txt` に維持（5ファイル）
-
-タグでは救えないもの — プロセスごと死ぬか、全 example がハングする:
-
-| spec ファイル | 理由 |
-| ------------- | ---- |
-| `core/enumerator/new_spec.rb` | `builtins::array::eq`（`Array#==`）での非巻き戻し Rust panic → SIGABRT。隠すのではなく修正すべき monoruby バグ。 |
-| `core/exception/signal_exception_spec.rb` | 実際にシグナルを配送 → SIGTERM でプロセス死 |
-| `core/exception/signm_spec.rb` | 先頭 example で死亡（SIGTERM） |
-| `core/exception/signo_spec.rb` | 先頭 example で死亡（SIGTERM） |
-| `library/expect/expect_spec.rb` | 6 example 全てが `IO#expect` でブロック。全部タグ付けはファイルごと skip と等価 |
-
-## 解除した30件の検証
-
-`mspec ci` はカテゴリ内のファイルを**1プロセス**で順次実行するため、以前
-スキップされていたファイルがグローバル状態（fd, `at_exit`, シグナル trap,
-Mutex/Queue/Thread の状態）を残し、*後続*ファイルをハングさせる恐れがある。
-これが起きないことを2段階で確認した。
-
-1. **解除30ファイルを1つの `mspec ci` プロセスで実行** — 約35秒で完走、
-   815 examples、ハング0。
-2. **状態依存が強いカテゴリの全体実行**（未スキップの隣接 spec も込み）:
-   `core/thread`（全53ファイル）・`core/mutex`・`core/queue`・
-   `core/sizedqueue` — 全て完走、ハングなし。
-
-単一スレッド化（`#899`）により残留バックグラウンドスレッド起因のハングは
-起こりにくく、この結果と整合する。I/O 依存の非常に大きいカテゴリ
-（`core/io`・`core/kernel`・`core/file`）は全体実行していない — 無関係な
-ブロッキング spec が誤検知ハングを生むため。該当ファイル群は検証(1)で
-カバー済み。
-
-## 最終状態
-
-- `spec/skip.txt`: **空**（0 ファイル）。かつて「救えない」としていた5ファイルも、
-  crash/hang の原因は *特定の1〜数 example* に限られることを突き止め、その example
-  だけを `fails:` タグで除外すれば残りは完走することを確認したため、すべて tags へ
-  移行した。
-- `spec/tags/`: **5 ファイル**。各ファイルで crash/hang する example のみ除外:
-  - I/O 系ブロッキング（tag 適用で fast-path 完走）: `core/io/copy_stream`、
-    `core/io/select`（2件）、`library/socket/socket/{tcp,udp}_server_loop`、
-    `library/expect/expect`（`IO#expect` がブロックする4件のみ。閉じた IO / EOF の
-    2件は即返るので除外しない）。
-  - （`core/enumerator/new` は issue #905 の `as_array` panic を根治したため tag を
-    撤去。`#yield returns nil` は現在 pass する。）
-  - （`core/exception/{signal_exception,signm,signo}` は signal handling 実装
-    （SIGTERM 等 → `SignalException` 変換、未捕捉時は SIG_DFL 再送でシグナル死）に
-    より tag を撤去。`signal_exception` は16 example 全 pass、`signm`/`signo` も
-    pass する。）
-  - （`core/argf/{read,readlines}` は ARGF の修正により tag を撤去。真因は2点:
-    (1) `ARGF#read` が長さ引数を無視して EOF まで読むため `/dev/zero` で無限読み
-    （メモリ無制限増加 → 環境により HANG または OOM/abort）。`read(length,
-    outbuf)` を CRuby 準拠に実装（ファイル境界をまたぎ length で停止、EOF で
-    nil、length 0 で ""）。(2) ARGV のファイルを消費し尽くした後に `advance` が
-    `$stdin` へフォールバックし、`ARGF.read; ARGF.readlines` が stdin 読みで
-    永久ブロック。ストリーム管理を `__stream`/`__finish_stream` に統一し、消費
-    後は exhausted（stdin フォールバック無し）とした。`read_spec` は 16 example
-    中 failure 1（エンコーディング別件）、`readlines_spec` は全 pass。）
-  - CI 側で tags のコピー先を `spec/tags/ruby/` に修正済み（上部「更新」参照）なので
-    `mspec ci` がタグを読み、crash/hang する example だけ除外して fast-path が完走する。
-  - `library/cgi/unescapeURIComponent` は報告にあったが実際はハングしない
-    （約0.35秒）ので対象外。
-
-## フォローアップ
-
-- ~~**`core/enumerator/new` の `as_array` panic**（issue #905）~~ — **修正済み**。
-  真因は2点: (1) generator の駆動（`generator_yield_values`）が resume 時にも
-  `yielder` を渡していたため `Yielder#yield` が nil ではなく Yielder 自身を返し、
-  ユーザ側（`r << y.yield(1)`）へ Yielder が漏れていた。(2) `Yielder` が `Array` の
-  サブクラスで、継承した `Array#inspect` 等が非配列の Yielder に `Value::as_array`
-  を実行して非巻き戻し panic → abort。resume 値を `nil` にし、`Yielder` の親クラスを
-  `Object` に変更（CRuby 準拠）。tag は撤去し `#yield returns nil` は pass する。
-- ~~**SIGTERM → `SignalException` 変換**~~ — **実装済み**。CRuby と同一の
-  デフォルト変換セット（HUP/INT/QUIT/ALRM/TERM/USR1/USR2）を async ハンドラで
-  受けて poll 点で `SignalException`（INT は `Interrupt`）として raise。未捕捉時は
-  `SIG_DFL` を復元して自己再送し、プロセスは*そのシグナルで*死ぬ（`$?.signaled?` /
-  `termsig` が CRuby 準拠。Interrupt のみレポートを出力、素の SignalException は
-  無音 — CRuby と同じ）。自分宛て `Process.kill` は kill 内で同期的に raise。
-  `Kernel#sleep` は nanosleep + EINTR ポーリングで割り込み可能化。
-  `pending_signals` ビットマップはプロセスグローバルへ移動（シグナルはプロセス
-  資源のため。複数 Codegen 環境での取りこぼしを根治）。付随して
-  `IO.popen(文字列)` のシェル経由をメタ文字必要時のみに限定（シグナル死の
-  `signaled?`/`termsig` を保持。POSIX シェル組み込みは従来どおり sh 経由）、
-  バッククォートが `$?` を設定するように修正。3件の tag を撤去。
-  **既知の限界**: Rust が EINTR を内部再試行するブロッキング read/write 中は
-  1発の SIGTERM では死なない（pending bit は立つが poll に到達しない）。健全な
-  実行は即変換されるが、真にハングしたプロセスの kill には `timeout -k`
-  （KILL フォールバック）を推奨。
-- ~~**`core/io` の fd 二重クローズ crash**~~ — **修正済み**。原因は
-  `IO.new(other_io.fileno)` / `IO.open(fd)` / `File.open(fd)` が、既に別の
-  monoruby IO が所有する fd を *2つ目の* 閉じる `OwnedFd` として包み、
-  Drop 時に二重 `close(2)` して Rust std の IO-safety abort を踏むこと。
-  スレッドローカルの所有 fd 集合（`OWNED_FDS`）を導入し、既に所有済みの fd を
-  `IO.new`/`open` した場合は *借用*（`autoclose = false`、`into_raw_fd` で閉じずに
-  解放）とすることで、閉じるのは元の所有者だけになるようにした。fileno の同一性は
-  保たれる。これにより `core/io`（103ファイル / 1483 example）・`core/file`・
-  `core/kernel` がカテゴリ一括実行で crash せず完走するようになった。
-
-## 実装前提の非互換による tags（恒久・非ハング）
-
-原則（tags はハング専用、セマンティクス差は統計に出す）の唯一の例外として、
-**spec の前提がこの処理系上で成立し得ない** example をタグ化している。
-「いずれ直すべき差」ではなく、直すことが誤りになる類のもの。
-
-- `core/refinement/import_methods_tags.txt` — `raises ArgumentError when
-  importing methods from C extension`: この spec は「C 拡張のメソッドは
-  import できない」ことを検証するために、CRuby では確実に C 実装である
-  `Zlib` を素材に選んでいる。monoruby の `Zlib` は Ruby 実装
-  （`stdlib/zlib.rb`）なので import は**正しく成功**し、raise しないのが
-  正直な挙動。ガード自体（native builtin・attr アクセサ・
-  `define_method`+block・`alias` エントリ・可視性 shadow の拒否）は
-  実装済みで、`module.rs` のユニットテストが CRuby と突き合わせている。
-  Zlib が C 実装でなくなる限りこの example は恒久に成立しないため、
-  ハングではないが tag で除外する。
-
-## グリーンスレッド導入後のタイムアウト tags（2026-07 追加 → 撤去済み）
-
-> **2026-07 更新**: 以下の 5 タグ（+ `kernel/exit`）は、タイムスライス・
-> プリエンプション（doc/threads.md §8）とカーネルブロッキング
-> syscall のネイティブワーカーオフロード（同 §9）の実装により
-> **ハングしなくなったため撤去した**。一部の example は依然セマンティクス
-> 差で fail/error するが、それは統計に出すのが rubyspec-stats の方針
-> （tags はハング専用）。以下は当時の記録として残す。
-
-限定的マルチスレッド（協調グリーンスレッド、M:1）の導入で spec-core モニタの
-5ファイルが 60 秒のファイル予算を超えるようになり、rubyspec-stats CI が失敗した。
-example 単位で切り分け、各ファイルとも**犯人1例**を `fails` tag で除外
-（除外後は全ファイルが数秒で完走）。いずれも既知の制限に帰着する:
-
-- `core/thread/list_tags.txt` — `Thread.list returns instances of Thread and
-  not null or nil values`: `begin … end while spawner.alive?` という
-  **ブロッキング呼び出しゼロのループ**で main が回り続け、協調スケジューリング
-  では spawner スレッドに永遠に CPU が渡らない。タイムスライス・
-  プリエンプション（SIGALRM watchdog → poll 点で強制 yield、doc/threads.md §8-1）
-  の実装で解除できる。
-- ~~`core/thread/report_on_exception_tags.txt`~~ — **解除済み**。真因は 2 つ:
-  (1) `ThreadInner::pending` が 1 スロットで `#kill` が直前の `#raise` を
-  上書きしていた → CRuby の `pending_interrupt_queue` と同じ FIFO
-  `VecDeque` に変更(raise が先に配達され、スレッドは例外で死ぬ)。
-  (2) 「ハング」の正体はクラスメソッド `Thread.report_on_exception=` の欠落 —
-  upstream `spec_helper.rb` が「true で raise する shim」を注入しスレッド本体が
-  即死、`Thread.pass until ready …` が無限ループしていた → クラスレベル
-  アクセサを追加。あわせてレポート出力を Ruby レベル `$stderr` 経由の
-  CRuby 形式(`#<Thread:0xADDR run> terminated with exception …`)に変更
-  (mspec の output matcher は `$stderr` 差し替えで捕捉するため必須)。
-- `core/mutex/lock_tags.txt` — `Mutex#lock does not raise deadlock if a fiber's
-  attempt to lock was interrupted`: fiber 内の `Mutex#lock` 待ちへの割り込み
-  （`Thread#raise`）で待機が解けず永久ブロック。fiber が thread の代理で park
-  する経路の interrupt 配送が未対応。
-- `core/file/open_tags.txt` — `File.open on a FIFO opens it as a normal file`:
-  FIFO の `open(2)` は相手側が開くまで**カーネル内でブロック**する。M:1 では
-  writer スレッドの open がプロセス全体を止め、reader スレッドが走れず
-  デッドロック。`O_NONBLOCK` オープン + fd ポーラ待ちのエミュレーションが
-  必要（blocking_io_region は開いた後の read/write のみカバー）。
-- `core/file/flock_tags.txt` — `File#flock blocks if trying to lock an
-  exclusively locked file`: サブプロセスが保持する排他ロックへの `flock` 待ちが
-  約 55 秒（内部期待のタイムアウトまで）ブロックし、単独でファイル予算を
-  ほぼ使い切る。`flock(2)` の LOCK_NB + リトライによるスケジューラ統合で
-  解除できる。
-
-## タイムアウトの自動検知・自動タグ付け（spec-core モニタ）
-
-上記のような「グリーンスレッド化で新たにハングする example」を手作業で
-切り分ける運用を自動化した。仕組み（`.github/workflows/spec-core.yml` +
-`.github/scripts/bisect-spec-timeouts.sh`）:
-
-1. **モニタ自身が tags を適用**: リポジトリの `spec/tags/` を ruby/spec
-   チェックアウトへコピーし、全ラン `--excl-tag fails` で実行する。
-   タグ済みのハング example が毎回 60 秒予算を食い潰すのを防ぐ
-   （統計上は tagged として除外カウントされる）。
-2. **検知**: 従来どおり、ファイル単位 `timeout -k 5 60` で完走しなかった
-   ファイルが `timeouts.csv` に記録される。
-3. **同定**: `bisect-spec-timeouts.sh` が各タイムアウトファイルの example
-   一覧を `mspec --dry-run -f s` で取得し（describe の連結 = tag 名）、
-   1 example ずつ `timeout -k 5 60` 付きで個別実行。
+1. **モニタ自身がタグを適用する。** `spec/tags/` を ruby/spec の checkout へ
+   コピーし、全ランを `--excl-tag fails` で実行する。タグ済みの example が
+   毎回ファイル予算を食い潰すのを防ぐ。
+2. **検知。** ファイル単位の `timeout -k 5 60` で完走しなかったファイルが
+   `timeouts.csv` に記録される。
+3. **同定。** `bisect-spec-timeouts.sh` が各タイムアウトファイルの example
+   一覧を `mspec --dry-run -f s` で取得し（describe の連結 = タグ名）、
+   1 example ずつ `timeout -k 5 60` 付きで個別に実行する。
    - exit 124/137 → `hang`（真のハング）
-   - 単独で 30 秒以上 → `slow`（単独で予算を圧迫する近予算バーナー）
-   - どちらも該当なし → `cumulative-only`（合算超過。タグ付けせず
-     予算見直し対象として報告のみ）
-   - 病的ケース対策: dry-run にも 60 秒、1 ファイルの bisect に
-     900 秒の上限。
-4. **タグ更新と PR**: 見つかった culprit を `spec/tags/<cat>/<file>_tags.txt`
-   へ重複排除で追記し、差分があれば固定ブランチ `auto/spec-timeout-tags`
-   に commit して PR を自動作成する（既存 PR があれば force-push +
-   body 更新で同じ PR が更新される＝冪等）。**マージは人間が判断する**:
-   tag が妥当（既知の制限）か、退行として修正すべきかのレビューを挟む。
-   結果テーブルはラン summary・PR body・artifact
-   （`timeout_culprits.{csv,md}`）に出力される。
+   - 単独で 30 秒以上 → `slow`（単独で予算を圧迫する）
+   - どちらでもない → `cumulative-only`（合算での超過。タグ付けせず、予算の
+     見直し対象として報告のみ）
+   - dry-run にも 60 秒、1 ファイルの bisect に 900 秒の上限がある。
+4. **タグ更新と PR。** 見つかった犯人を `spec/tags/<cat>/<file>_tags.txt` へ
+   重複排除で追記し、差分があれば固定ブランチ `auto/spec-timeout-tags` に
+   commit して PR を作る（既存の PR があれば同じ PR を更新する）。**マージは
+   人間が判断する**: タグが妥当（既知の制限）か、退行として直すべきかを
+   レビューする。結果の表はランの summary、PR の本文、artifact
+   （`timeout_culprits.{csv,md}`）に出る。
+
+rubyspec-stats の run が空の結果を公開した場合は
+`.github/scripts/rubyspec_stats_watch.rb` が issue を立て、次の run が
+空でない結果を公開すると閉じる。
+
+## 現在のタグ
+
+`spec/tags/` には 1 ファイルだけがある。
+
+- `core/refinement/import_methods_tags.txt` — `Refinement#import_methods when
+  methods are not defined in Ruby code raises ArgumentError when importing
+  methods from C extension`。ハングではなく、spec の前提が成り立たなかった
+  ために付けたタグである。この spec は「C 拡張のメソッドは import できない」
+  ことを `Zlib` で確かめるが、タグを付けた時点の monoruby の `Zlib` は Ruby
+  実装だったので import が成功していた。現在の `Zlib` は CRuby の
+  `ext/zlib` を C API 層の上でビルドした `zlib.so`（`doc/c_api.md`）で、
+  `import_methods` は iseq でないメソッドを拒否する（`builtins/module.rs`）
+  ので、この example は通るはずである。CI で確かめてからタグを外す候補である。

@@ -45,7 +45,7 @@ Ruby source is parsed by [prism](https://github.com/ruby/prism) (consumed as the
 | Subsystem | Chapter | Design documents |
 | --- | --- | --- |
 | Value representation (64-bit tagged union) | [Value Representation](value-representation.md) | — |
-| JIT compiler (TraceIR / AsmIR / register allocation) | [JIT Compiler](jit-compiler.md) | [`jit.md`](design/jit.md), [`lir.md`](design/lir.md), [`regalloc_separation.md`](design/regalloc_separation.md) |
+| JIT compiler (TraceIR / AsmIR / register allocation) | [JIT Compiler](jit-compiler.md) | [`jit.md`](design/jit.md), [`lir.md`](design/lir.md), [`jit_invariants.md`](design/jit_invariants.md) |
 | Garbage collection (generational mark-and-sweep) | [Garbage Collection](garbage-collection.md) | [`gc.md`](design/gc.md) |
 | Threads and fibers | [Threads and Fibers](threads-and-fibers.md) | [`threads.md`](design/threads.md) |
 | Stack frames and method calls | [Stack Frames and Method Calls](stack-frames-and-method-calls.md) | [`stack_frame.md`](design/stack_frame.md), [`method_args.md`](design/method_args.md) |
@@ -69,23 +69,29 @@ monoruby/                   workspace root
 │   └── builtins/           built-in Ruby classes implemented in Rust
 ├── monoruby/builtins/      built-in library code written in Ruby
 ├── monoruby_attr/          proc macros (#[monoruby_builtin], …)
+├── monoruby_ext_sys/, monoruby_ext/   C ABI (and safe Rust over it) for dynamically loaded extensions
+├── monoruby_capi/          CRuby-compatible C API layer, and CRuby's own stdlib C extensions built on it
+├── ext/                    native halves of gems (sqlite3, zstd, psych, nokogiri, …) as loadable extensions
 ├── rubymap/, hashbrown/    order-preserving hash map for Ruby Hash
 └── doc/                    detailed design documents
 ```
 
 ## Key global registers (JIT / VM tier)
 
-On x86-64, JIT-compiled code keeps interpreter state in fixed registers (the aarch64 backend uses an equivalent fixed assignment):
+Machine code keeps interpreter state in fixed registers:
 
-| Register | Holds |
-| --- | --- |
-| `rbx` | `&mut Executor` |
-| `r12` | `&mut Globals` |
-| `r13` | program counter |
-| `r14` | local frame pointer (LFP) |
+| x86-64 | aarch64 | Holds |
+| --- | --- | --- |
+| `rbx` | `x19` | `&mut Executor` |
+| `r12` | `x20` | `&mut Globals` |
+| `r13` | `x21` | program counter (VM tier) |
+| `r14` | `x22` | local frame pointer (LFP) |
+| `r15` | `x23` | accumulator (VM tier only) |
+
+Inside JIT code `r13` (aarch64: `x24`) instead caches the buffer of `self`'s heap ivar table (`SELF_IVAR_BASE`); compiled code keeps no fixed accumulator.
 
 ## Further reading
 
-- [Build and Install](https://github.com/sisshiki1969/monoruby/wiki/Build-and-Install) — how to build and run monoruby
-- [Build options for performance tuning](https://github.com/sisshiki1969/monoruby/wiki/Build-options-for-performance-tuning) — bytecode / TraceIR / assembly dumps
-- [`doc/` directory](https://github.com/sisshiki1969/monoruby/tree/master/doc) — the full set of design documents, including C-extension design notes, encoding design, and progress notes
+- [Installation and Build](installation.md) — how to build and run monoruby
+- [Development and Build Options](development.md) — bytecode / TraceIR / assembly dumps and the other Cargo features
+- [`doc/` directory](https://github.com/sisshiki1969/monoruby/tree/master/doc) — the full set of design documents, indexed in its `README.md`

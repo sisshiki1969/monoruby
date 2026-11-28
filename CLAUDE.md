@@ -95,9 +95,8 @@ monoruby/                   # Workspace root
 │   ├── README.md           # Index of every document, with kind + language
 │   ├── jit.md              # JIT stub code details
 │   ├── method_args.md      # Method argument handling
-│   ├── runtime_optimization/ # Array / Hash / String / Regexp: representation,
-│   │                       #   VM+JIT fast paths, CRuby differences (JA)
-│   └── progress_2025-2026.md # Progress notes
+│   └── runtime_optimization/ # Array / Hash / String / Regexp: representation,
+│                           #   VM+JIT fast paths, CRuby differences (JA)
 ├── Cargo.toml              # Workspace manifest
 └── rust-toolchain.toml     # Pins nightly-2026-09-27
 ```

@@ -12,11 +12,11 @@ monoruby の POSIX シグナル処理の**現行実装**を、コードに即し
 | 対象 | ファイル |
 | --- | --- |
 | ペンディングビットマップ・signo↔例外・disposition | `codegen/signal_table.rs` |
-| ハンドラスタブ(async-signal-safe) | `codegen/arch/{x86_64,aarch64}/jit_module.rs`(`signal_handler_for`) |
-| sigaction インストール・スタブ事前生成 | `codegen/codegen.rs` |
+| ハンドラ(async-signal-safe) | `codegen/signal_table.rs`(`signal_handler`)/ `poll_flag.rs` |
+| sigaction インストール | `codegen.rs`(`install_signal_handler` ほか) |
 | セーフポイント配送 | `executor.rs`(`execute_gc`) |
 | `Signal` / `Kernel#trap` ビルトイン・名前表 | `builtins/process.rs` / `builtins/kernel.rs` |
-| trap テーブル(GC ルート) | `globals/globals.rs` |
+| trap テーブル(GC ルート) | `globals.rs` |
 | `signal_interrupt` マーカー | `globals/error.rs` |
 | ブロッキング IO 統合 | `builtins/io.rs`(`blocking_io_region`)/ `value/rvalue/io.rs` |
 | ハングウォッチドッグ | `watchdog.rs` |
@@ -77,11 +77,9 @@ pub(crate) extern "C" fn signal_handler(signo: i32) {
 `poll_flag.rs` のプロセスグローバルなレジストリ(`AtomicUsize`、最後に登録した
 `Codegen` が勝つ — `sigaction` のプロセスワイド性と対応)から取得する。
 
-かつては signo ごとに JIT asm スタブ(`addl [alloc_flag], 10; orl [pending], bit`)を
-事前生成していたが、(1) lock なし RMW がプリエンプトタイマの `fetch_or` と競合して
-どちらかの更新を失いうる、(2) インストール元 `Codegen` の解放後にシグナルが来ると
-解放済み JIT メモリを実行する、という 2 つの欠陥があり、Rust ハンドラ+アトミック演算に
-置き換えた。
+ハンドラを JIT コードにしないのは、(1) lock なし RMW だとプリエンプトタイマの
+`fetch_or` と競合してどちらかの更新を失いうる、(2) インストール元 `Codegen` の解放後に
+シグナルが来ると解放済み JIT メモリを実行する、の 2 点を避けるため。
 
 ---
 
@@ -138,17 +136,6 @@ pub(crate) extern "C" fn signal_handler(signo: i32) {
 実行中に届いたシグナルはメインの次の poll まで保留される(非メインのホルダは
 その poll で GVL を譲る、`doc/threads.md` §12.8)。
 
-2026-11 まであった M:1 グリーンスケジューラでは、これに加えてスケジューラの
-機構と入口(`pass` / `sleep` / `join`)の内側を `SCHED_CALL_DEPTH` で除外して
-いた。保存中のコンテキストの上に積んだ Ruby フレームが復帰時にもう一度実行される
-のを防ぐためで、コンテキストを保存して切り替えない 1:1 モデルでは不要になった。
-
-> これを怠ると、`sleep` で park したスレッドが 1 本あるだけでカウンタが恒久的に
-> 1 以上に張り付き、以後 `Signal.trap` ハンドラが**二度と走らなくなる**。
-> `nil until flag` は無限に回り、次のブロッキング書き込みが内部マーカー
-> `__monoruby_signal_interrupt__`(§ マーカー)を RuntimeError として表に出す。
-> 回帰テスト: `process.rs` の `signal_delivered_while_another_thread_is_parked`。
-
 ---
 
 ## 5. signo → 既定例外(A4;`signo_to_error`)
@@ -182,7 +169,7 @@ pub(crate) extern "C" fn signal_handler(signo: i32) {
 3. disposition はコマンド引数(`command_disposition`)かブロック
    (`Handler(generate_proc(...))`)から決まる(コマンド優先)。
 4. **先に OS レベルでインストールし、その後 trap テーブルへ記録**する。`CODEGEN` 借用下で
-   disposition ごとに `install_signal_stub` / `install_signal_ignore` /
+   disposition ごとに `install_signal_handler` / `install_signal_ignore` /
    `install_signal_default` / `install_signal_system_default` を呼ぶ。失敗時は `Errno`。
    `set_signal_disposition` が**前の disposition** を返し、`disposition_to_value` で Ruby 値に
    変換して返す。
@@ -251,7 +238,7 @@ pub(crate) extern "C" fn signal_handler(signo: i32) {
 ### その他の EINTR→poll 経路(いずれも `SA_RESTART` なし)
 
 `Process.waitpid`、`Kernel#sleep`(nanosleep 前に保留シグナルを drain)、`IO#write`/flush、
-スケジューラの待機(`park_until_deadline` / fd 待ち)、`native_pool`(素の EINTR は再試行)。
+スレッドの park(`scheduler/native.rs` の `park` / fd 待ち)、`native_pool`(素の EINTR は再試行)。
 **自分宛の `Process.kill`** は、単一スレッドではシグナルが `kill(2)` 復帰前に配送されビットが
 既に立っているので、`kill` 呼び出し内で `execute_gc` を**インライン**で回して配送する(CRuby 同様)。
 

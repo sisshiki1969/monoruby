@@ -132,7 +132,7 @@ independent** — it does not need a `ruby` on `PATH` to produce a correct,
 reproducible build. It does two things:
 
 1. **Bakes the reported Ruby version.** `MONORUBY_RUBY_VERSION` is read from
-   `monoruby/vendor/ruby-stdlib/.ruby-version` (currently **4.0.2**) and
+   `monoruby/vendor/ruby-stdlib/.ruby-version` (currently **4.0.9**) and
    reported at run time as `RUBY_VERSION`. Taking it from the vendored
    snapshot rather than a host `ruby` keeps the version monoruby reports in
    step with the stdlib it actually ships.
@@ -172,7 +172,12 @@ A host `ruby` is used for exactly two optional things:
   `~/.monoruby/{library_path,gem_path}` so the ~50 ms spawn is paid once per
   machine. Precedence is `MONORUBY_GEM_PATH` / `MONORUBY_LOAD_PATH`, then
   `GEM_PATH`, then the cache files, then the probe. `MONORUBY_REPROBE=1`
-  forces a fresh probe. With no host Ruby, those caches stay empty and the
+  forces a fresh probe, and a `gem install` on the host is picked up on the
+  next start. The Ruby probed is not simply `ruby` on `PATH`: `ruby` on
+  `PATH` and every versioned rbenv / rvm / asdf / mise install are ranked by
+  distance from the vendored pin and the closest wins (the same rule the
+  test harness uses); the choice is recorded in `~/.monoruby/probed_ruby`,
+  and `MONORUBY_RUBY=<path>` pins one explicitly. With no host Ruby, those caches stay empty and the
   vendored stdlib still loads normally — you will just see this on startup:
 
   ```text

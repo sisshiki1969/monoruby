@@ -121,10 +121,10 @@ block-read benchmarks.
 
 ## 5. Outer-float claims as ordinary state
 
-The outer-frame float roadmap (write-through keeps, store-driven `S→Sf`
+The outer-frame float claims (write-through keeps, store-driven `S→Sf`
 promotion with spill homes, home-directed reads, home-aliased bare-`F`
-reads, and loop-entry adoption) originally kept several side channels on
-the parked frame copies. Each has since become ordinary state:
+reads, and loop-entry adoption) live in ordinary state rather than in side
+channels on the parked frame copies:
 
 - **Read decisions** consult the live chain (`outer_sf_float`,
   `outer_no_capture_guard` on `AbstractState`).
@@ -156,9 +156,8 @@ outright. Every re-entry path is a join the chain already covers:
   yield, where the caller's `forget_constants` bet-confirmation drops
   every claim.
 
-With it went the last cross-frame *readers* of the parked copies'
-constant claims (`outer_const_count`, `adopt_outer_widenings`,
-`lost_constants_of`) — and one probe compile per specialized yield.
+So the parked copies' constant claims have no cross-frame readers, and a
+specialized yield needs no probe compile.
 
 ## 7. What the parked copy still is
 

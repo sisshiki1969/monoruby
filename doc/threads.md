@@ -1,6 +1,6 @@
 # Thread / Fiber / non-blocking IO / プリエンプション の実装
 
-monoruby のスレッド機構(`thread` ブランチ系列 #941–#962)の現状をまとめる。
+monoruby のスレッド機構の現状をまとめる。
 対象読者はランタイムの実装に手を入れる人。関連ソース:
 
 | ファイル | 内容 |
@@ -14,7 +14,8 @@ monoruby のスレッド機構(`thread` ブランチ系列 #941–#962)の現状
 | `monoruby/src/value/rvalue/fiber.rs` | `FiberInner`(Fiber 制御ブロック) |
 | `monoruby/src/builtins/thread.rs` | Thread クラスのネイティブ・ビルトイン |
 | `monoruby/src/builtins/fiber.rs` | Fiber クラスのビルトイン + JIT インライン `Fiber.yield` |
-| `monoruby/builtins/startup.rb` | Mutex / Queue / SizedQueue / ConditionVariable(純 Ruby)、Thread の簿記系メソッド |
+| `monoruby/builtins/thread.rb` | Mutex / Queue / SizedQueue / ConditionVariable(純 Ruby)、Thread の簿記系メソッド |
+| `monoruby/builtins/monitor.rb` | Monitor(純 Ruby、§5) |
 | `monoruby/src/builtins/io.rs` | `blocking_io_region` / `IO.select` のスレッド対応パス |
 
 関連ドキュメント:
@@ -23,10 +24,6 @@ Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。
 
 ## 0. 全体像
 
-> 2026-11 まで `MONORUBY_THREAD_MODEL=green` で選べた M:1 グリーンスレッド
-> (1 本の OS スレッドで全 `Thread` を多重化し、専用スタブでスタックを切り替える
-> スケジューラ)は削除した。以下は 1:1 モデルだけを述べる。
-
 - **1:1 + GVL**。Ruby の `Thread` 1 つにカーネルスレッド 1 つ(§12)。インタプリタの
   共有状態(ヒープ、`Globals`、JIT、インラインキャッシュ)に触れるのは Global VM
   Lock(`gvl.rs`)を持つスレッドだけなので、一度に Ruby を走らせるのは 1 スレッド。
@@ -34,7 +31,7 @@ Thread / Fiber の状態遷移図(mermaid + SVG)と遷移⇔実装対応表。
 - **GVL の受け渡しの 2 系統**:
   1. **ブロッキング地点**。`sleep` / `Thread.stop` / `#join` / `Thread.pass` /
      ブロックする IO / 同期プリミティブの待機で、実行中のスレッドが GVL を手放す。
-  2. **タイマ駆動プリエンプション**(§8、#962)。生存スレッドが 2 本以上あるとき、
+  2. **タイマ駆動プリエンプション**(§8)。生存スレッドが 2 本以上あるとき、
      10 ms ごとに専用タイマ OS スレッドが GC poll フラグにプリエンプトビットを立て、
      走行中のスレッドが次のセーフポイント(callee-entry / ループバックエッジ)で
      `Thread.pass` 相当(GVL を先頭の待ち手へ渡す)を行う。busy-loop するスレッドも
@@ -102,8 +99,8 @@ native_tid:    Thread#native_thread_id
 (Rust 側 / JIT インライン側とも)が正しく FiberError を出す。
 
 注: `priority` / fiber-local / thread-variable は `ThreadInner` のフィールドではなく、
-startup.rb の純 Ruby 側でインスタンス変数(`@priority` / `@fiber_locals` /
-`@thread_variables` 等)として実装される(§4)。
+thread.rb の純 Ruby 側で隠しインスタンス変数(`@__priority` / `@__fiber_locals` /
+`@__thread_variables` 等、`doc/hidden_ivars.md`)として実装される(§4)。
 
 ## 3. スレッド registry
 
@@ -157,15 +154,13 @@ park もありうる)。その後 `finalize` が結果 / 例外を記録し、jo
 
 `Thread.handle_interrupt` は**ネイティブで機能する**:マスク(`(例外クラス, タイミング)` の列)を
 `ThreadInner::masks` へ push/pop し、マスク境界で保留割り込みを配送する(§6)。
-※ startup.rb 冒頭に残る「#raise / #kill はまだ未実装」旨のコメントは古い名残り
-(現在はネイティブ `raise`/`kill` と `pending`/`masks` の割り込み機構が動いている)。
 
-Ruby 側(startup.rb、`class Thread`):
+Ruby 側(thread.rb、`class Thread`):
 - `#name`
-- fiber-local `[]` / `[]=` / `key?` / `keys` / `fetch`(`@fiber_locals` に格納)
-- `#thread_variable_get` / `_set` / `#thread_variable?` / `#thread_variables`(`@thread_variables` に格納)
-- `#priority` / `#priority=`(-3..3 にクランプして `@priority` に保存するのみ。実際の
-  スケジューリングには影響しない)
+- fiber-local `[]` / `[]=` / `key?` / `keys` / `fetch`(`@__fiber_locals` に格納)
+- `#thread_variable_get` / `_set` / `#thread_variable?` / `#thread_variables`(`@__thread_variables` に格納)
+- `#priority` / `#priority=`(-3..3 にクランプして保存するのみ。実際の
+  スケジューリングには影響しない。`@__priority`)
 - `#native_thread_id`(走っているカーネルスレッドの id。Linux は `gettid(2)`、Darwin は
   `pthread_threadid_np`。死後は `nil`。各スレッド固有)
 - `#report_on_exception`(インスタンスのみ)
@@ -178,13 +173,10 @@ Ruby 側(startup.rb、`class Thread`):
 
 ## 5. 同期プリミティブ(純 Ruby)+ プリエンプション下での正しさ
 
-Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実装**で
-ネイティブコードはない。かつて(協調型のみだった頃)は §0 のアトミック性
-「2 つの非ブロッキング文の間に他スレッドが割り込まない」を根拠に、
-「条件検査 → waiter 配列へ self を追加 → park」の列を素朴に書けた。
-
-**プリエンプション(§8)はこの前提を壊す**ので、次の 2 機構で正しさを保っている
-(startup.rb のコメントブロック参照):
+Mutex / Queue / SizedQueue / ConditionVariable は **thread.rb の純 Ruby 実装**で
+ネイティブコードはない。プリエンプション(§8)があるので、2 つの非ブロッキング文の
+間にも他スレッドが割り込みうる。そこで次の 2 機構で正しさを保っている
+(thread.rb のコメントブロック参照):
 
 1. **test-and-set はセーフポイントのない一直線コードにする**。判定の前に
    `Thread.current` 等の呼び出しを巻き上げておき、判定〜フラグ設定の間にセーフポイント
@@ -212,9 +204,9 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   (CRuby の `rb_threadptr_unlock_all_locking_mutexes`)。そのためにスレッドは保持中の
   Mutex を `Mutex#__held_next` で連結したリスト(`Thread#__held`、CRuby の
   `keeping_mutexes`)として持ち、`try_lock` / `unlock` が push / pop する(属性アクセサだけで
-  済ませ、ホットパスに呼び出しを増やさない)。かつての「次の取得者側で回収」(#966)は
-  起動前に kill されたスレッド等のための保険として残る。`Mutex#owned?` は
-  **Fiber 単位**の所有で判定する(#967)。
+  済ませ、ホットパスに呼び出しを増やさない)。起動前に kill されたスレッド等のための
+  保険として、所有者が死んでいるロックは次の取得者が回収する。`Mutex#owned?` は
+  **Fiber 単位**の所有で判定する。
 - **fiber scheduler**(`Fiber.set_scheduler`)が入っていて現在の fiber が non-blocking なら、
   park はスケジューラ経由になる(CRuby の fiber scheduler プロトコル): `Mutex#lock` は
   `block(mutex, nil)`、Queue / SizedQueue の待ちは `block(queue, timeout)`、
@@ -244,30 +236,28 @@ Mutex / Queue / SizedQueue / ConditionVariable は **startup.rb の純 Ruby 実�
   バッククォートは stdout のパイプを読み切ってからフックに渡す(stderr は子がそのまま継承)。
   待ちを自分で行う場合は GVL を手放すので、子が走っている間も他スレッドは動く。
 - **Monitor**(`builtins/monitor.rb`)は CRuby の `ext/monitor/monitor.c` を Ruby で書いたもので、
-  Mutex + 所有 **Fiber**(`@owner`)+ 進入回数(`@count`)。`@count` を読み書きするのは所有者
-  だけ、`@owner` が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
+  Mutex + 所有 **Fiber**(`@__owner`)+ 進入回数(`@__count`)。`@__count` を読み書きするのは所有者
+  だけ、`@__owner` が変わるのは mutex を握っている間だけなので、この 2 つに別のロックは要らない。
   `MonitorMixin` と `MonitorMixin::ConditionVariable` は CRuby の `ext/monitor/lib/monitor.rb`
   そのまま(`wait` は `Monitor#wait_for_cond` 経由で `Thread::ConditionVariable#wait(@mutex, timeout)`。
-  回数ごと手放し、戻るときに同じ回数で取り直す)。注意点は最外側の `exit`: 「`@owner = nil`」と
+  回数ごと手放し、戻るときに同じ回数で取り直す)。注意点は最外側の `exit`: 「`@__owner = nil`」と
   「`Mutex#unlock`」の間(= `unlock` の callee-entry poll)で `Thread#raise` / kill が配送されると、
   mutex は握ったままなのに monitor は無所有という状態が残る(同じスレッドの次の `enter` が
   "deadlock; recursive locking"、他スレッドは永久待ち)。そこでこの 2 つを
   `Thread.__uninterruptible_begin` / `__uninterruptible_end`(`Thread.__uninterruptible { }` の
   ブロックなし版。区間が短く、ブロック呼び出しが区間のコストの大半になる場所用)で挟む。
   どちらもネイティブ関数なので区間に入るまでの間にも配送点はない。`enter` 側は
-  `try_lock || lock` が戻ってから `@owner` を書くまでに poll がないので保護不要。
+  `try_lock || lock` が戻ってから `@__owner` を書くまでに poll がないので保護不要。
   mutex は初回使用時に作る(CRuby はアロケータで作るので `super` を呼ばないサブクラスでも動く)。
 - Queue / SizedQueue は Mutex + ConditionVariable の上に載る(CRuby thread_sync.c と同じ構造)。
-  すべての check-and-take をキューの mutex 下で行うことで、かつての
-  `@items.empty?` / `@items.shift` のセーフポイント窓(2 つの pop が競合し片方が幻の nil を
-  得る)を相互排他で閉じる。
+  すべての check-and-take をキューの mutex 下で行うので、「空か調べて取り出す」の間の
+  セーフポイント窓(2 つの pop が競合し片方が幻の nil を得る)は相互排他で閉じている。
 - 待機ループは `loop do` ではなく **`while true`** を使う: `Kernel#loop` は StopIteration を
   握り潰し、`ClosedQueueError < StopIteration` なので `loop` ブロック内の
-  `raise ClosedQueueError` が黙って飲まれてしまう(実際に `SizedQueue#push` on closed が
-  nil を返すバグだった)。
+  `raise ClosedQueueError` が黙って飲まれてしまう。
 - `Queue#close` は全 waiter を起こす(consumer は残要素を排出後 nil、
-  producer は `ClosedQueueError`)。`ClosedQueueError < StopIteration` は startup.rb で定義。
-- デッドロックは §3.3 のスケジューラ検出に自然に乗る。
+  producer は `ClosedQueueError`)。`ClosedQueueError < StopIteration` は thread.rb で定義。
+- デッドロックは §12.4 の検出に自然に乗る。
 
 ## 6. 非同期割り込み(`Thread#raise` / `#kill`)
 
@@ -364,7 +354,7 @@ fd を持たない旧 `blocking_region` は全サイトが `blocking_io_region` 
   共有しており、異常終了でフラグが漏れると外側の IO を壊すため
   (古典的な「nonblocking stdout」問題)。入口 park のみでカバーする。
 
-## 8. タイムスライス・プリエンプション(`preempt.rs`, #962)
+## 8. タイムスライス・プリエンプション(`preempt.rs`)
 
 協調型だけでは、busy-loop するスレッドが `Thread.pass` を呼ばない限り CPU を独占し、
 他スレッドの飢餓・`Thread#kill` 未配送・mspec の `--timeout` watchdog スレッドが
@@ -454,7 +444,7 @@ poll ワードは **GC・シグナルと同じ 1 つの `u32`** で、8bit×4 �
 - `MONORUBY_PREEMPT_STRESS=1` — 全 poll 地点で切替を試みる(`gc-stress` のスケジューリング版。
   「ここで切り替わるはずがない」系の潜在状態バグを炙り出す拷問モード)。
 
-## 9. fd で待てないカーネル待ち(`native_pool.rs`, #962)
+## 9. fd で待てないカーネル待ち(`native_pool.rs`)
 
 poll(2) で readiness を待てるもの(ソケット等)は fd で park するが(§7)、
 **待つべき fd を持たないカーネルブロッキング操作** は、呼び出したカーネルスレッドが
@@ -533,15 +523,11 @@ park 中の main への trap ハンドラ配送(§12.8)。)
 - ruby/spec: `bin/spec` またはリポジトリ外の spec/mspec で
   `core/thread` / `core/mutex` / `core/queue` / `core/sizedqueue` /
   `core/conditionvariable` / `core/io` を実行。
-  かつてスペックランナーをハングさせた `core/io/copy_stream_spec.rb` と
-  `core/io/select_spec.rb` は完走・全パスする。
+  `core/io/copy_stream_spec.rb` と `core/io/select_spec.rb` も完走・全パスする。
 
 ## 12. カーネルスレッドと GVL(`scheduler/native.rs`)
 
-Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる(移行計画は
-`reports/thread_1to1_migration_plan_2026-09-29.md`)。2026-09-30 に既定になり、
-2026-11 に M:1 グリーンスレッドのスケジューラと切替スタブを削除して唯一の
-モデルになった。
+Ruby `Thread` 1 つにカーネルスレッド 1 つを割り当てる。
 
 ### 12.1 registry と GVL
 
@@ -648,8 +634,7 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
   終了として扱い、下のプロセス終了シーケンスを通ってから exit する
   (`Globals::exit_forked_child`: at_exit → 未捕捉例外の報告 → finalizer →
   ストリーム flush。`exit` の status はそのまま、ハンドラ内の `exit` が優先、
-  シグナル例外はそのシグナルで死ぬ)。以前は `std::process::exit` 直行で
-  at_exit も finalizer も走らなかった。
+  シグナル例外はそのシグナルで死ぬ)。
 - プロセス終了の順序は CRuby と同じ: `at_exit` ハンドラ →
   `terminate_all`(残りスレッドを kill し ensure を走らせ、カーネルスレッドを
   join)→ `ObjectSpace` の finalizer(`Executor::run_at_exit_handlers` /
@@ -666,7 +651,7 @@ dead になったカーネルスレッドを `join` してから戻る — イ�
 `gvl` / `vm` / `fork` のユニットテストと、`tests/` の実バイナリを起動する
 テスト(`exit_order.rs` など)。CI(`bin/test`)は通常の nextest で全部走らせる。
 
-### 12.7 GVL を手放す区間(`scheduler::without_gvl`、P3)
+### 12.7 GVL を手放す区間(`scheduler::without_gvl`)
 
 fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SETLKW)` /
 `waitpid` / `getaddrinfo` / `blocking: true` の FFI 呼び出し / 拡張の
@@ -712,7 +697,7 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   `read(2)` 自体を GVL 外に出す設計は採っていない — park が GVL を手放す
   ので、fd 待ちの間に他スレッドが走る目的はすでに達している。
 
-### 12.8 シグナルと割り込みの配送(P4)
+### 12.8 シグナルと割り込みの配送
 
 - **シグナルは main で変換する**。非 main のカーネルスレッドは
   `block_async_signals` で非同期シグナルをブロックしているので、プロセス宛の
@@ -734,7 +719,7 @@ fd で待てないカーネル待ち — `flock` / FIFO の `open` / `fcntl(F_SE
   `SIGVTALRM` → `EINTR`、§12.7)。`handle_interrupt` のマスクと
   `pending_interrupt?` は §6 の割り込みキューをそのまま使う。
 
-### 12.9 JIT コードと GVL(P5)
+### 12.9 JIT コードと GVL
 
 JIT コードの生成・パッチ・実行はすべて GVL の下で起きるので、複数のカーネル
 スレッドが同じコードページを同時に触ることはない。それでも、すべてが 1 つの

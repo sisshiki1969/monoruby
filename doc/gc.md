@@ -61,7 +61,7 @@ pub(crate) static ALLOC: VmField<RefCell<Allocator<RValue>>>   // vm.rs(alloc.rs
 `RValue` は 64 バイト固定(`GCBOX_SIZE`、`Allocator::new` で
 `assert_eq!(64, GCBOX_SIZE)`)。
 
-主なフィールド(`alloc.rs:299` 付近):
+主なフィールド(`alloc.rs` の `Allocator`):
 
 | フィールド | 意味 |
 | --- | --- |
@@ -79,7 +79,6 @@ pub(crate) static ALLOC: VmField<RefCell<Allocator<RValue>>>   // vm.rs(alloc.rs
 | `mark_queue` | マーク済み・未走査オブジェクトのキュー(幅優先走査 + 先読み) |
 | `remembered` | remembered set(old→young 参照を持つ old オブジェクト) |
 | `pages_since_gc` | 前回の収集以降に `THRESHOLD` まで充填したページ数(`gc_trigger_pages()` で GC レーンを立てる。§4.1) |
-| `heap_frames` | ヒープに退避したフレームバッファの登録表(§9) |
 
 ### 2.2 アリーナとページ
 
@@ -97,10 +96,10 @@ const MAX_PAGES: usize   = 8192;
   (`Allocator::new`、`System.alloc`)。実 RSS はページを使うぶんだけ増える
   (予約は仮想アドレス空間)。ページは 256KB 境界に整列。
 - ページからポインタへの逆引きは**アドレスマスク**で O(1):
-  `get_page(ptr) = ptr & !(ALLOC_SIZE - 1)`(`alloc.rs:1375`)。これにより任意の
+  `get_page(ptr) = ptr & !(ALLOC_SIZE - 1)`(`alloc.rs`)。これにより任意の
   `*const RValue` から所属ページ(とマークビット)を即座に求められる。
 
-`Page<T>`(`alloc.rs:1449`)の構造:
+`Page<T>`(`alloc.rs`)の構造:
 
 ```
 struct Page<T> {
@@ -118,7 +117,7 @@ mark-external 方式なので、生存中のオブジェクト内容を汚さな
 
 ## 3. 割り当て(`Allocator::alloc`)
 
-`alloc.rs:779`。順序は以下:
+`alloc.rs`。順序は以下:
 
 1. **フリーリスト**が空でなければそこから 1 セル pop(`self.free`)。直前の GC で
    スイープされたセルの再利用。
@@ -210,7 +209,7 @@ gc_trigger_pages() = max(PAGES_PER_GC_TRIGGER, 稼働ページ数 / GC_HEAP_FRAC
 
 ### 4.2 poll のコード生成
 
-`execute_gc_inner`(`codegen/arch/x86_64/jit_module.rs:255`)が poll を出力:
+`execute_gc_inner`(`codegen/arch/x86_64/jit_module.rs`)が poll を出力:
 
 ```asm
 cmpl [rip + poll_flag], 0
@@ -229,7 +228,7 @@ exit:
 call-site には poll を置かない — `doc/threads.md` §8.3)。aarch64 backend も
 同等のゼロ判定(`ldr; cbz`)を出力する。
 
-### 4.3 `execute_gc`(`executor.rs:3743`)
+### 4.3 `execute_gc`(`executor.rs`)
 
 セーフポイントから呼ばれる `extern "C"` 関数。順に:
 
@@ -256,7 +255,7 @@ call-site には poll を置かない — `doc/threads.md` §8.3)。aarch64 back
 ```
 union Header { next: Option<NonNull<RValue>>, meta: Metadata }
 
-struct Metadata {          // rvalue.rs:2373
+struct Metadata {          // rvalue.rs
     flag:  u16,
     ty:    Option<ObjTy>,  // 1 バイト
     ty_flags: u8,          // ObjTy 固有のメタデータ(HASH: 小ハッシュ表現ビット)
@@ -272,7 +271,7 @@ struct Metadata {          // rvalue.rs:2373
   `CellHeader::NewbornOf`)はこのバイトを保存する。世代別 GC の age は従来どおり
   `flag` の上位バイトに置く。
 
-### `flag: u16` のビット割り当て(`rvalue.rs:2447` 以降)
+### `flag: u16` のビット割り当て(`rvalue.rs` 以降)
 
 | ビット | マスク | 意味 |
 | --- | --- | --- |
@@ -299,9 +298,9 @@ remembered set の実体(列挙)は `Allocator::remembered`(Vec)であり、ヘ�
 
 ---
 
-## 6. 世代別 GC 本体(`Allocator::gc`, `alloc.rs:864`)
+## 6. 世代別 GC 本体(`Allocator::gc`, `alloc.rs`)
 
-### 6.1 マイナー / メジャーの選択(`decide_gc_kind`, `alloc.rs:854`)
+### 6.1 マイナー / メジャーの選択(`decide_gc_kind`, `alloc.rs`)
 
 ```
 old_count >= old_major_threshold  ||  minors_since_major >= MAX_MINORS_PER_MAJOR
@@ -372,12 +371,9 @@ old 世代全体には比例しない。
 
 #### マークキュー(`mark_queue`)と先読み(`MARK_PREFETCH_DISTANCE`)
 
-以前のマークは純粋な再帰で、スタック消費が**オブジェクトグラフの深さに比例**して
-いた。`a = [a]` を 7.5 万回、連結リスト、ivar チェーン、入れ子 Hash — いずれも
-8MB のメインスタックを溢れさせ、**GC の最中にプロセスが abort** していた
-(`thread 'main' has overflowed its stack`)。その後しばらくは「32 段までは再帰、
-それ以降はキュー」という折衷だった(全部キューに積むと bedcov で GC 時間 +9% と
-測れたため)。
+マークは再帰せずキューで行う。再帰ではスタック消費が**オブジェクトグラフの深さに
+比例**し、`a = [a]` を 7.5 万回、連結リスト、ivar チェーン、入れ子 Hash などで
+8MB のメインスタックを溢れさせてしまう。
 
 現在は**全オブジェクトをキュー経由で幅優先に**辿る。決め手はスタックではなく
 キャッシュミスで、マークの費用はほぼ「オブジェクトのヘッダを 1 行読む DRAM
@@ -399,9 +395,8 @@ GC 時間全体で −50% になった(§6.4 の変更込み。12 反復の GC �
 (§6.3 の 4-(b))。取り出した生ポインタからヘッダを書き換えてから、`mark_children`
 用の `&T` を作る — この時点でそのセルへの共有参照は存在しない(キューに積んだ
 `&T` は `mark` から戻った時点で消えている)ので、ヘッダ書き込みはエイリアスしない。
-以前は「マーク走査が握る `&self` と衝突しないよう、マーク後に `aging` 配列を
-なめ直す」2 パス構成だったが、それは生存者全員をもう一度ランダムアクセスする
-パスで、splay ではマーク時間の 20–30% を占めていた。いまは走査が読むヘッダ行の
+マーク後に生存者を別パスでなめ直して加齢すると、生存者全員をもう一度ランダム
+アクセスすることになる(splay ではマーク時間の 20–30%)ので、走査が読むヘッダ行の
 上でそのまま加齢する。
 
 - **加齢**: `promoting` かつ `is_promotable()` の生存者の age を +1
@@ -423,15 +418,14 @@ GC 時間全体で −50% になった(§6.4 の変更込み。12 反復の GC �
 `mark_remembered` に内蔵された自己クリーニングと同じ役割で、メジャーが set を
 作り直さなくなった分をここで担保する。
 
-> **注**: 以前はメジャーが remembered set を毎回ゼロから作り直していたため、
-> 書き込みバリアの漏れがあってもメジャーごとに自己修復されていた。維持方式では
-> それが無いので、バリア契約(§7.3 の `is_promotable`)の破れはマスクされずに
-> 顕在化する。`gc-stress` + `gc-verify` で検証すること。
+> **注**: メジャーは remembered set を作り直さないので、書き込みバリアの漏れは
+> メジャーでも自己修復されない。バリア契約(§7.3 の `is_promotable`)の破れは
+> マスクされずに顕在化する。`gc-stress` + `gc-verify` で検証すること。
 
 ### 6.5 マイナー後の検証(`gc-verify` フィーチャ)
 
 マイナー GC の後、シード無し・昇格無しでルートから全ライブグラフを独立に再マーク
-する(`alloc.rs:964`)。もしマイナーが到達可能なオブジェクトを解放していれば
+する(`alloc.rs`)。もしマイナーが到達可能なオブジェクトを解放していれば
 (バリア漏れ/remembered set 漏れ)、この走査が解放済みセルに到達し
 `RValue::mark` の `is_live` アサートが発火する。世代別 GC の健全性テスト。
 
@@ -448,7 +442,7 @@ minor GC / 完全な minor GC の 3 通りでのマーク走査の比較と、�
 
 ![write barrier と remembered set](gc_write_barrier.svg)
 
-### 7.1 実体(`RValue::write_barrier`, `rvalue.rs:1115`)
+### 7.1 実体(`RValue::write_barrier`, `rvalue.rs`)
 
 ```rust
 pub(crate) fn write_barrier(&mut self, child: Value) {
@@ -462,7 +456,7 @@ pub(crate) fn write_barrier(&mut self, child: Value) {
   young オブジェクトも、既に remembered な old オブジェクトも、このビットが 0 なので
   即 return(アロケータに触れない)。
 - 子の世代は見ない(old→old を覚える過剰近似は無害)。即値(`is_packed_value`)は除外。
-- `write_barrier_bulk`(`rvalue.rs:1128`)は `Array#concat` / `Hash#[]=` などの
+- `write_barrier_bulk`(`rvalue.rs`)は `Array#concat` / `Hash#[]=` などの
   複数要素ストア用。個々の子を見ず、armed なら無条件に記録する過剰近似。
 
 呼び出しは「参照型フィールド(ivar / 配列・ハッシュ要素 / struct スロット)へ
@@ -487,7 +481,7 @@ young(flag=1) ──[age>=3 で昇格]──▶ old
 「生きた old→young 辺の数」に比例し続ける(かつて young 子を持っていた全昇格
 オブジェクトには比例しない)。
 
-### 7.3 昇格可能性(`is_promotable`, `rvalue.rs:918`)
+### 7.3 昇格可能性(`is_promotable`, `rvalue.rs`)
 
 昇格してよいのは「**そのオブジェクトへの Value 格納経路がすべてバリア保護されている**」
 型のみ。現状 `ty()` で判定し、以下が `true`:
@@ -509,16 +503,16 @@ OBJECT | STRING | BIGNUM | FLOAT | ARRAY | STRUCT | HASH
 
 ## 8. ルート(マーク開始点)
 
-`Root`(`executor.rs:3713`)の `mark`(`executor.rs:3719`)が起点:
+`Root`(`executor.rs`)の `mark`(`executor.rs`)が起点:
 
 ```
 Root::mark → YIELDER.mark      (ブロック/ファイバの yielder)
            → Globals::mark     (globals.rs)
-           → Executor::mark    (executor.rs:248)
-           → scheduler::mark    (executor.rs:3729 — Ruby スレッドの root)
+           → Executor::mark    (executor.rs)
+           → scheduler::mark    (executor.rs — Ruby スレッドの root)
 ```
 
-`Executor::mark`(`executor.rs:248`)が辿るもの:
+`Executor::mark`(`executor.rs`)が辿るもの:
 
 - `temp_stack` の全 Value(ビルトインが GC を跨いで生かしたい一時値の退避先)。
 - `cfp` 連鎖の各 `lfp()`(= すべての生きたスタックフレームのローカル変数・レシーバ等)。
@@ -601,17 +595,17 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 
 ## 9. スイープと空きページの回収
 
-### スイープ(`sweep`, `alloc.rs:1269`)
+### スイープ(`sweep`, `alloc.rs`)
 
 ページごとに `mark_bits` を 64 ビット単位で走査(`sweep_bits`)。未マークセルを
-`free()`(型に応じて `ManuallyDrop::drop`;`rvalue.rs:785`)してフリーリストに連結。
+`free()`(型に応じて `ManuallyDrop::drop`;`rvalue.rs`)してフリーリストに連結。
 `trailing_ones` でマーク済みの連続領域を一気に飛ばす最適化がある。最後に
 `self.free` がフリーリスト先頭に、`free_list_count` が回収数になる。
 
 `free()` は多重呼び出しに耐える(`is_live()` を先頭で確認)。フリーリスト上のセルは
 次のスイープでもう一度 free されうるため。
 
-### 空きページの回収(`salvage_empty_pages`, `alloc.rs:1250`)
+### 空きページの回収(`salvage_empty_pages`, `alloc.rs`)
 
 スイープ前に、全セルが未マーク(`all_dead`)のページを `pages` から外して
 中身をドロップし `free_pages` へ戻す。以後の割り当てで再利用される。
@@ -624,29 +618,24 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 を打って)再び稼働に戻す。返したページの中身は不定だが、稼働に戻るページは
 `clear_old_bits` とバンプ割り当てが読む前にすべて書き直すので問題ない。
 
-以前は空きページを常駐させたままだったため、ワークロードのピーク時のヒープが
-そのまま RSS に残っていた(lee: 生存 22 ページに対して常駐 ~140 ページ、30 MB)。
-予備は 2 回の収集ぶんの成長(トリガー予算は稼働ページの 1/16)を賄うので、
+空きページを常駐させたままにすると、ワークロードのピーク時のヒープがそのまま
+RSS に残る(lee: 生存 22 ページに対して常駐 ~140 ページ、30 MB)。予備は 2 回の収集ぶんの成長(トリガー予算は稼働ページの 1/16)を賄うので、
 定常状態のヒープは常駐ページを回し、縮んだヒープだけが再タッチのページフォルトを払う。
 
 ---
 
-## 10. ヒープに退避したフレーム(`heap_frames`)
+## 10. ヒープに退避したフレーム(`ObjTy::FRAME`)
 
 クロージャ等でスタックフレームがその生成メソッドより長生きする場合、フレームは
-`move_frame_to_heap` / `heap_frame` により `Box<[u64]>` としてヒープへ退避され、
-`Box::into_raw` でリークされる。この生バッファを GC が回収できるよう、LFP アドレスを
-キーに `heap_frames` へ登録する(`register_heap_frame`, `alloc.rs:563`)。
+`move_frame_to_heap` / `heap_frame`(`executor/frame.rs`)により `Box<[u64]>` として
+ヒープへ退避される。このバッファは `ObjTy::FRAME` のアリーナオブジェクト
+(`FrameInner`、`value/rvalue.rs`)が所有し、普通のオブジェクトと同じく
+ページのマークビットとスイープで回収される。サイドテーブルは無い。
 
-- マーク時、生きた LFP から到達したフレームに `marked` を立てる。
-- `sweep_heap_frames`(`alloc.rs:603`)が、**2 サイクル連続で未マーク**だった
-  フレームの `Box<[u64]>` を解放する(1 サイクルの猶予は昇格→ルート格納の窓を
-  カバーするため)。
-- キーは 8 バイト整列の LFP アドレスなので、既定の SipHash ではなく Fibonacci ハッシュ
-  1 回(`AddrHasher`)で引く(`gc-stress` 下では毎確保ごとに引かれるため速度が効く)。
-
-`heap_frames` が空のときは関連処理を丸ごとスキップし、コスト 0(optcarrot 等は
-フレーム退避が稀)。
+- バッファの末尾 1 ワードに wrapper の `Value` を置く(LFP_OUTER の 1 つ上)。
+  `Lfp::mark` はそれを辿って wrapper をマークし、wrapper の `mark` が
+  フレームの中身(`mark_contents`)をマークする。
+- フレームに到達できなくなれば、スイープが wrapper の `free()` でバッファを解放する。
 
 ---
 
@@ -656,7 +645,7 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 作らずに malloc メモリだけ膨らむ**ケースを検知できない。そこでグローバル
 アロケータ自身が外部バッファ量を追跡する:
 
-- `RurubyAlloc`(`#[global_allocator]`, `alloc.rs:7`)が `alloc`/`dealloc` で
+- `RurubyAlloc`(`#[global_allocator]`, `alloc.rs`)が `alloc`/`dealloc` で
   `MALLOC_AMOUNT` を増減。
 - **`MALLOC_TRACK_LIMIT = 64MB` 以上の確保は無視**。これは JIT メモリ予約
   (monoasm が起動時に 3 × 256MB を確保)のような一過性インフラ確保を除外するため。
@@ -666,7 +655,7 @@ res = src.flat_map { |rf, gf, bf| (0...64).map { |i| [i * rf, i * gf, i * bf] } 
 - `request_gc_if_malloc_over`(`alloc.rs`)が `MALLOC_AMOUNT >= MALLOC_GC_THRESHOLD`
   で poll ワードの GC レーンを立てる(GC 要求;割り当てフリーで安全)。
 - 閾値 `MALLOC_GC_THRESHOLD` は各 GC 後に
-  `malloced + max(malloced/2, MALLOC_THRESHOLD)` へ再設定(`alloc.rs:986`)。
+  `malloced + max(malloced/2, MALLOC_THRESHOLD)` へ再設定(`alloc.rs`)。
   加算のみだと巨大ヒープでも 256KB ごとに GC してしまうので、乗算項で比例させる。
 - この経路の収集は**メジャー強制しない**(一過性バッファは若くして死ぬのでマイナーで
   回収でき、old のバッファゴミは §6.1 のメジャートリガが拾う)。

@@ -29,7 +29,6 @@
 
 - [Stub code for JIT'ed code](design/jit.md)
 - [Unified low-level IR (LIR)](design/lir.md)
-- [Separating the abstract interpreter from register allocation](design/regalloc_separation.md)
 - [Trace-wide abstract state and chain joins](design/trace_chain_joins.md)
 - [Inline asm functions](design/inline.md)
 - [JIT argument forwarding (Japanese)](design/arg_forwarding_jit.md)
@@ -63,6 +62,8 @@
 - [Singleton classes — facts and invariants](design/singleton_class_facts.md)
 - [TOPLEVEL_BINDING and the main script](design/toplevel_binding.md)
 - [super resolution via the caller PC (Japanese)](design/super_resolution.md)
+- [Hidden instance variables](design/hidden_ivars.md)
+- [error_highlight, did_you_mean and syntax_suggest](design/error_highlight.md)
 
 # Runtime Optimization (Japanese)
 
@@ -74,12 +75,8 @@
 
 # Design Documents (continued)
 
-- [Per-encoding character iteration design](design/encoding_char_iteration_design.md)
 - [CRuby-compatible C API layer (Japanese)](design/c_api.md)
 - [Native extension loading (Japanese)](design/native_extension_loading.md)
 - [Nokogiri (Japanese)](design/nokogiri.md)
-- [C extension support — the design study that preceded the layer (Japanese)](design/c_extention.md)
 - [ruby/spec hang countermeasures (Japanese)](design/ruby_spec_skip_tags.md)
-- [optcarrot --opt profile (Japanese)](design/optcarrot_opt_profile.md)
 - [The built-in profiler — reference](design/profiler.md)
-- [Progress summary (April 2025 – April 2026)](design/progress_2025-2026.md)

@@ -6,7 +6,7 @@ monoruby implements refinements. `Module#refine`, `Module#using` and
 `Module.used_modules` report the truth. The interpreter and the JIT both
 resolve through an activated refinement.
 
-This document is the design record: §§1–5 are the problem — what
+This document is the design record: §§1–3 are the problem — what
 refinements do to method resolution and where each of monoruby's
 resolution paths would break under the naive approach — and §§6–7 are the
 implementation that avoids it. Read it together with `doc/cref.md` (the
@@ -316,56 +316,6 @@ chain model; `super` from a refinement needs its own resolution rule.
 
 ---
 
-## 4. Why the cheap version would have been worse than nothing
-
-A stub `refine` that creates an anonymous module, evaluates the block in
-it and returns it — no activation — was prototyped and measured. It
-unblocks 55 of the 59 `core/binding` examples (see §5) because the blocker
-there is a fixture that merely *calls* `refine` at load time.
-
-It was not kept, and the real thing was implemented instead. Without
-activation, `refine` turns every refinement-using
-program from a clear `NoMethodError` at the `refine` call into a silently
-wrong result at every refined call site. The same trade-off applies to
-`using`, which is why the existing `Module#using` is documented as
-"activates the (necessarily empty) set of refinements" — it is only honest
-because `refine` cannot produce a non-empty one.
-
----
-
-## 5. What it is worth, in ruby/spec
-
-Measured against CRuby 4.0.2, current tree:
-
-| category | monoruby | note |
-|---|---|---|
-| `core/refinement` | 25 examples, **25 errors** | nothing implemented |
-| `core/module` | 11 F / 66 E, of which **62** mention refine | `refine_spec`, `using_spec`, `module_eval` refinement scope, … |
-| `core/main` | 3 F / 6 E, of which **5** | `main.using` |
-| `core/kernel` | 4 F / 11 E, of which **2** | `Kernel#eval` refinement scope |
-| `language/pattern_matching` | **2** E | `#deconstruct` via refinement |
-| `core/binding` | 0 F / **7** E | see below |
-
-`core/binding` is a special case worth separating. Its 7 errors are not 7
-failing examples — they are 7 spec *files* that fail to load, because
-`core/binding/fixtures/classes.rb:54` calls `refine`. That takes 59
-examples out of the run (monoruby executes 39 of CRuby's 98). **Exactly one
-of those 59 needs refinements to work** (`Binding#eval reflects refinements
-activated in the binding scope`); the other 58 only need `refine` to
-exist.
-
-So the ledger is roughly:
-
-- ~96 examples need real refinements,
-- ~58 examples are collateral damage from a fixture that only needs the
-  method to be defined.
-
-That asymmetry is the argument for eventually implementing refinements
-properly rather than stubbing them: the stub buys the 58 at the cost of
-making the 96 fail silently instead of loudly.
-
----
-
 ## 6. An implementation strategy that keeps the performance
 
 The naive framing of §3 — "every cache key has to grow a cref" — is what
@@ -424,7 +374,8 @@ This is typically a handful of symbols. Then:
   (`no_to_str`, `neq_basic_at`, …) **keep their existing key**, and simply
   refuse to serve a name in `refined_names`;
 - those names — and only those — take
-  `search_method_with_refinements(recv_class, name, set_id)`.
+  the refined search (`Store::search_method_refined` and the
+  `find_method_for_*_refined` entries in `globals/store/class.rs`).
 
 A program that refines `String#blank?` pays nothing on `Array#each`,
 `Integer#+`, or any of the other tens of thousands of call sites. The tax
@@ -434,14 +385,13 @@ what keeps a refinement-using program fast, not just a refinement-free one.
 ### 6.3 Where the mutable cell lives
 
 Only toplevel / class-module bodies / eval-at-toplevel own one (§7.1), and
-now it holds a `u32`. §7.2 option **(B)** — a side table on the `Executor`
-keyed by LEP, alongside the existing `deferred_unwind` — stays the
-recommendation: no frame-layout change, correct per execution, and
-allocated only once a refinement exists.
+it holds a `u32`. It lives on the body's `ISeqInfo::refinements` (§7.2
+option **C**): no frame-layout change, and `None` for every body that
+neither defines a method nor runs `using`.
 
-A block finds its own set by the same outer-chain walk to the LEP that
-`$~` already does. A method finds its own on its `FuncInfo`, written by
-`def`. (`def` re-executing under a *different* set writes a different id;
+A block without a cell of its own resolves through its lexical parent's,
+so it sees a `using` that runs in that parent after the block was
+created. A method's cell is the snapshot `def` took. (`def` re-executing under a *different* set writes a different id;
 since `using` already bumped the version, that is self-correcting rather
 than stale — unlike `lexical_context`, which has no such guard.)
 
@@ -561,35 +511,6 @@ and taking the global basic-op cliff. With `refined_names` it is neither:
   *caller's* set: the same `nearest_ruby_frame` walk the eval builtins now
   use, then that frame's set id. Only reached with the gate on. (Called by
   the Ruby-written core they see no refinement — §6.10.)
-
-### 6.9 Order of work — as landed
-
-Each step shipped on its own, with the spec ledger and (from step 3) the
-`emit-asm` baseline checked at every one.
-
-1. `refine` / `using` build and intern sets; `Module#refinements` and
-   `used_refinements` stop being mocks. Lookup still ignores them, so
-   nothing can regress yet.
-2. `search_method_with_refinements` + `refined_names` + the gate. `using`
-   bumps `class_version`. Correct end-to-end through the VM; the JIT still
-   refuses to compile any iseq with a non-empty set (deopt to VM), which is
-   safe because the gate keeps that path cold.
-3. `RefinementSetId` into `JitContext` and `inline_cache_map`; lift the
-   step-2 refusal. This is the step that must not move the emit-asm
-   baseline for the gate-off case.
-4. Inline-generator gate, `super`, reflection.
-
-Steps 1–2 were shippable on their own: refinements worked, refinement-using
-code was slower than it needed to be, and nothing else in the system
-changed speed. Step 3 is where the §3.4 hazard is actually closed, which
-is why the JIT kept refusing until it landed — a refusal is a performance
-choice, a wrong `FuncId` is not.
-
-Over core/{refinement,module,main,binding,kernel,proc,class,basicobject}
-and language, the four steps took 137 failing examples to 30. What is left
-is §6.7's basic ops, the per-iseq cell's re-execution case, and one
-`import_methods` example that is not a defect (monoruby implements Zlib in
-Ruby, so importing from it legitimately succeeds).
 
 ### 6.10 Whose lookup is it — call site, Ruby-level funcall, or funcall
 
@@ -769,14 +690,17 @@ This inherits the staleness class `ISeqInfo` already documents: one cell
 per iseq, so re-entrant execution of a scope that runs `using` (a recursive
 or concurrently-loaded `Class.new { using … }`, the same file required on
 two threads) shares it. Rare, given §7.1's table — but silently wrong when
-it happens, which is the failure mode §4 argues against.
+it happens.
 
-### 7.3 Recommendation
+### 7.3 What was chosen
 
-(B). It leaves the frame layout alone, is correct per execution rather than
-per iseq, and costs nothing while no refinement has been activated. (A) is
-the more faithful model and is known-feasible, but it taxes every call in
-every program for a feature most never use; it is the right answer only if
-per-frame cref turns out to be wanted for other reasons too — `doc/cref.md`
-lists several places where monoruby's single VM-wide `lexical_class` stack
-already diverges from CRuby, so that is not far-fetched.
+(C), `ISeqInfo::refinements`. It leaves the frame layout alone and costs
+nothing while no refinement has been activated. Its one gap is the
+staleness above: a block that runs `using` and is executed more than once
+keeps the previous execution's set as its base, which shows only when each
+execution activates a *different* refinement (`Module.new { using
+make_refinement }` in a loop). A class body does not have the problem:
+`enter_classdef` re-seeds its cell on every entry. (A) remains the faithful
+model if a per-frame cref is ever wanted for other reasons — `doc/cref.md`
+lists places where monoruby's VM-wide `lexical_class` stack diverges from
+CRuby.

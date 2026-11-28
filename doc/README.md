@@ -14,8 +14,8 @@ Two things to know before reading:
   - **design record** — why a subsystem is shaped the way it is, with the
     measurements and the rejected alternatives. Still true about the
     *reasoning* even where the code has moved on.
-  - **plan / history** — a proposal or a snapshot in time. Read for
-    context, not as a description of the present.
+  - **plan** — a proposal for work not yet done. Read for context, not as a
+    description of the present.
 
 ---
 
@@ -25,7 +25,7 @@ Two things to know before reading:
 |---|---|---|---|
 | [`stack_frame.md`](stack_frame.md) | EN | reference | What a local frame looks like in memory: LFP / CFP offsets, where `self`, the block and the registers sit. |
 | [`hidden_ivars.md`](hidden_ivars.md) | EN | reference | Hidden (`/`-named) instance variables: how a built-in class written in Ruby keeps state that CRuby keeps in a C struct — out of `inspect` / `instance_variables`, safe from subclasses, writable when frozen — and the `# monoruby-hidden-ivars: true` magic comment that lets a Ruby file name one as `@__name`. |
-| [block_param.md](block_param.md) | design | EN | The `&block` parameter: a sentinel-initialized local slot, lazy `Proc` with write-back, proxy forwarding (CRuby's scheme) |
+| [`block_param.md`](block_param.md) | EN | design record | The `&block` parameter: a sentinel-initialized local slot, lazy `Proc` with write-back, proxy forwarding (CRuby's scheme). |
 | [`method_args.md`](method_args.md) | JA | reference | What `pos_num`, `req_num`, `optional`, `rest` actually count, and what they exclude. |
 | [`native_func.md`](native_func.md) | EN | reference | How to declare a builtin that takes optional / rest / keyword parameters. |
 | [`super_resolution.md`](super_resolution.md) | JA | design record | The two non-obvious questions `super` has to answer — *which* name, and *which* position in the chain — and how monoruby answers them from the frame rather than from a method entry. |
@@ -41,8 +41,7 @@ Two things to know before reading:
 |---|---|---|---|
 | [`jit.md`](jit.md) | EN | reference | The stub a method starts life behind, and how it is rewritten as the method goes from cold to compiled. |
 | [`inline.md`](inline.md) | EN | reference | Inline asm builtins: emitting a method's body straight into the caller instead of dispatching, and trial-inlining. |
-| [`lir.md`](lir.md) | EN | design record | The arch-neutral machine-level IR between `AsmIR` and per-arch emission — the design and the migration log. |
-| [`regalloc_separation.md`](regalloc_separation.md) | EN | design record | Separating the abstract interpreter from register allocation. The largest document here; the structural groundwork the LIR work builds on. |
+| [`lir.md`](lir.md) | EN | reference | The arch-neutral machine-level IR between `AsmIR` and per-arch emission: operands, instruction groups, the side entries of `encode_linst`, and the legalization contract each backend implements. |
 | [`trace_chain_joins.md`](trace_chain_joins.md) | EN | design record | Why the JIT's abstract state spans every frame of the trace being compiled: returns as merge edges with per-path kept-constant surrender, the resume asymmetry, the outer-frame float claims as ordinary state, and what the parked frame copies still are. |
 | [`arch_difference.md`](arch_difference.md) | EN | reference | How the x86-64 and aarch64 backends differ, `AsmInst` by `AsmInst`. Read before touching either. |
 | [`jit_invariants.md`](jit_invariants.md) | JA | reference | The invariants compiled code speculates on — method/constant resolution, basic ops, types, frame capture, `eval`, the absent TracePoint, a non-moving GC — how each break is detected, and the shared write-back / pc-restore / chain-conversion path back to the interpreter. Read first; the mechanism documents below are its details. |
@@ -52,9 +51,9 @@ Two things to know before reading:
 | [`deopt_log.md`](deopt_log.md) | EN | reference | How to read a `--features deopt` record, and how the log names the guard that actually branched despite exits being deduplicated. The `DeoptCause` invariant every new guard has to satisfy, and the three things the log refuses to guess. |
 | [`escape_analysis.md`](escape_analysis.md) | EN | reference | How the JIT elides an Array or Range literal used only as a receiver (`[a, b].max`, `(lo..hi).include?(x)`, `when 1..5`), and `*rest` handed into specialized callees: the elided object in the abstract state, the receiver escape summaries that decide what a callee may be handed, and where the object is materialized after all. |
 | [`arg_forwarding_jit.md`](arg_forwarding_jit.md) | JA | design record | How `def f(a, ...) g(...) end` is optimized: the four-tier argument setup, the D1/K1 deferral that skips the rest `Array` / kwrest `Hash` entirely (with its deopt-time materialization), the VM-tier lazy `(...)` marker convention, and what still falls back. |
-| [`polymorphic_call.md`](polymorphic_call.md) | JA | plan | Receiver-polymorphic call sites: why `x.nil?` / `x == nil` deopt on every nil receiver, the implemented nil-tolerant guard, and the design space (predicate generalization, PIC, page discipline) with measurements. |
-| [`bop_redefinition.md`](bop_redefinition.md) | JA | design record | What licenses inlining `1 + 2`, what happens when Ruby revokes it, and why the current all-or-nothing response is both too narrow (silently wrong answers) and too blunt (24× slower, permanently). Measured against CRuby. |
-| [`chain_deopt.md`](chain_deopt.md) | EN | plan | Dropping a whole suspended JIT chain back to the interpreter in one step, so a speculation broken deep inside can be undone. What the VM already provides, one attempt that fails and why, and the return-type inference the mechanism would buy back. §8 records the implemented mechanism (and where it departs from the plan); §10 records the retirement of immediate eviction, which it replaced; §11 the unboxed-locals speculation that was built on it and later removed. |
+| [`polymorphic_call.md`](polymorphic_call.md) | JA | reference | Receiver-polymorphic call sites: the VM's polymorphism detection and the polymorphic method cache (PMC), the class-set guard, the N-way PIC, binary-operator and `[]` dispatch, the generic-send residual, and the open questions (merge precision, union types). |
+| [`bop_redefinition.md`](bop_redefinition.md) | JA | reference | What licenses inlining `1 + 2` and what happens when Ruby revokes it: the `(class, op)` table, detection (including mixins and refinements), the VM's per-operator flag word, per-iseq JIT eviction and on-stack conversion, and how Ruby-written builtins are kept out of a redefinition's reach. Contrasted with CRuby. |
+| [`chain_deopt.md`](chain_deopt.md) | EN | reference | Converting a whole suspended chain of compiled frames to interpreter frames in one step, without touching machine code: the per-site conversion stub, the shared continuation stub, the escalation count that bounds the walk to one compilation unit, and its callers (basic-op redefinition on every thread, side exits, captures). |
 
 ## Runtime services
 
@@ -63,18 +62,12 @@ Two things to know before reading:
 | [`safepoint.md`](safepoint.md) | JA | reference | The one mechanism GC, preemption and signal delivery all go through. Read this before any of the three below. |
 | [`gc.md`](gc.md) | JA | reference | The collector as it actually is — non-moving, single-threaded, stop-the-world, generational — plus the `GC` module's real numbers. |
 | [`signal.md`](signal.md) | JA | reference | Deferred signal delivery: set a flag, convert it to a Ruby exception or a `Signal.trap` handler at the next safepoint. |
-| [`threads.md`](threads.md) | JA | reference | Threads: the 1:1 model (kernel threads under the GVL, §12), the thread registry, Fibers, non-blocking IO, interrupts and time-slice preemption. The M:1 green scheduler was removed in 2026-11. |
+| [`threads.md`](threads.md) | JA | reference | Threads: the 1:1 model (kernel threads under the GVL, §12), the thread registry, Fibers, non-blocking IO, interrupts and time-slice preemption. |
 | [`scheduler_state_diagram.md`](scheduler_state_diagram.md) | JA | reference | `ThreadState` and `FiberState` transitions — the companion diagrams to `threads.md`. |
 
 Diagrams referenced by the above: [`fiber_state_diagram.svg`](fiber_state_diagram.svg),
 [`gc_state_transitions.svg`](gc_state_transitions.svg),
 [`gc_write_barrier.svg`](gc_write_barrier.svg).
-
-## Strings and encodings
-
-| Document | Lang | Kind | Answers |
-|---|---|---|---|
-| [`encoding_char_iteration_design.md`](encoding_char_iteration_design.md) | EN | plan | Removing the "every String is UTF-8" assumption via a per-encoding character-boundary layer. Marked *proposed*. |
 
 ## Runtime optimization (`runtime_optimization/`)
 
@@ -95,19 +88,16 @@ is the entry point.
 
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
-| [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs, and the audit that cut a coarse file-level skip list down to the handful that genuinely cannot run. |
+| [`ruby_spec_skip_tags.md`](ruby_spec_skip_tags.md) | JA | reference | How the ruby/spec suite avoids hangs: per-example tags, how mspec finds a tag file, finding the hanging example, the spec-core monitor that tags timeouts automatically, and the tags that exist today. |
 | [`profiler.md`](profiler.md) | EN | reference | The built-in profiler (`--features prof`, `MONORUBY_PROF=cpu,alloc,malloc`): Ruby methods by self / total time split by runtime tier, JIT units, native symbols, allocations by class and method, GC and JIT compile times, `malloc` call sites; the self-contained HTML viewer it writes (time line, flame graphs, sortable tables); how a sample is taken safely from a signal handler, and what it cannot see. |
-| [`optcarrot_opt_profile.md`](optcarrot_opt_profile.md) | JA | design record | Where `bin/optcarrot --opt` spends its time, measured with `perf` and `--features profile`, and the optimizations that came out of it. |
 
-## Plans and history
+## Native extensions
 
 | Document | Lang | Kind | Answers |
 |---|---|---|---|
-| [`c_extention.md`](c_extention.md) | JA | plan | Design study for loading CRuby C extensions (`.so`). |
-| [`native_extension_loading.md`](native_extension_loading.md) | JA | plan | How to stop bundling every native library in the core binary (17.5 MB of C source, 6.6 MB of linked objects, 11k lines of Rust glue): a CRuby C-API layer, a monoruby-specific C ABI for dlopen'd C / Rust extensions, system shared libraries, feature gating, out-of-process, WASM and Fiddle-backed Ruby compared, with a staged recommendation — feature-gate, then move the existing sqlite3 / zlib / zstd / psych / nokogiri halves behind a `mr_*` C ABI into `~/.monoruby/v<ver>/ext/`, then a CRuby shim on top if needed. §7 covers how an install is actually produced: the extensions as Cargo artifact dependencies (so `cargo install` alone suffices), and the relocatable tree `bin/dist` stages. |
-| [`c_api.md`](c_api.md) | JA | reference | The CRuby-compatible C API (`monoruby_capi/`): a C extension written for CRuby rebuilt against monoruby's `ruby.h` and loaded with a plain `require`. Why API- not ABI-compatible, why the `rb_*` layer is C linked into each extension, how `rb_raise` longjmps only across the extension's own frames, how every VALUE handed to C stays rooted for the call, and the staged plan (TypedData / alloc funcs, mkmf and `gem install`, real gems). |
-| [`nokogiri.md`](nokogiri.md) | JA | plan | Nokogiri on monoruby: the C extension rewritten in Rust over the bundled libxml2 (`libxml2-src`), the object / lifetime model, what is implemented, versus a C-API layer or a pure-Rust engine. |
-| [`progress_2025-2026.md`](progress_2025-2026.md) | EN | history | What changed over ~500 commits, April 2025 to April 2026. |
+| [`native_extension_loading.md`](native_extension_loading.md) | JA | design record | The native halves (sqlite3 / zstd / psych / nokogiri / markly / bcrypt / digest) as dlopen'd extensions behind monoruby's own C ABI (`MrApi`) instead of in the core binary: the options compared (CRuby C-API layer, own ABI, system libraries, feature gating, out-of-process, WASM, Fiddle), the invariants, the actual ABI and what the move taught, `bundled` / `system`, and how an install is produced (§7: the extensions as Cargo artifact dependencies, and the relocatable tree `bin/dist` stages). |
+| [`c_api.md`](c_api.md) | JA | reference | The CRuby-compatible C API (`monoruby_capi/`): a C extension written for CRuby rebuilt against monoruby's `ruby.h` and loaded with a plain `require`. Why API- not ABI-compatible, why the `rb_*` layer is C linked into each extension, how `rb_raise` longjmps only across the extension's own frames, how every VALUE handed to C stays rooted for the call, TypedData / alloc funcs, mkmf and `gem install`, and the standard-library C extensions built on it. |
+| [`nokogiri.md`](nokogiri.md) | JA | design record | Nokogiri on monoruby: the C extension rewritten in Rust over the bundled libxml2 (`libxml2-src`), the object / lifetime model, what is implemented, versus a C-API layer or a pure-Rust engine. |
 
 Images: [`benchmark.png`](benchmark.png), [`chart.png`](chart.png),
 [`optcarrot_benchmark.png`](optcarrot_benchmark.png),
@@ -121,15 +111,15 @@ Images: [`benchmark.png`](benchmark.png), [`chart.png`](chart.png),
 - **Adding a builtin** → `native_func.md`, then `method_args.md`.
 - **Changing method dispatch** → `cref.md` and `refinements.md` for what
   resolution depends on; `super_resolution.md` if `super` is involved.
-- **Touching the JIT** → `jit.md` for the entry states, `arch_difference.md`
-  before anything arch-specific, `lir.md` and `regalloc_separation.md` for
-  the layering.
+- **Touching the JIT** → `jit_invariants.md` for what compiled code assumes,
+  `jit.md` for the entry states, `arch_difference.md` before anything
+  arch-specific, `lir.md` for the layering.
 - **Anything asynchronous** (GC, signals, threads) → `safepoint.md` first.
 - **A ruby/spec failure that hangs** → `ruby_spec_skip_tags.md`.
 
 ## Adding a document
 
-Put it here, add a row above, and say which of the three kinds it is. A
+Put it here, add a row above, and say which of the three kinds it is. Add it to `docs/src/SUMMARY.md` too if it should appear in the book. A
 design record earns its place by recording the *rejected* options and the
 measurements, not just the chosen one — that is what makes it still
 useful once the code has moved.

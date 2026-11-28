@@ -150,13 +150,8 @@ clone が安価で独立していることを固定する。
 - `compatible_encoding` / `Encoding::compatible` は `rb_enc_compatible` の
   移植で、キャッシュ済みの `cr` を消費して再走査しない。
 
-[`../encoding_char_iteration_design.md`](../encoding_char_iteration_design.md)
-はエンコーディングごとの文字境界層の提案（*proposed*）で、§2 に現状の
-`RStringInner` の穴（EUC-JP / SJIS のバイト単位反復、非 UTF-8 の `to_str`
-退避）の監査がある。ただしその文書は `content: Vec<u8>` 時代の記述で、
-SmallVec / 共有 union への改修より前のものであり、§2 が挙げる反復の穴も
-すでに埋まっている（EUC-JP / Shift_JIS / Emacs-Mule は `precise_mbclen` を
-持ち、`CharByteIter` はそれを通る）。
+多バイトエンコーディングの文字境界は、EUC-JP / Shift_JIS / Emacs-Mule が
+`precise_mbclen` を持ち、`CharByteIter` はそれを通る。
 
 ---
 
@@ -494,7 +489,7 @@ fallback は生成コードの中で `string_shl(vm, globals, recv, arg)` を
 inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも `h["k"] = v` の
 格納キー（`Value::frozen_hash_key` が複製して freeze）も frozen なので
 `{"content-type" => "text/plain"}` は boxed map を作らない（134 → 57 ns）。
-詳細は [hash.md](hash.md) §1.1、§1.3、§4.2。
+詳細は [hash.md](hash.md) §1.1、§1.3、§3。
 
 ---
 
@@ -561,4 +556,4 @@ inline（≤ 3 ペア）Hash のキーとして許され、リテラルキーも
 | [`../gc.md`](../gc.md) | 共有 root の write barrier、`young_child_exists` |
 | [`../bop_redefinition.md`](../bop_redefinition.md) | `(STRING_CLASS, "freeze")` / `"!="` の BOP |
 | [`../chain_deopt.md`](../chain_deopt.md) / [`../deopt_log.md`](../deopt_log.md) | `setbyte` / `<<` が deopt でなく detach + 再試行を選ぶ背景 |
-| [`../c_extention.md`](../c_extention.md) | `nul_terminated_buf_ptr` と FFI |
+| [`../c_api.md`](../c_api.md) | C 拡張に渡す文字列（`RSTRING_PTR` / `StringValueCStr`）の扱い |

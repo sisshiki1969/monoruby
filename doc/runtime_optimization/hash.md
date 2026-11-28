@@ -7,8 +7,8 @@ activerecord で 13 % が Hash 参照だった
 （2026-09 の yjit-bench 調査による）。
 
 この文書は、現在の Hash がどういう表現とどういう探索経路を持っているかを
-まとめ、そこに入れた最適化を計測とともに記録し、残っているコストと次の
-候補を優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
+まとめ、入れた最適化とその効果、機械語の probe の設計、次の候補を
+優先順位付きで並べる。個々の API の意味論ではなく「1 回の参照に何が
 起きるか」に焦点を当てる。CRuby の `ar_table` / `st_table` と実装が
 どう違うかは §6 にまとめた。
 
@@ -163,7 +163,7 @@ Hash がキーについて知っているのは**ハッシュ値**（`#hash` が
 ハッシュ値を返すキー」— delegator や String / Integer のラッパー — が、相手と
 同じバケットに入らず、`eql?` が呼ばれる前に外れていた（#2204）。CRuby の
 `any_hash` は両方に同じ関数を使うので、そこに揃えた。Fixnum / Float キーが
-内側で SipHash を 1 回回していた二重ハッシュ（旧 §4.1）もこれで消えている。
+内側で SipHash を 1 回回していた二重ハッシュもこれで消えている。
 
 `RubyHasher` は長さを最初に混ぜ、16 バイト単位のループの後に重なりを許した
 4 / 8 バイトの末尾読みをして最後にもう 1 回 fold する。シードはプロセスで 1 回
@@ -267,139 +267,72 @@ Rust の builtin が要素ごとにブロックを起動すると 1 要素ごと
 | 2 | 定数 Hash リテラルをテンプレート化し、評価ごとに複製（#1232） | `bytecodegen/expression.rs::from_literal_pairs` | 評価ごとの挿入ループが消える |
 | 3 | 汎用 `[]=`（VM と JIT の多相残余）に Hash の直接経路（#1245） | `codegen/runtime.rs::set_index` | rack −8 %、graphql −13 %、activerecord −8 %（他の 3 施策込み） |
 | 4 | frozen String キーを inline 表現に許可（#1246） | `rvalue/hash.rs::is_inline_key` | `{"content-type" => "text/plain"}` 生成 134 → 57 ns（YJIT 60）、`h["k"]` 50 → 23 ns、`h["k"] = v` 40 → 22 ns。rack −7 %、activerecord −13.5 % |
-| 5 | バケット用ハッシュを SipHash-1-3 から seeded ミキサーへ（本ブランチ） | `rubymap/src/hasher.rs` | 下表。erubi −12.4 %、graphql −4.1 % |
+| 5 | バケット用ハッシュを SipHash-1-3 から seeded ミキサーへ | `rubymap/src/hasher.rs` | 18 エントリの純ルックアップで 20〜34 % 減。erubi −12.4 %、graphql −4.1 % |
+| 6 | `#hash` の値そのものを同じミキサーから作る（#2204、§1.5） | `value.rs::hash_value` | Integer / Float キーの内側の SipHash が消え、`h[int]` 335 → 160 命令、`[1, :a, "s"].hash` 1152 → 311 命令 |
+| 7 | `Hash#[]` の probe を機械語で出す（§3） | `AsmInst::HashProbe` | 18 エントリ String キーの hit 約 12 ns、miss 約 8 ns。erubi −7〜−10 % |
 
 施策 5 の背景: `RubyMap` は std の `RandomState`（SipHash-1-3）を既定の
-ハッシャに継いでいて、`perf` で見るとルックアップ 1 回の **1/3** がそこだった
-（String キーで `string_digest` 18.7 % + `SipHasher13::write` 13.9 %、Symbol キーで
-`packed_digest` 24.6 % + 11.7 %）。CRuby の `st_hash` は seeded な非暗号ミキサー
-なので、同じトレードを取った。プロセス単位の乱数シード（`RandomState` から
-1 度引くので新規依存なし）+ wyhash 系の multiply-fold。シードを秘匿することが
-hash-flooding を抑える根拠で、混ぜ方自体は乗算 2 回。この時点では Ruby から
-見える `Object#hash` は `HASH_STATE`（SipHash）側のままだった。#2204 の修正で
-`#hash` の値も同じミキサーから作るようになっている（§1.5）。
+ハッシャに継いでいて、`perf` で見るとルックアップ 1 回の **1/3** がそこだった。
+CRuby の `st_hash` は seeded な非暗号ミキサーなので、同じトレードを取った。
+プロセス単位の乱数シード（`RandomState` から 1 度引くので新規依存なし）+
+wyhash 系の multiply-fold。シードを秘匿することが hash-flooding を抑える根拠で、
+混ぜ方自体は乗算 2 回。20 万エントリで 4096 刻みの整数キー（弱いミキサーが
+破綻する典型ケース）でも悪化しない。
 
-### 純ルックアップのコスト（1 回、ns。18 エントリの Hash）
+### 純ルックアップのコスト（1 回、ns）
 
-| キー | 施策 4 まで | 施策 5 後 | CRuby 4.0.6 + YJIT |
-|---|---:|---:|---:|
-| String 4 バイト | 42.8 | **33.7** | 17.5 |
-| String 19 バイト | 49.1 | **37.7** | 18.5 |
-| String ミス | 42.0 | **30.7** | 16.7 |
-| Symbol | 39.0 | **25.7** | 16.1 |
-| Integer | 52.1 | **39.5** | 16.4 |
+| | monoruby | CRuby+YJIT |
+|---|---:|---:|
+| String 6 エントリ hit（先頭 / 末尾） | 10.7–11.1 / 14.4–14.6 | 33.1 / 34.6 |
+| String 6 エントリ miss | 10.9 | 27.9 |
+| String 18 エントリ（erubi 形）hit | 11.7–12.3 | 26.4–40.5 |
+| String 18 エントリ miss | 8.1–8.3 | 18.8 |
+| String 100 エントリ hit / miss | 11.6–12.1 / 8.0–10.7 | 25.3 / 19.0 |
+| Symbol 18 / 100 / 1000 エントリ hit | 7.5–8.6 | 10.6 |
+| Symbol 18 / 100 / 1000 エントリ miss | 8.8–11.2 | 11.2 |
 
-ハッシュ品質のサニティチェック: 20 万エントリで 4096 刻みの整数キー（弱い
-ミキサーが破綻する典型ケース）は 94.2 → 88.8 ns と悪化しない。
+String の hit は digest 呼び出し（wyhash）と eq 呼び出し（memcmp）が残るので
+Symbol ほどは縮まないが、miss は in-line で nil を返せる。Integer キーは probe の
+対象外で（§4.1）、`hashindex_pure` → `Hashmap::index` → `HashRef::get` →
+`IndexMapCore` の 4 段を通る。
 
 ---
 
-## 3. 残っているコスト
+## 3. 機械語の probe
 
-施策 5 後の `h["name"]` / `h[:name]` ループの `perf` セルフ時間:
+受信側が `Hash` ちょうどで boxed 表現だと分かっている `Hash#[]` の呼び出し
+サイトでは、ダイジェスト → インデックステーブル引き → エントリ比較を機械語で
+出す（`AsmInst::HashProbe`）。必要なレイアウト知識は `rubymap::EntriesLayout`
+から取る。
 
-| | String キー | Symbol キー |
-|---|---:|---:|
-| IndexMap / hashbrown の probe | 31.6 % | 32.6 % |
-| `HashRef::get`（2 インスタンス化の合計） | 25.0 % | 19.7 % |
-| `Hashmap::index` | 10.4 % | 13.6 % |
-| ダイジェスト（`RubyHasher`） | 7.8 % | 8.9 % |
-| `hashindex` builtin | 7.2 % | 6.3 % |
-| `memcmp`（キー比較） | 7.7 % | — |
-
-ハッシュは 33 % → 8 % まで落ち、いまの支配項は **probe と 4 段のディスパッチ**
-（`hashindex` → `Hashmap::index` → `HashRef::get` → `IndexMapCore`）である。
-
----
-
-## 4. 今後のアイデア（効果の見込み順）
-
-### 4.1 Integer / Float キーの二重ハッシュを外す（**実装済み**、#2204 の修正と同時）
-
-`Value::ruby_hash_packed` の Fixnum / Float アームは、`Integer#hash` /
-`Float#hash` が返す**値**を作るために内側で `seeded_hasher()`（std の
-`DefaultHasher` = SipHash）を丸ごと 1 回回し、その結果を外側のマップハッシャに
-流していた。#2204 の修正で `#hash` の値そのものをミキサーから作るようにした
-（§1.5）ので、SipHash は通らなくなった。1 回あたりの命令数（cachegrind、
-20 エントリの Hash、JIT 済みのループ）:
-
-| 操作 | 修正前 | 修正後 |
-|---|---:|---:|
-| `h[int]` | 335 | 160 |
-| `h[int] = v` | 447 | 251 |
-| `h[obj]`（`Kernel#hash` のオブジェクト） | 600 | 365 |
-| `h[sym]`（変数キー） | 166 | 105 |
-| `1.hash` | 249 | 122 |
-| `"str".hash` | 414 | 152 |
-| `[1, :a, "s"].hash` | 1152 | 311 |
-
-### 4.2 probe を JIT でインライン展開する（大・最大の残り。**段階 1〜3 実装済み**、2026-09-04/05）
-
-いまは `Hash#[]` のインライン生成が `hashindex_pure` への直接呼び出しまでしか
-やらない（メソッドフレームは省くが、そこから先は Rust）。受信側が
-`Hash` ちょうどで boxed 表現だと分かっている呼び出しサイトなら、
-ダイジェスト → インデックステーブル引き → エントリ比較を機械語で出せる。
-上の内訳の probe 32 % + ディスパッチ 42 % のかなりの部分が対象で、YJIT との
-残差（33.7 vs 17.5 ns）を埋める本命。`gen_hash_entry_at` が既に
-`rubymap::EntriesLayout` からエントリ配列を歩いているので、必要なレイアウト
-知識は揃っている。
-
-#### 段階分け
+### 3.1 対象
 
 `IndexMapCore` には 2 つの動作領域がある。**≤ 8 エントリ**（`AR_MAX`、CRuby の
 `RHASH_AR_TABLE_MAX_SIZE` と同じ）は `linear`、`indices` を作らず `entries` を
 線形走査して `entry.hash == hash` の一致だけキー比較する。それ以上は hashbrown
-の probe（上位 7 ビットで control byte を 16 個ずつ SIMD 比較 → 添字 →
-エントリ比較）。`Bucket { hash, key, value }` はハッシュ値を格納しているので、
-線形走査は「64 ビット比較 × N、当たったときだけキー比較」で済む。
+の probe（上位 7 ビットで control byte を 16 個ずつ比較 → 添字 → エントリ比較）。
+`Bucket { hash, key, value }` はハッシュ値を格納しているので、線形走査は
+「64 ビット比較 × N、当たったときだけキー比較」で済む。
 
-| 段階 | キー | 領域 | 状態 |
-|---|---|---|---|
-| 1 | packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false） | 線形（≤ 8） | **実装済み** `AsmInst::HashProbe`（旧 `HashProbePacked`） |
-| 2 | 同上 | 索引（> 8）— hashbrown の group probe | **実装済み**（段階 3 と同時） |
-| 3 | String — バイト列ダイジェスト + memcmp + `plain_string` 判定 | 両方 | **実装済み**（erubi の 18 エントリ・String キーはここ） |
+| キー | ダイジェスト | 領域 |
+|---|---|---|
+| packed のうちビットがそのままミキサーに入るもの（Symbol / nil / true / false） | 葉ヘルパ `packed_digest_c` | 線形・索引の両方 |
+| クラスがちょうど `String` の文字列 | 葉ヘルパ `string_digest_c` + `string_key_eq_c` | 線形・索引の両方 |
+| それ以外（Integer を含む） | probe を出さず `hashindex_pure` を直接呼ぶ | — |
 
-Integer キーは 4.1 の二重ハッシュ（SipHash を内側で 1 回回す）のあいだは対象外
-だった（葉ヘルパ自体がルックアップの大半のコストになる）。4.1 が解けたので、
-Fixnum も `packed_digest_c` 1 回で段階 1 / 2 に載せられる（未着手）。
+### 3.2 設計判断
 
-#### 段階 1 の設計判断（2026-09-04）
-
-- **ダイジェストは葉ヘルパ `packed_digest_c`、probe は機械語。** fold は
-  64×64→128 の乗算だが、この JIT が使う x86-64 アセンブラ（monoasm）に
-  1 オペランド `mul` が**無い**（`div` / `idiv` はあり、`imul` は 2 オペランドの
-  下位 64 ビットのみ）。aarch64 には `umulh` がある。monoasm に足したら
-  ヘルパをその命令列に置き換えるだけで、他は変わらない。
+- **ダイジェストは葉ヘルパ、probe は機械語。** fold は 64×64→128 の乗算だが、
+  x86-64 のアセンブラ（monoasm）に 1 オペランド `mul` が**無い**（`imul` は
+  2 オペランドの下位 64 ビットのみ）。aarch64 には `umulh` がある。monoasm に
+  足したらヘルパをその命令列に置き換えるだけで、他は変わらない。
 - **形の不一致は deopt ではなく builtin 呼び出し。** inline 表現・identity
-  マップ・索引領域はすべて `hashindex_pure` への合流で、exit しない。最初は deopt に
-  していたが、この deopt は再コンパイルを起こさないので、大きな Symbol キー
-  Hash のサイトが**毎回 deopt**することになる（4.5 の ic ゲートで踏んだのと
-  同型）。builtin 呼び出しなら現状と同コストで退行しない。
+  マップ・索引領域を扱えない構成はすべて `hashindex_pure` への合流で、exit
+  しない。この deopt は再コンパイルを起こさないので、deopt にすると大きな
+  Hash のサイトが毎回 deopt することになる。
 - **線形領域の miss は in-line で `nil`。** 走査を尽くしたら
   `Option<Box<HashDefault>>`（null = default 値も proc も無し）を 1 ロード見て、
-  無ければ nil。builtin に落とすとダイジェストと走査をもう一度やり直すので、
-  最初の実装では miss が 16 → 30 ns に**退行**していた。
-- **`EntriesLayout` に `hash_offset` / `linear_offset` を追加**。`Bucket` は
-  niche を持つキー型で並び替わる（`Option<Value>` では value+0 / hash+8 /
-  key+16）ので、既存どおり実測で取る。
-
-#### 段階 1 の効果（6 エントリ・Symbol キー、純ルックアップ、交互 4 ラウンド）
-
-| | 従来 | 段階 1 |
-|---|---:|---:|
-| hit（先頭） | 16.3–18.1 | **6.3–9.7** |
-| hit（末尾） | 15.3–19.3 | **8.2–11.0** |
-| miss | 16.5–20.4 | **7.4–10.6** |
-| 18 エントリ Symbol（索引領域、fallback） | 18.7–26.0 | 15.5–21.2（退行なし） |
-
-hit 経路の call は `packed_digest_c` の 1 つだけになり、`hashindex_pure` の call は
-miss 側にしか残らない（`emit-asm` で確認）。`tests/hash_probe_jit.rs` が
-hit / miss / default 値 / default proc / nil・true・false キー / tombstone /
-索引領域・inline 表現・identity マップへの委譲 / クラスガード / 線形↔索引の
-境界を跨ぐ成長 / 生きた状態の読み取りを CRuby と突き合わせる。
-
-#### 段階 2・3 の設計判断（2026-09-05）
-
+  無ければ nil。builtin に落とすとダイジェストと走査をもう一度やり直す。
 - **索引領域は hashbrown の `find_inner` を SIMD 無しで写す。** monoasm には
   SIMD が無いので、16 バイトの control group を 64 ビット語 2 つとして読み、
   hashbrown 自身の generic backend と同じ SWAR ゼロバイト判定
@@ -414,36 +347,31 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
   （hashbrown は group 内の一致を全部見てから EMPTY を判定する）。
   `rubymap` の `raw_probe` テストがこのアルゴリズムを生の offset だけで
   なぞり、`find_inner` と同じ答えになることを固定している。
-- **レイアウトは `offset_of!` で取る。** `EntriesLayout` に
-  `indices_ctrl_offset` / `indices_mask_offset` / `group_width` を追加。
-  hashbrown（vendored）の `RawTable` / `HashTable` に `ctrl_offset()` /
-  `bucket_mask_offset()` / `GROUP_WIDTH` を生やした。group 幅が 16 で
-  ない構成では索引領域を builtin に渡す（静的分岐）。
-- **String キーは葉ヘルパ 2 つ + 機械語 probe。** `string_digest_c`（バイト
-  列の wyhash、挿入時と同じ）と `string_key_eq_c`（`string_key_eq` そのもの
-  ：identity → STRING×STRING バイト比較）。同一オブジェクト（frozen
-  リテラル）なら eq 呼び出しを省く。**格納ダイジェストが一致したのに eq が
-  偽**なら（64 ビット衝突か tombstone か異種キー）`miss` → builtin。こうする
-  と eq 呼び出しの前後で probe のループ状態を退避する必要が無く、rdx/rcx
-  と entry ポインタだけ push すれば済む。
+- **レイアウトは実測と `offset_of!` で取る。** `Bucket` は niche を持つキー型で
+  並び替わる（`Option<Value>` では value+0 / hash+8 / key+16）ので、
+  `EntriesLayout` の `hash_offset` / `linear_offset` は実測で取る。
+  `indices_ctrl_offset` / `indices_mask_offset` / `group_width` は vendored
+  hashbrown の `RawTable` / `HashTable` に生やした `ctrl_offset()` /
+  `bucket_mask_offset()` / `GROUP_WIDTH` から取る。
+- **String キーの eq。** `string_key_eq_c` は `string_key_eq` そのもの
+  （identity → STRING×STRING バイト比較）。同一オブジェクト（frozen リテラル）
+  なら eq 呼び出しを省く。**格納ダイジェストが一致したのに eq が偽**なら
+  （64 ビット衝突か tombstone か異種キー）`miss` → builtin。こうすると eq
+  呼び出しの前後で probe のループ状態を退避する必要が無く、rdx/rcx と entry
+  ポインタだけ push すれば済む。
 - **サブクラスは class guard が弾く。** `guard_class(STRING_CLASS)` はクラス
-  一致なので、`eql?` を dispatch すべき String サブクラス（#1258）は
-  probe に入らず deopt する。
+  一致なので、`eql?` を dispatch すべき String サブクラス（#1258）は probe に
+  入らず deopt する。
 - **identity マップは probe しない。** `HashContent` の判別子（0 = Map,
-  1 = IdentMap）を見て IdentMap なら builtin へ。段階 1 は判別子を見て
-  いなかったが、Symbol は `IdentKey` のダイジェスト（`id()`）と packed
-  ダイジェストが一致するので偶然正しかった。String は内容ダイジェスト ≠
-  identity ダイジェストで、**自分自身すら見つからず nil を返していた**
-  （`compare_by_identity` + String キーで検出、テスト追加）。
-- **キークラスが混在するサイトは段階 1 と同じ性質。** `h[k]` の k の
-  クラスは抽象状態から取り、guard の失敗は plain deopt（再コンパイル無し）。
-  同じサイトに String と Symbol が交互に来ると、後から来たクラスは毎回
-  deopt して interpreter で実行される（計測では 12 → 24 ns）。段階 1 の
-  Symbol guard も同じ。receiver 側の `BecamePolymorphic` 再コンパイルは VM
-  が立てる POLY ビットで「次は generic に」と判断できるが、引数クラスには
-  その仕組みが無く、再コンパイルしても同じ guard が出るだけなので保留。
+  1 = IdentMap）を見て IdentMap なら builtin へ。String の内容ダイジェストは
+  identity ダイジェストと違うので、probe すると自分自身すら見つからない。
+- **キークラスが混在するサイト。** `h[k]` の k のクラスは抽象状態から取り、
+  guard の失敗は plain deopt（再コンパイル無し）。同じサイトに String と Symbol
+  が交互に来ると、後から来たクラスは毎回 deopt して interpreter で実行される。
+  receiver 側の `BecamePolymorphic` 再コンパイルは VM が立てる POLY ビットで
+  「次は generic に」と判断できるが、引数クラスにはその仕組みが無い。
 
-#### 補足: どこから発火し、いつ機械語を諦めるか
+### 3.3 どこから発火し、いつ機械語を諦めるか
 
 - `Hash#[]` のインライン生成 `hash_index` は `fire_index_inline` から呼ばれ、
   受信側クラスが**ちょうど `Hash`** のときだけ probe を出す。理由は builtin
@@ -457,10 +385,6 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
 - 受信側クラスを抽象状態が確定できない多相サイトでは `index_dispatch` が
   **2 腕のディスパッチ**を出す: `BrClassNe` で Hash なら probe、そうでなければ
   `runtime::get_index`。外れたクラスは deopt ではなく C 呼び出しになる。
-- キーのクラスはサイトのインラインキャッシュ／抽象状態から取り、
-  Symbol / nil / true / false は `packed_digest_c`、String は `string_digest_c`
-  + `string_key_eq_c`、それ以外（Integer を含む）は probe を出さず
-  `hashindex_pure` の直接呼び出しに落ちる。
 - **ヘルパは Ruby を実行しない（#2156）。** JIT コードから直接呼ぶヘルパは
   フレームを持たない。そこで Ruby コードが走ると、(1) メソッド・定数・基本
   演算の再定義や ivar の型変化がヘルパより後ろのコード（ガード済みの前提）に
@@ -472,35 +396,24 @@ hit / miss / default 値 / default proc / nil・true・false キー / tombstone 
   proc の実行）では 0 を返し、JIT コードは deopt して、インタプリタがフレーム
   付きで builtin を呼ぶ。deopt を繰り返すサイトは
   `RecompileReason::ImpureHelper` で印が付き、再コンパイル後は通常のメソッド
-  呼び出しになる（1 回あたり約 +37 命令）。`Hash#[]=`
-  （`hashindex_assign_pure`）、`Hash#__get_or_key`（`hashgetorkey_pure`）、
-  `Hash#include?`（`hashinclude_pure`、#2147）も同じ規則に従う。
+  呼び出しになる。`Hash#[]=`（`hashindex_assign_pure`）、`Hash#__get_or_key`
+  （`hashgetorkey_pure`）、`Hash#include?`（`hashinclude_pure`、#2147）も
+  同じ規則に従う。
 - `hash_entries_layout()` が `None`（2 つのマップ型でレイアウトが一致しない
   構成）か、hashbrown の group 幅が 16 でない構成では、索引領域は静的に
   `miss` へ飛ばす。いずれも性能上の後退で、正しさには関わらない。
 
-#### 段階 2・3 の効果（純ルックアップ、交互 2 ラウンド、ns）
+---
 
-| | 段階 1 | 段階 3 | CRuby+YJIT |
-|---|---:|---:|---:|
-| String 6 エントリ hit（先頭 / 末尾） | 12.4–13.7 / 14.6–16.2 | **10.7–11.1 / 14.4–14.6** | 33.1 / 34.6 |
-| String 6 エントリ miss | 13.5–15.6 | **10.9** | 27.9 |
-| String 18 エントリ（erubi 形）hit | 14.4–17.1 | **11.7–12.3** | 26.4–40.5 |
-| String 18 エントリ miss | 12.6–17.1 | **8.1–8.3** | 18.8 |
-| String 100 エントリ hit / miss | 14.7–17.1 / 12.7–14.6 | **11.6–12.1 / 8.0–10.7** | 25.3 / 19.0 |
-| Symbol 18 / 100 / 1000 エントリ hit | 10.9–13.3 | **7.5–8.6** | 10.6 |
-| Symbol 18 / 100 / 1000 エントリ miss | 11.1–15.0 | **8.8–11.2** | 11.2 |
+## 4. 今後のアイデア（効果の見込み順）
 
-String の hit は digest 呼び出し（wyhash）と eq 呼び出し（memcmp）が残るので
-Symbol ほどは縮まないが、miss は in-line で nil を返せるので 8 ns 台。
-yjit-bench の erubi（`benchmark_mono.rb`、warmup 10 + 30 反復、交互 2 ラウンド）
-は 215–221 ms → **192–206 ms**（−7〜−10 %）。
-`tests/hash_probe_jit.rs` に String キー（線形 / 索引 / frozen 同一 /
-default 値・proc）、索引領域の Symbol（100・3000 エントリ、削除後）、
-索引領域の tombstone、サブクラスキー、identity マップ、線形↔索引の成長、
-String → Symbol のクラス変化を追加。
+### 4.1 Fixnum キーを probe に載せる（小）
 
-### 4.3 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）
+Integer キーの `#hash` の値はミキサー 1 回で作れる（§1.5）ので、Fixnum も
+`packed_digest_c` 相当の葉ヘルパ 1 回で §3 の線形・索引 probe に載せられる。
+未着手。
+
+### 4.2 呼び出しサイトのキーセット・インラインキャッシュ（中・要検証）
 
 erubi の 322 個の spec Hash は **すべて同じ 18 個のキーを同じ順序で持つ**
 （同じ JSON 形状から作られる）。`spec["name"]` のような「リテラルキー ×
@@ -510,29 +423,29 @@ erubi の 322 個の spec Hash は **すべて同じ 18 個のキーを同じ順
 shape に相当する仕組みを Hash に持ち込むことになるので、キーセットの同一性を
 安く判定する仕掛け（挿入順の版番号など）の設計が要る。
 
-### 4.4 ディスパッチ段数を減らす（小〜中）
+### 4.3 ディスパッチ段数を減らす（小〜中）
 
-`hashindex_pure` → `Hashmap::index` → `HashRef::get` → `IndexMapCore` の 4 段で、
-それぞれが `vm` / `globals` を引き回している。`Hashmap::index` はミス時の
-default 処理のためだけに 1 段あり、`HashRef::get` は表現の分岐をしている。
-表現の分岐を呼び出し側に持ち上げて boxed 専用の入口を用意すれば数 ns 縮む
-見込み。4.2 を先にやると自然に消える部分もある。
+probe の対象外のキーと builtin への合流は `hashindex_pure` → `Hashmap::index` →
+`HashRef::get` → `IndexMapCore` の 4 段で、それぞれが `vm` / `globals` を
+引き回している。`Hashmap::index` はミス時の default 処理のためだけに 1 段あり、
+`HashRef::get` は表現の分岐をしている。表現の分岐を呼び出し側に持ち上げて
+boxed 専用の入口を用意すれば数 ns 縮む見込み。
 
-### 4.5 frozen String にダイジェストをキャッシュ（小）
+### 4.4 frozen String にダイジェストをキャッシュ（小）
 
-施策 5 の前は有力だったが、ハッシュが 8 % まで落ちた今は上積みが小さい。
-長いキー（パスや URL）を多用するコードでは効くので、`RStringInner` に
-4 バイトの空きができたときの候補として残す。frozen なら無効化が不要という
-性質は変わらない。
+ハッシュ計算がルックアップの 1 割を切った今は上積みが小さい。長いキー
+（パスや URL）を多用するコードでは効くので、`RStringInner` に 4 バイトの
+空きができたときの候補として残す。frozen なら無効化が不要という性質は
+変わらない。
 
-### 4.6 inline 表現の拡張（要検討）
+### 4.5 inline 表現の拡張（要検討）
 
 48 バイトのペイロードにペア 3 組でちょうど埋まっている。4 組以上にするには
 `RValue` を大きくするかキー・値を別配列にするかで、どちらも Hash 以外の
 すべてのオブジェクトに影響する。erubi の Hash は 18 ペアなので、この方向で
 救えるワークロードは限られる。
 
-### 4.7 RValue の中身のアロケータ（別件だが Hash に効く）
+### 4.6 RValue の中身のアロケータ（別件だが Hash に効く）
 
 boxed Hash の実体（インデックステーブルとエントリ Vec）は glibc malloc
 経由で、activerecord では malloc/free 系だけで 15 % を占める。`mimalloc`
@@ -586,7 +499,7 @@ boxed Hash の実体（インデックステーブルとエントリ Vec）は g
 | デフォルト値／proc | `ifnone` スロット | `Option<Box<HashDefault>>`。null なら「どちらも無し」を 1 ロードで判定でき、JIT のミス経路が in-line で nil を返せる。デフォルトを持つと boxed 強制（`Hash.new(7)` は確保する）。`clear` はデフォルトを保つ（CRuby と同じ） |
 | ミス時の `default` | `rb_funcall(id_default)` | builtin の `Hash#[]` は同じく dispatch。`hashindex_pure` / `runtime::get_index` は格納値を直接読むので、対象を `Hash` ちょうどに限定 |
 | Ruby から見える `#hash` | `rb_hash_start` 系（SipHash-1-3、seeded）。`any_hash` がバケッティングにも同じ値を使う | Hash が native に計算する型は seeded ミキサー（`Value::hash_value`）で、バケッティングはその値の fold（§1.5）。Struct / Set / Time などのメソッドは `HASH_STATE`（SipHash-1-3、seeded） |
-| String ハッシュのキャッシュ | 無し | 無し（§4.5 に候補として残す） |
+| String ハッシュのキャッシュ | 無し | 無し（§4.4 に候補として残す） |
 | GC | `rb_gc_mark` | `HashRef::mark` がデフォルトと生きたエントリを mark。`young_child_exists` が世代別の remember 判定、mutator と JIT の `emit_hash_default_assign` が write barrier を出す（[`../gc.md`](../gc.md)） |
 
 ---
